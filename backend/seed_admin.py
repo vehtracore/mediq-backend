@@ -13,8 +13,8 @@ def seed_admin():
     
     # --- 🔒 SECURITY CONFIGURATION ---
     # CHANGE THESE VALUES to your preferred secure credentials
-    ADMIN_EMAIL = "controller@mdqplus.com" 
-    ADMIN_PASSWORD = "Superadmin2025!" 
+    ADMIN_EMAIL = "owner@mdqplus.com" 
+    ADMIN_PASSWORD = "NewSecurePass2025" 
     # ---------------------------------
 
     if db.query(User).filter(User.email == ADMIN_EMAIL).first():
