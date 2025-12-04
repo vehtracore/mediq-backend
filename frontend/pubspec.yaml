@@ -46,6 +46,8 @@ dependencies:
   url_launcher: ^6.3.2
   geolocator: ^14.0.2
   geocoding: ^4.0.0
+  image_picker: ^1.0.7
+  http_parser: ^4.0.2
 
 dev_dependencies:
   flutter_test:
