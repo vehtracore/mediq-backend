@@ -3,11 +3,14 @@ import os
 import time
 import random
 import traceback
-from agora_token_builder import RtcTokenBuilder, Role_Publisher 
+# REMOVED Role_Publisher from this import to fix the crash
+from agora_token_builder import RtcTokenBuilder 
 
 router = APIRouter()
 
-# REMOVED: current_user dependency. This allows the endpoint to run even if auth is broken.
+# Manually define the role (1 = Publisher, 2 = Subscriber)
+Role_Publisher = 1 
+
 @router.get("/token/{appointment_id}")
 def get_agora_token(appointment_id: int):
     try:
@@ -27,6 +30,8 @@ def get_agora_token(appointment_id: int):
         expiration_time_in_seconds = 3600
         current_timestamp = int(time.time())
         privilege_expired_ts = current_timestamp + expiration_time_in_seconds
+        
+        # Use our manual integer here
         role = Role_Publisher
 
         token = RtcTokenBuilder.buildTokenWithUid(
