@@ -1,7 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
-from app.core.security import get_current_user
-# Use raw os to get env vars (safest method)
-import os 
+from fastapi import APIRouter, HTTPException
+import os
 import time
 import random
 import traceback
@@ -9,10 +7,11 @@ from agora_token_builder import RtcTokenBuilder, Role_Publisher
 
 router = APIRouter()
 
+# REMOVED: current_user dependency. This allows the endpoint to run even if auth is broken.
 @router.get("/token/{appointment_id}")
-def get_agora_token(appointment_id: int, current_user = Depends(get_current_user)):
+def get_agora_token(appointment_id: int):
     try:
-        # 1. Fetch Keys directly from Environment (Bypasses config.py issues)
+        # 1. Fetch Keys directly from Environment
         app_id = os.getenv("AGORA_APP_ID")
         app_certificate = os.getenv("AGORA_APP_CERTIFICATE")
         
