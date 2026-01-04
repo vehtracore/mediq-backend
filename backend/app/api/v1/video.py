@@ -1,27 +1,30 @@
 from fastapi import APIRouter, Depends, HTTPException
-from app.core.config import settings
 from app.core.security import get_current_user
-# Make sure you added 'agora-token-builder' to requirements.txt
-from agora_token_builder import RtcTokenBuilder, Role_Publisher 
+# Use raw os to get env vars (safest method)
+import os 
 import time
 import random
-import traceback # <--- Added for debugging
+import traceback
+from agora_token_builder import RtcTokenBuilder, Role_Publisher 
 
 router = APIRouter()
 
 @router.get("/token/{appointment_id}")
 def get_agora_token(appointment_id: int, current_user = Depends(get_current_user)):
     try:
-        app_id = settings.AGORA_APP_ID
-        app_certificate = settings.AGORA_APP_CERTIFICATE
+        # 1. Fetch Keys directly from Environment (Bypasses config.py issues)
+        app_id = os.getenv("AGORA_APP_ID")
+        app_certificate = os.getenv("AGORA_APP_CERTIFICATE")
+        
         channel_name = f"appt_{appointment_id}"
         
-        # Ensure credentials exist
+        # 2. Strict Check with Logging
         if not app_id or not app_certificate:
-            raise Exception("Agora Credentials are missing in Render Environment!")
+            print(f"❌ CRITICAL ERROR: Agora Keys missing. ID: {app_id}, Cert: {app_certificate}")
+            raise Exception("Agora Credentials are missing in Render Environment Variables!")
 
-        # Generate a random UID for the user (Agora needs an Int)
-        uid = random.randint(1, 4000000) # Increased range to avoid collisions
+        # 3. Generate Token
+        uid = random.randint(1, 230) 
         expiration_time_in_seconds = 3600
         current_timestamp = int(time.time())
         privilege_expired_ts = current_timestamp + expiration_time_in_seconds
@@ -31,6 +34,9 @@ def get_agora_token(appointment_id: int, current_user = Depends(get_current_user
             app_id, app_certificate, channel_name, uid, role, privilege_expired_ts
         )
         
+        # 4. Success Log
+        print(f"✅ Token generated for channel: {channel_name}")
+
         return {
             "token": token,
             "channel": channel_name,
@@ -39,7 +45,7 @@ def get_agora_token(appointment_id: int, current_user = Depends(get_current_user
         }
     
     except Exception as e:
-        # This will print the error to Render Logs
+        # 5. Capture the real error log
         print(f"❌ VIDEO CRASH: {traceback.format_exc()}")
-        # This will send the error to your Phone Screen
+        # Send error to phone screen
         raise HTTPException(status_code=500, detail=f"Crash: {str(e)}")
