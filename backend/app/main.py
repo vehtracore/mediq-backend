@@ -2,14 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.database import engine, Base
 
-# 1. Import API Routers (The Logic)
-from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews
+# 1. Import API Routers
+from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video # <--- ADDED VIDEO
 
-# 2. Import Models (The Database) - ALIASING 'content' TO AVOID CONFLICT
+# 2. Import Models
 from app.models import user, doctor, appointment, audit, review
 from app.models import content as content_model 
-
-from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media # <--- Added media
 
 # Create Database Tables
 Base.metadata.create_all(bind=engine)
@@ -34,7 +32,9 @@ app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin Control"])
 app.include_router(content.router, prefix="/api/v1/content", tags=["Content"])
 app.include_router(subscription.router, prefix="/api/v1/subscription", tags=["Subscription"])
 app.include_router(reviews.router, prefix="/api/v1/reviews", tags=["Reviews"])
-app.include_router(media.router, prefix="/api/v1/media", tags=["Media Upload"])
+app.include_router(media.router, prefix="/api/v1/media", tags=["Media"])
+app.include_router(video.router, prefix="/api/v1/video", tags=["Video Call"]) # <--- NEW ROUTE
+
 @app.get("/")
 def root():
     return {"message": "MedIQ Brain is Online"}
