@@ -1,7 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from sqlalchemy.orm import Session
 from typing import List, Dict
-from app.core.database import get_db
+from app.core.database import get_db, SessionLocal # <--- Import SessionLocal
 from app.models.message import Message
 import json
 from datetime import datetime
@@ -11,7 +11,6 @@ router = APIRouter()
 # --- 1. Connection Manager ---
 class ConnectionManager:
     def __init__(self):
-        # Dictionary to hold active connections: {appointment_id: [socket1, socket2]}
         self.active_connections: Dict[str, List[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket, appointment_id: str):
@@ -29,56 +28,65 @@ class ConnectionManager:
 
     async def broadcast(self, message: dict, appointment_id: str):
         if appointment_id in self.active_connections:
-            for connection in self.active_connections[appointment_id]:
+            # Iterate over a copy to avoid modification errors
+            for connection in self.active_connections[appointment_id][:]:
                 try:
                     await connection.send_text(json.dumps(message))
                 except Exception:
-                    # If sending fails, remove the dead connection
-                    pass
+                    # Remove dead connections
+                    self.disconnect(connection, appointment_id)
 
 manager = ConnectionManager()
 
-# --- 2. History Endpoint ---
+# --- 2. History Endpoint (HTTP - Keep get_db here) ---
 @router.get("/history/{appointment_id}")
 def get_chat_history(appointment_id: int, db: Session = Depends(get_db)):
     messages = db.query(Message).filter(Message.appointment_id == appointment_id).order_by(Message.created_at.asc()).all()
     return messages
 
-# --- 3. The WebSocket Endpoint ---
+# --- 3. The WebSocket Endpoint (MANUAL SESSION) ---
 @router.websocket("/ws/{appointment_id}/{user_id}")
 async def websocket_endpoint(
     websocket: WebSocket, 
     appointment_id: str, 
-    user_id: int,
-    db: Session = Depends(get_db)
+    user_id: int
+    # REMOVED: db: Session = Depends(get_db) <--- This was likely the silent killer
 ):
     await manager.connect(websocket, appointment_id)
     try:
         while True:
-            # Wait for data from the client
+            # 1. Wait for message
             data = await websocket.receive_text()
             
-            # Save to Database
-            new_msg = Message(
-                appointment_id=int(appointment_id),
-                sender_id=user_id,
-                content=data,
-                created_at=datetime.utcnow(),
-                is_read=False
-            )
-            db.add(new_msg)
-            db.commit()
-            db.refresh(new_msg)
+            # 2. Open DB Session Manually
+            db = SessionLocal()
+            try:
+                # 3. Save to DB
+                new_msg = Message(
+                    appointment_id=int(appointment_id),
+                    sender_id=user_id,
+                    content=data,
+                    created_at=datetime.utcnow(),
+                    is_read=False
+                )
+                db.add(new_msg)
+                db.commit()
+                db.refresh(new_msg)
 
-            # Construct the JSON message to send back
-            response_data = {
-                "id": new_msg.id,
-                "content": new_msg.content,
-                "sender_id": new_msg.sender_id,
-                "created_at": new_msg.created_at.isoformat()
-            }
+                # 4. Prepare Response
+                response_data = {
+                    "id": new_msg.id,
+                    "content": new_msg.content,
+                    "sender_id": new_msg.sender_id,
+                    "created_at": new_msg.created_at.isoformat()
+                }
+            except Exception as e:
+                print(f"DB Error: {e}")
+                continue
+            finally:
+                db.close() # Always close session!
 
-            # Broadcast to everyone in this appointment room
+            # 5. Broadcast
             await manager.broadcast(response_data, appointment_id)
 
     except WebSocketDisconnect:
