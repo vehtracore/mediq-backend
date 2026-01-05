@@ -1,14 +1,14 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from sqlalchemy.orm import Session
 from typing import List, Dict
-from app.core.database import get_db, SessionLocal # <--- NEW IMPORT
+from app.core.database import get_db, SessionLocal 
 from app.models.message import Message
 import json
 from datetime import datetime
 
 router = APIRouter()
 
-# --- 1. Connection Manager ---
+# --- Connection Manager ---
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, List[WebSocket]] = {}
@@ -36,30 +36,29 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- 2. History Endpoint (This is HTTP, so Depends(get_db) is OK here) ---
+# --- HTTP History ---
 @router.get("/history/{appointment_id}")
 def get_chat_history(appointment_id: int, db: Session = Depends(get_db)):
     messages = db.query(Message).filter(Message.appointment_id == appointment_id).order_by(Message.created_at.asc()).all()
     return messages
 
-# --- 3. The WebSocket Endpoint (CRITICAL FIX) ---
-@router.websocket("/ws/{appointment_id}/{user_id}")
+# --- WebSocket ---
+# ROUTE RENAMED TO /live
+@router.websocket("/live/{appointment_id}/{user_id}")
 async def websocket_endpoint(
     websocket: WebSocket, 
     appointment_id: str, 
     user_id: int
-    # REMOVED: db: Session = Depends(get_db) <--- THIS WAS THE BUG
 ):
     await manager.connect(websocket, appointment_id)
     try:
         while True:
-            # 1. Wait for message
+            # 1. Receive
             data = await websocket.receive_text()
             
-            # 2. Open DB Session Manually (Safe for WebSockets)
+            # 2. Database (Safe Manual Session)
             db = SessionLocal()
             try:
-                # 3. Save to DB
                 new_msg = Message(
                     appointment_id=int(appointment_id),
                     sender_id=user_id,
@@ -71,7 +70,6 @@ async def websocket_endpoint(
                 db.commit()
                 db.refresh(new_msg)
 
-                # 4. Prepare Response
                 response_data = {
                     "id": new_msg.id,
                     "content": new_msg.content,
@@ -82,9 +80,9 @@ async def websocket_endpoint(
                 print(f"DB Error: {e}")
                 continue
             finally:
-                db.close() # Always close session!
+                db.close() 
 
-            # 5. Broadcast
+            # 3. Broadcast
             await manager.broadcast(response_data, appointment_id)
 
     except WebSocketDisconnect:
