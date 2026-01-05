@@ -1,7 +1,6 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import List, Dict
-from app.core.database import get_db, SessionLocal 
+from app.core.database import SessionLocal # <--- Manual Session Import
 from app.models.message import Message
 import json
 from datetime import datetime
@@ -36,19 +35,21 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- HTTP History ---
+# --- HTTP History (Keep this as is) ---
+from fastapi import Depends
+from app.core.database import get_db
+from sqlalchemy.orm import Session
 @router.get("/history/{appointment_id}")
 def get_chat_history(appointment_id: int, db: Session = Depends(get_db)):
-    messages = db.query(Message).filter(Message.appointment_id == appointment_id).order_by(Message.created_at.asc()).all()
-    return messages
+    return db.query(Message).filter(Message.appointment_id == appointment_id).order_by(Message.created_at.asc()).all()
 
-# --- WebSocket ---
-# ROUTE RENAMED TO /live
+# --- WebSocket Endpoint (RENAMED TO /live) ---
 @router.websocket("/live/{appointment_id}/{user_id}")
 async def websocket_endpoint(
     websocket: WebSocket, 
     appointment_id: str, 
     user_id: int
+    # NO db dependency here! We open it manually below.
 ):
     await manager.connect(websocket, appointment_id)
     try:
@@ -56,7 +57,7 @@ async def websocket_endpoint(
             # 1. Receive
             data = await websocket.receive_text()
             
-            # 2. Database (Safe Manual Session)
+            # 2. Open DB Session Manually
             db = SessionLocal()
             try:
                 new_msg = Message(
@@ -80,7 +81,7 @@ async def websocket_endpoint(
                 print(f"DB Error: {e}")
                 continue
             finally:
-                db.close() 
+                db.close() # Vital: Close session
 
             # 3. Broadcast
             await manager.broadcast(response_data, appointment_id)
