@@ -43,4 +43,4 @@ app.include_router(chat_socket.router, prefix="/api/v1/p2p", tags=["P2P Chat"])
 def root():
     return {"message": "MedIQ Brain is Online"}
 
-# update chat
+# # Force update for chat router
