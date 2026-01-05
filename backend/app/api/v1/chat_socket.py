@@ -1,9 +1,16 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import List, Dict
-from app.core.database import SessionLocal # <--- Manual Session Import
-from app.models.message import Message
 import json
 from datetime import datetime
+
+# We use SessionLocal to handle DB inside WebSocket safely
+from app.core.database import SessionLocal 
+from app.models.message import Message
+
+# For the history endpoint only
+from fastapi import Depends
+from sqlalchemy.orm import Session
+from app.core.database import get_db
 
 router = APIRouter()
 
@@ -35,21 +42,18 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- HTTP History (Keep this as is) ---
-from fastapi import Depends
-from app.core.database import get_db
-from sqlalchemy.orm import Session
+# --- HTTP History Endpoint ---
 @router.get("/history/{appointment_id}")
 def get_chat_history(appointment_id: int, db: Session = Depends(get_db)):
-    return db.query(Message).filter(Message.appointment_id == appointment_id).order_by(Message.created_at.asc()).all()
+    messages = db.query(Message).filter(Message.appointment_id == appointment_id).order_by(Message.created_at.asc()).all()
+    return messages
 
-# --- WebSocket Endpoint (RENAMED TO /live) ---
-@router.websocket("/live/{appointment_id}/{user_id}")
+# --- WebSocket Endpoint (MATCHING FRONTEND) ---
+@router.websocket("/live/{appointment_id}/{user_id}")  # <--- CHANGED TO /live
 async def websocket_endpoint(
     websocket: WebSocket, 
     appointment_id: str, 
     user_id: int
-    # NO db dependency here! We open it manually below.
 ):
     await manager.connect(websocket, appointment_id)
     try:
@@ -57,7 +61,7 @@ async def websocket_endpoint(
             # 1. Receive
             data = await websocket.receive_text()
             
-            # 2. Open DB Session Manually
+            # 2. Database Operation (Manual Session)
             db = SessionLocal()
             try:
                 new_msg = Message(
@@ -79,9 +83,10 @@ async def websocket_endpoint(
                 }
             except Exception as e:
                 print(f"DB Error: {e}")
-                continue
+                # If DB fails, we skip saving but don't crash the socket
+                continue 
             finally:
-                db.close() # Vital: Close session
+                db.close() 
 
             # 3. Broadcast
             await manager.broadcast(response_data, appointment_id)
