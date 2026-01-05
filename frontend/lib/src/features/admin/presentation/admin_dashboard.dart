@@ -13,10 +13,8 @@ final adminStatsProvider = FutureProvider.autoDispose((ref) async {
   return response.data;
 });
 
-// --- UPDATED PROVIDER ---
 final unverifiedDoctorsProvider = FutureProvider.autoDispose((ref) async {
   final dio = ref.watch(dioProvider);
-  // Call the specific ADMIN endpoint for pending docs
   final response = await dio.get('/api/v1/admin/doctors/pending');
   return response.data;
 });
@@ -41,6 +39,7 @@ class AdminDashboard extends ConsumerStatefulWidget {
 class _AdminDashboardState extends ConsumerState<AdminDashboard> {
   final TextEditingController _searchCtrl = TextEditingController();
   String _searchQuery = "";
+
   @override
   void dispose() {
     _searchCtrl.dispose();
@@ -50,28 +49,36 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
   Future<void> _verifyDoctor(int id) async {
     try {
       await ref.read(dioProvider).put('/api/v1/admin/doctors/$id/verify');
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text("Doctor Verified"),
             backgroundColor: Colors.green,
           ),
         );
+      }
       ref.refresh(unverifiedDoctorsProvider);
       ref.refresh(adminStatsProvider);
-    } catch (e) {}
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("$e")));
+      }
+    }
   }
 
   Future<void> _rejectDoctor(int id) async {
     try {
       await ref.read(dioProvider).delete('/api/v1/admin/doctors/$id/reject');
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text("Application Rejected"),
             backgroundColor: Colors.orange,
           ),
         );
+      }
       ref.refresh(unverifiedDoctorsProvider);
     } catch (e) {}
   }
@@ -80,14 +87,60 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
     try {
       await ref.read(dioProvider).put('/api/v1/admin/users/$id/suspend');
       ref.refresh(allUsersProvider);
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text("User Status Updated"),
             backgroundColor: Colors.blue,
           ),
         );
+      }
     } catch (e) {}
+  }
+
+  // --- NEW: Helper to show License Image ---
+  void _showLicenseDialog(String url) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AppBar(
+              title: const Text("Medical License"),
+              leading: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(ctx),
+              ),
+              elevation: 0,
+              backgroundColor: Colors.transparent,
+              foregroundColor: Colors.black,
+            ),
+            InteractiveViewer(
+              child: Image.network(
+                url,
+                loadingBuilder: (ctx, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return const SizedBox(
+                    height: 200,
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                },
+                errorBuilder: (context, error, stackTrace) => const Padding(
+                  padding: EdgeInsets.all(20.0),
+                  child: Column(
+                    children: [
+                      Icon(Icons.broken_image, size: 50, color: Colors.grey),
+                      Text("Could not load image"),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -217,30 +270,69 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
           : ListView.builder(
               padding: const EdgeInsets.all(16),
               itemCount: doctors.length,
-              itemBuilder: (ctx, i) => Card(
-                child: ListTile(
-                  leading: const CircleAvatar(
-                    child: Icon(Icons.local_hospital),
-                  ),
-                  title: Text(doctors[i]['full_name']),
-                  subtitle: Text(
-                    "License: ${doctors[i]['license_number'] ?? 'N/A'}",
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
+              itemBuilder: (ctx, i) {
+                final licenseData = doctors[i]['license_number'] ?? "";
+                final bool isUrl = licenseData.toString().startsWith("http");
+
+                return Card(
+                  child: Column(
                     children: [
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.red),
-                        onPressed: () => _rejectDoctor(doctors[i]['id']),
+                      ListTile(
+                        leading: const CircleAvatar(
+                          child: Icon(Icons.local_hospital),
+                        ),
+                        title: Text(doctors[i]['full_name']),
+                        subtitle: Text(doctors[i]['specialty'] ?? "Specialist"),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.check, color: Colors.green),
-                        onPressed: () => _verifyDoctor(doctors[i]['id']),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                        child: Row(
+                          children: [
+                            // VIEW LICENSE BUTTON
+                            if (isUrl)
+                              TextButton.icon(
+                                onPressed: () =>
+                                    _showLicenseDialog(licenseData),
+                                icon: const Icon(Icons.image, size: 18),
+                                label: const Text("View License"),
+                              )
+                            else
+                              Text(
+                                "License: $licenseData",
+                                style: const TextStyle(color: Colors.grey),
+                              ),
+
+                            const Spacer(),
+
+                            // ACTIONS
+                            IconButton(
+                              icon: const Icon(Icons.close, color: Colors.red),
+                              tooltip: "Reject",
+                              onPressed: () => _rejectDoctor(doctors[i]['id']),
+                            ),
+                            Container(
+                              decoration: BoxDecoration(
+                                color: Colors.green.withOpacity(0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: IconButton(
+                                icon: const Icon(
+                                  Icons.check,
+                                  color: Colors.green,
+                                ),
+                                tooltip: "Verify",
+                                onPressed: () =>
+                                    _verifyDoctor(doctors[i]['id']),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
+                      const SizedBox(height: 8),
                     ],
                   ),
-                ),
-              ),
+                );
+              },
             ),
     );
   }
@@ -279,18 +371,20 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                         u.email.toLowerCase().contains(_searchQuery),
                   )
                   .toList();
-              if (filtered.isEmpty)
+              if (filtered.isEmpty) {
                 return const Center(child: Text("No users found."));
+              }
               return ListView.builder(
                 itemCount: filtered.length,
                 padding: const EdgeInsets.all(16),
                 itemBuilder: (ctx, i) {
                   final user = filtered[i];
-                  if (user.role == 'admin')
+                  if (user.role == 'admin') {
                     return ListTile(
                       title: Text(user.fullName),
                       subtitle: const Text("ADMIN"),
                     );
+                  }
                   return Card(
                     color: user.isBanned ? Colors.red[50] : Colors.white,
                     child: ListTile(

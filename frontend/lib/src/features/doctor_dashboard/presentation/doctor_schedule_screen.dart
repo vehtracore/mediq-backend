@@ -303,14 +303,8 @@ class _AppointmentCard extends ConsumerWidget {
             width: double.infinity,
             height: 45,
             child: ElevatedButton.icon(
-              onPressed: () => context.push(
-                '/chat',
-                extra: {
-                  'title': displayName,
-                  'isAi': false,
-                  'appointmentId': appointment.id, // PASSING ID
-                },
-              ),
+              onPressed: () =>
+                  context.push('/video_call', extra: appointment.id),
               icon: const Icon(Icons.videocam_outlined),
               label: const Text("Start Consultation"),
               style: ElevatedButton.styleFrom(

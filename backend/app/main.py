@@ -9,6 +9,9 @@ from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscr
 from app.models import user, doctor, appointment, audit, review
 from app.models import content as content_model 
 
+from app.models import user, doctor, appointment, audit, review, message 
+
+from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket
 # Create Database Tables
 Base.metadata.create_all(bind=engine)
 
@@ -34,6 +37,7 @@ app.include_router(subscription.router, prefix="/api/v1/subscription", tags=["Su
 app.include_router(reviews.router, prefix="/api/v1/reviews", tags=["Reviews"])
 app.include_router(media.router, prefix="/api/v1/media", tags=["Media"])
 app.include_router(video.router, prefix="/api/v1/video", tags=["Video Call"]) # <--- NEW ROUTE
+app.include_router(chat_socket.router, prefix="/api/v1/p2p", tags=["P2P Chat"])
 
 @app.get("/")
 def root():

@@ -36,8 +36,9 @@ class ScheduleScreen extends ConsumerWidget {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (err, stack) => Center(child: Text('Error: $err')),
         data: (appointments) {
-          if (appointments.isEmpty)
+          if (appointments.isEmpty) {
             return const Center(child: Text("No appointments yet"));
+          }
           return ListView.separated(
             padding: const EdgeInsets.all(16),
             itemCount: appointments.length,
@@ -115,22 +116,25 @@ class _AppointmentCard extends ConsumerWidget {
                             rating: selectedRating,
                             comment: commentCtrl.text,
                           );
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("Review Submitted!"),
-                          backgroundColor: Colors.green,
-                        ),
-                      );
-
-                      // FIX: Refresh the list so the button disappears
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text("Review Submitted!"),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                      }
+                      // Refresh the list so the button disappears
                       ref.refresh(myAppointmentsProvider);
                     } catch (e) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("Failed to submit review"),
-                          backgroundColor: Colors.red,
-                        ),
-                      );
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text("Failed to submit review"),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                      }
                     }
                   },
                   style: ElevatedButton.styleFrom(
@@ -176,6 +180,7 @@ class _AppointmentCard extends ConsumerWidget {
       ),
       child: Column(
         children: [
+          // --- Top Row: Date Box & Info ---
           Row(
             children: [
               Container(
@@ -249,11 +254,14 @@ class _AppointmentCard extends ConsumerWidget {
               ),
             ],
           ),
+
+          // --- Bottom Row: Action Buttons ---
           if (appointment.status != 'cancelled') ...[
             const SizedBox(height: 12),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
+                // 1. Cancel Button
                 if (appointment.status == 'pending' || isConfirmed)
                   TextButton(
                     onPressed: () async {
@@ -262,24 +270,77 @@ class _AppointmentCard extends ConsumerWidget {
                             .read(appointmentRepositoryProvider)
                             .cancelMyAppointment(appointment.id);
                         ref.refresh(myAppointmentsProvider);
-                      } catch (e) {}
+                      } catch (e) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text("Failed to cancel")),
+                        );
+                      }
                     },
                     child: const Text(
                       "Cancel",
                       style: TextStyle(color: Colors.redAccent),
                     ),
                   ),
+
+                // 2. Confirmed Actions (Chat & Video)
                 if (isConfirmed) ...[
                   const SizedBox(width: 8),
+
+                  // Chat Button (Existing)
                   OutlinedButton.icon(
                     onPressed: () => context.push(
                       '/chat',
-                      extra: {'title': appointment.doctorName, 'isAi': false},
+                      extra: {
+                        'title': appointment.doctorName,
+                        'isAi': false,
+                        'appointmentId': appointment.id,
+                      },
                     ),
                     icon: const Icon(Icons.chat_bubble_outline, size: 16),
-                    label: const Text("Message"),
+                    label: const Text("Chat"),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      minimumSize: const Size(0, 36),
+                    ),
+                  ),
+
+                  const SizedBox(width: 8),
+
+                  // --- NEW VOICE BUTTON ---
+                  ElevatedButton(
+                    onPressed: () => context.push(
+                      '/video_call?type=voice', // Adds the query param
+                      extra: appointment.id, // Passes the ID
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green, // Distinct Green Color
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      minimumSize: const Size(0, 36),
+                    ),
+                    child: const Icon(Icons.phone, size: 18),
+                  ),
+
+                  const SizedBox(width: 8),
+
+                  // --- NEW VIDEO BUTTON ---
+                  ElevatedButton.icon(
+                    onPressed: () => context.push(
+                      '/video_call', // Default path
+                      extra: appointment.id,
+                    ),
+                    icon: const Icon(Icons.videocam, size: 16),
+                    label: const Text("Video"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blueAccent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      minimumSize: const Size(0, 36),
+                    ),
                   ),
                 ],
+
+                // 3. Payment Button
                 if (isUnpaid) ...[
                   const SizedBox(width: 8),
                   ElevatedButton(
@@ -298,7 +359,7 @@ class _AppointmentCard extends ConsumerWidget {
                   ),
                 ],
 
-                // FIX: Only show if completed AND !hasReview
+                // 4. Review Button
                 if (isCompleted && !appointment.hasReview) ...[
                   const SizedBox(width: 8),
                   ElevatedButton.icon(

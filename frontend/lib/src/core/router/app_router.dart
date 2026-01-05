@@ -27,6 +27,7 @@ import '../../features/doctor_dashboard/presentation/doctor_edit_profile_screen.
 import '../../features/doctor_dashboard/presentation/doctor_availability_screen.dart';
 import '../../features/emergency/presentation/emergency_screen.dart';
 import '../../features/subscription/presentation/subscription_screen.dart';
+import 'package:mediq_app/src/features/chat/presentation/video_call_screen.dart';
 
 final goRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
@@ -138,6 +139,24 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           return EditProfileScreen(user: user);
         },
       ),
+
+      GoRoute(
+        path: '/video_call',
+        builder: (context, state) {
+          // 1. Get the Appointment ID from the 'extra' object
+          final appointmentId = state.extra as int;
+
+          // 2. Check for the 'type=voice' query parameter
+          // This handles: context.push('/video_call?type=voice', extra: id)
+          final isVoice = state.uri.queryParameters['type'] == 'voice';
+
+          return VideoCallScreen(
+            appointmentId: appointmentId,
+            isVoiceCall: isVoice,
+          );
+        },
+      ),
+
       GoRoute(
         path: '/payment',
         builder: (context, state) {
