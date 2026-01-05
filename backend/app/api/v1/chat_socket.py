@@ -1,10 +1,8 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from sqlalchemy.orm import Session
 from typing import List, Dict
 from app.core.database import get_db
 from app.models.message import Message
-from app.models.user import User
-from app.core.security import get_current_user_ws # We need a special auth for WebSockets
 import json
 from datetime import datetime
 
@@ -24,18 +22,23 @@ class ConnectionManager:
 
     def disconnect(self, websocket: WebSocket, appointment_id: str):
         if appointment_id in self.active_connections:
-            self.active_connections[appointment_id].remove(websocket)
+            if websocket in self.active_connections[appointment_id]:
+                self.active_connections[appointment_id].remove(websocket)
             if not self.active_connections[appointment_id]:
                 del self.active_connections[appointment_id]
 
     async def broadcast(self, message: dict, appointment_id: str):
         if appointment_id in self.active_connections:
             for connection in self.active_connections[appointment_id]:
-                await connection.send_text(json.dumps(message))
+                try:
+                    await connection.send_text(json.dumps(message))
+                except Exception:
+                    # If sending fails, remove the dead connection
+                    pass
 
 manager = ConnectionManager()
 
-# --- 2. History Endpoint (Load previous messages) ---
+# --- 2. History Endpoint ---
 @router.get("/history/{appointment_id}")
 def get_chat_history(appointment_id: int, db: Session = Depends(get_db)):
     messages = db.query(Message).filter(Message.appointment_id == appointment_id).order_by(Message.created_at.asc()).all()
@@ -60,7 +63,8 @@ async def websocket_endpoint(
                 appointment_id=int(appointment_id),
                 sender_id=user_id,
                 content=data,
-                created_at=datetime.utcnow()
+                created_at=datetime.utcnow(),
+                is_read=False
             )
             db.add(new_msg)
             db.commit()
