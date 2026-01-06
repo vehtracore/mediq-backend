@@ -3,9 +3,14 @@ from typing import List, Dict
 import json
 from datetime import datetime
 
-# We use SessionLocal to handle DB inside WebSocket safely
-from app.core.database import SessionLocal 
+# 1. Import 'engine' directly (We KNOW this exists because main.py uses it)
+from app.core.database import engine
+from sqlalchemy.orm import sessionmaker
 from app.models.message import Message
+
+# 2. Create our own Session Maker locally
+# This replaces 'SessionLocal' and guarantees we have a working DB builder
+WsSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # For the history endpoint only
 from fastapi import Depends
@@ -45,11 +50,11 @@ manager = ConnectionManager()
 # --- HTTP History Endpoint ---
 @router.get("/history/{appointment_id}")
 def get_chat_history(appointment_id: int, db: Session = Depends(get_db)):
-    messages = db.query(Message).filter(Message.appointment_id == appointment_id).order_by(Message.created_at.asc()).all()
-    return messages
+    # This works because get_db is standard, but the WebSocket needs special care
+    return db.query(Message).filter(Message.appointment_id == appointment_id).order_by(Message.created_at.asc()).all()
 
-# --- WebSocket Endpoint (MATCHING FRONTEND) ---
-@router.websocket("/live/{appointment_id}/{user_id}")  # <--- CHANGED TO /live
+# --- WebSocket Endpoint ---
+@router.websocket("/live/{appointment_id}/{user_id}") 
 async def websocket_endpoint(
     websocket: WebSocket, 
     appointment_id: str, 
@@ -61,8 +66,9 @@ async def websocket_endpoint(
             # 1. Receive
             data = await websocket.receive_text()
             
-            # 2. Database Operation (Manual Session)
-            db = SessionLocal()
+            # 2. Open Session directly from Engine (Safe!)
+            # We use the WsSession we created at the top of the file
+            db = WsSession()
             try:
                 new_msg = Message(
                     appointment_id=int(appointment_id),
@@ -83,8 +89,7 @@ async def websocket_endpoint(
                 }
             except Exception as e:
                 print(f"DB Error: {e}")
-                # If DB fails, we skip saving but don't crash the socket
-                continue 
+                continue
             finally:
                 db.close() 
 
