@@ -3,7 +3,7 @@ from typing import List, Dict
 import json
 from datetime import datetime
 
-# DB Imports (We keep them for history, but won't use them in WS for now)
+# Keep these imports so the file doesn't break, but we WON'T use them in the socket
 from app.core.database import engine, get_db
 from sqlalchemy.orm import sessionmaker, Session
 from app.models.message import Message
@@ -38,17 +38,17 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- 🧪 DIAGNOSTIC ENDPOINT ---
+# --- 🧪 DIAGNOSTIC ENDPOINT (Keep this!) ---
 @router.get("/test")
 def chat_test():
     return {"status": "ok", "message": "Chat Router is Online"}
 
-# --- History Endpoint (This works, so we keep it) ---
+# --- History Endpoint (HTTP works fine) ---
 @router.get("/history/{appointment_id}")
 def get_chat_history(appointment_id: int, db: Session = Depends(get_db)):
     return db.query(Message).filter(Message.appointment_id == appointment_id).order_by(Message.created_at.asc()).all()
 
-# --- WebSocket Endpoint (SAFE MODE) ---
+# --- WebSocket Endpoint (PURE ECHO MODE) ---
 @router.websocket("/live/{appointment_id}/{user_id}")
 async def websocket_endpoint(
     websocket: WebSocket, 
@@ -58,38 +58,27 @@ async def websocket_endpoint(
     print(f"✅ WS Connecting: User {user_id}")
     await manager.connect(websocket, appointment_id)
     
-    # Send a welcome message to prove connection worked
+    # 1. Send Immediate Welcome Message
+    # If you see this, the connection is solid.
     await manager.broadcast({
         "id": 0,
-        "content": "SYSTEM: Connected (Database Saving Disabled)",
+        "content": "SYSTEM: Connected! (DB Saving Disabled)",
         "sender_id": 0, 
         "created_at": str(datetime.now())
     }, appointment_id)
 
     try:
         while True:
+            # 2. Receive Message
             data = await websocket.receive_text()
             
-            # --- DATABASE BLOCK (DISABLED FOR DIAGNOSTICS) ---
-            # If the app connects now, we know the DB code below was the crasher.
-            '''
-            db = Session(bind=engine)
-            try:
-                new_msg = Message(appointment_id=int(appointment_id), sender_id=user_id, content=data, created_at=datetime.utcnow(), is_read=False)
-                db.add(new_msg)
-                db.commit()
-                db.refresh(new_msg)
-            except Exception as e:
-                print(f"DB Error: {e}")
-            finally:
-                db.close()
-            '''
-            # -------------------------------------------------
-
-            # Just Broadcast (Echo)
+            # --- 🛑 DATABASE SAVING REMOVED 🛑 ---
+            # We are NOT saving to DB here. This isolates the crash.
+            
+            # 3. Echo it back
             response_data = {
-                "id": 0, # Dummy ID
-                "content": data,
+                "id": 0, 
+                "content": f"Echo: {data}",
                 "sender_id": user_id,
                 "created_at": str(datetime.now())
             }
