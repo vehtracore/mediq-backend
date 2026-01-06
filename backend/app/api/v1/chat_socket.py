@@ -1,21 +1,15 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from typing import List, Dict
 import json
 from datetime import datetime
 
-# 1. Import 'engine' directly (We KNOW this exists because main.py uses it)
-from app.core.database import engine
-from sqlalchemy.orm import sessionmaker
+# 1. DB Imports (Using Engine directly to prevent crashes)
+from app.core.database import engine, get_db
+from sqlalchemy.orm import sessionmaker, Session
 from app.models.message import Message
 
-# 2. Create our own Session Maker locally
-# This replaces 'SessionLocal' and guarantees we have a working DB builder
+# Create local session maker
 WsSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# For the history endpoint only
-from fastapi import Depends
-from sqlalchemy.orm import Session
-from app.core.database import get_db
 
 router = APIRouter()
 
@@ -47,27 +41,30 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- HTTP History Endpoint ---
+# --- 🧪 DIAGNOSTIC ENDPOINT (New) ---
+@router.get("/test")
+def chat_test():
+    return {"status": "ok", "message": "Chat Router is Online"}
+
+# --- History Endpoint ---
 @router.get("/history/{appointment_id}")
 def get_chat_history(appointment_id: int, db: Session = Depends(get_db)):
-    # This works because get_db is standard, but the WebSocket needs special care
     return db.query(Message).filter(Message.appointment_id == appointment_id).order_by(Message.created_at.asc()).all()
 
 # --- WebSocket Endpoint ---
-@router.websocket("/live/{appointment_id}/{user_id}") 
+@router.websocket("/live/{appointment_id}/{user_id}")
 async def websocket_endpoint(
     websocket: WebSocket, 
     appointment_id: str, 
     user_id: int
 ):
+    print(f"✅ WS Connection Attempt: User {user_id} -> Appt {appointment_id}")
     await manager.connect(websocket, appointment_id)
     try:
         while True:
-            # 1. Receive
             data = await websocket.receive_text()
             
-            # 2. Open Session directly from Engine (Safe!)
-            # We use the WsSession we created at the top of the file
+            # Database Save
             db = WsSession()
             try:
                 new_msg = Message(
@@ -88,16 +85,13 @@ async def websocket_endpoint(
                     "created_at": new_msg.created_at.isoformat()
                 }
             except Exception as e:
-                print(f"DB Error: {e}")
+                print(f"❌ DB Error: {e}")
                 continue
             finally:
                 db.close() 
 
-            # 3. Broadcast
             await manager.broadcast(response_data, appointment_id)
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, appointment_id)
-    except Exception as e:
-        print(f"WebSocket Error: {e}")
-        manager.disconnect(websocket, appointment_id)
+        print(f"🔌 Disconnected: User {user_id}")
