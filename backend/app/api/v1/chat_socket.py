@@ -1,12 +1,16 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi.concurrency import run_in_threadpool # <--- THE SECRET WEAPON
 from typing import List, Dict
 import json
 from datetime import datetime
 
-# Keep these imports so the file doesn't break, but we WON'T use them in the socket
+# 1. DB Imports
 from app.core.database import engine, get_db
 from sqlalchemy.orm import sessionmaker, Session
 from app.models.message import Message
+
+# Create local session maker
+WsSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 router = APIRouter()
 
@@ -38,17 +42,44 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- 🧪 DIAGNOSTIC ENDPOINT (Keep this!) ---
+# --- 🧪 DIAGNOSTIC ENDPOINT ---
 @router.get("/test")
 def chat_test():
     return {"status": "ok", "message": "Chat Router is Online"}
 
-# --- History Endpoint (HTTP works fine) ---
+# --- History Endpoint ---
 @router.get("/history/{appointment_id}")
 def get_chat_history(appointment_id: int, db: Session = Depends(get_db)):
     return db.query(Message).filter(Message.appointment_id == appointment_id).order_by(Message.created_at.asc()).all()
 
-# --- WebSocket Endpoint (PURE ECHO MODE) ---
+# --- HELPER: Save Message Safely ---
+def save_message_sync(appointment_id: int, user_id: int, content: str):
+    """Runs in a separate thread to prevent blocking the WebSocket"""
+    db = WsSession()
+    try:
+        new_msg = Message(
+            appointment_id=appointment_id,
+            sender_id=user_id,
+            content=content,
+            created_at=datetime.utcnow(),
+            is_read=False
+        )
+        db.add(new_msg)
+        db.commit()
+        db.refresh(new_msg)
+        return {
+            "id": new_msg.id,
+            "content": new_msg.content,
+            "sender_id": new_msg.sender_id,
+            "created_at": new_msg.created_at.isoformat()
+        }
+    except Exception as e:
+        print(f"❌ DB Save Error: {e}")
+        return None
+    finally:
+        db.close()
+
+# --- WebSocket Endpoint (PRODUCTION) ---
 @router.websocket("/live/{appointment_id}/{user_id}")
 async def websocket_endpoint(
     websocket: WebSocket, 
@@ -58,32 +89,22 @@ async def websocket_endpoint(
     print(f"✅ WS Connecting: User {user_id}")
     await manager.connect(websocket, appointment_id)
     
-    # 1. Send Immediate Welcome Message
-    # If you see this, the connection is solid.
-    await manager.broadcast({
-        "id": 0,
-        "content": "SYSTEM: Connected! (DB Saving Disabled)",
-        "sender_id": 0, 
-        "created_at": str(datetime.now())
-    }, appointment_id)
-
     try:
         while True:
-            # 2. Receive Message
+            # 1. Receive
             data = await websocket.receive_text()
             
-            # --- 🛑 DATABASE SAVING REMOVED 🛑 ---
-            # We are NOT saving to DB here. This isolates the crash.
-            
-            # 3. Echo it back
-            response_data = {
-                "id": 0, 
-                "content": f"Echo: {data}",
-                "sender_id": user_id,
-                "created_at": str(datetime.now())
-            }
+            # 2. Save to DB (Run in background thread!)
+            saved_msg = await run_in_threadpool(
+                save_message_sync, 
+                int(appointment_id), 
+                user_id, 
+                data
+            )
 
-            await manager.broadcast(response_data, appointment_id)
+            if saved_msg:
+                # 3. Broadcast the SAVED message (with real ID)
+                await manager.broadcast(saved_msg, appointment_id)
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, appointment_id)
