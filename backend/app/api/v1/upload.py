@@ -1,38 +1,44 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from fastapi.staticfiles import StaticFiles
+import cloudinary
+import cloudinary.uploader
 import shutil
 import os
-import uuid
 
 router = APIRouter()
 
-# Ensure directory exists
-UPLOAD_DIR = "static/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# --- CONFIGURATION ---
+# I have plugged in your keys here so it works immediately.
+cloudinary.config( 
+  cloud_name = "dxx91qxdn", 
+  api_key = "214721641666341", 
+  api_secret = "bwpVumPh9JUxRuguJTZY09ByjMA",
+  secure = True
+)
 
-@router.post("/")
-async def upload_file(file: UploadFile = File(...)):
+@router.post("/", response_model=dict)
+async def upload_image(file: UploadFile = File(...)):
+    """
+    Receives a file, uploads it to Cloudinary, and returns the public URL.
+    """
     # 1. Validate File Type
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
-    # 2. Generate Unique Name (prevents overwrites)
-    file_extension = file.filename.split(".")[-1]
-    unique_filename = f"{uuid.uuid4()}.{file_extension}"
-    file_path = f"{UPLOAD_DIR}/{unique_filename}"
-
-    # 3. Save to Disk
     try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not save file: {str(e)}")
+        # 2. Upload to Cloudinary (Directly from the file stream)
+        # 'folder="mediq_chat"' keeps your cloud organized
+        result = cloudinary.uploader.upload(
+            file.file, 
+            folder="mediq_chat",
+            resource_type="image"
+        )
 
-    # 4. Return the URL
-    # NOTE: In production (Render), these files disappear on redeploy.
-    # For permanent storage, we would switch this specific block to use S3/Cloudinary later.
-    return {
-        "url": f"/static/uploads/{unique_filename}",
-        "filename": unique_filename,
-        "content_type": file.content_type
-    }
+        # 3. Get the Secure URL (https://...)
+        image_url = result.get("secure_url")
+
+        # 4. Return in the format the Frontend expects
+        return {"url": image_url}
+
+    except Exception as e:
+        print(f"❌ Cloudinary Upload Error: {e}")
+        raise HTTPException(status_code=500, detail="Image upload failed")
