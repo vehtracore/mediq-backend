@@ -1,27 +1,16 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles 
 from app.core.database import engine, Base
 
 # 1. Import API Routers
-from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video # <--- ADDED VIDEO
+from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload
 
-# 2. Import Models
-from app.models import user, doctor, appointment, audit, review
-from app.models import content as content_model 
-
-from app.models import user, doctor, appointment, audit, review, message 
-
-from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket
-
-from fastapi.staticfiles import StaticFiles 
-from app.api.v1 import upload
-
-# Create Database Tables
-
+# 2. Create Database Tables
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="MDQplus API")
-
 
 # --- CORS CONFIGURATION ---
 app.add_middleware(
@@ -42,13 +31,17 @@ app.include_router(content.router, prefix="/api/v1/content", tags=["Content"])
 app.include_router(subscription.router, prefix="/api/v1/subscription", tags=["Subscription"])
 app.include_router(reviews.router, prefix="/api/v1/reviews", tags=["Reviews"])
 app.include_router(media.router, prefix="/api/v1/media", tags=["Media"])
-app.include_router(video.router, prefix="/api/v1/video", tags=["Video Call"]) # <--- NEW ROUTE
+app.include_router(video.router, prefix="/api/v1/video", tags=["Video Call"])
 app.include_router(chat_socket.router, prefix="/api/v1/p2p", tags=["P2P Chat"])
-app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(upload.router, prefix="/api/v1/upload", tags=["Upload"])
+
+# --- CRASH FIX: Ensure static directory exists ---
+static_dir = "static"
+if not os.path.exists(static_dir):
+    os.makedirs(static_dir)
+
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.get("/")
 def root():
     return {"message": "MedIQ Brain is Online"}
-
-# # Force update for chat router
