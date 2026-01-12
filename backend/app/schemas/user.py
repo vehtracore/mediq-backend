@@ -7,7 +7,6 @@ class UserBase(BaseModel):
     email: EmailStr
     first_name: str
     last_name: str
-    # STRICT MODE: DOB is mandatory again
     dob: date 
     location: Optional[str] = None
     role: Optional[str] = "patient"
@@ -16,17 +15,41 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str
 
-# User Update (Fields remain optional here for partial updates)
+# --- 🚀 UPDATED: User Update (Includes Medical & Settings) ---
 class UserUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     location: Optional[str] = None
     dob: Optional[date] = None
+    
+    # Medical History
+    blood_type: Optional[str] = None
+    allergies: Optional[str] = None
+    chronic_conditions: Optional[str] = None
+    medications: Optional[str] = None
+    past_surgeries: Optional[str] = None
 
-# Properties to return to client
+    # Settings
+    settings_theme: Optional[str] = None
+    settings_notifications: Optional[bool] = None
+    settings_email_updates: Optional[bool] = None
+
+# --- 🚀 UPDATED: User Response (Includes Medical & Settings) ---
 class UserResponse(UserBase):
     id: int
     is_active: bool
+    
+    # Medical History
+    blood_type: Optional[str] = None
+    allergies: Optional[str] = None
+    chronic_conditions: Optional[str] = None
+    medications: Optional[str] = None
+    past_surgeries: Optional[str] = None
+
+    # Settings
+    settings_theme: Optional[str] = "light"
+    settings_notifications: Optional[bool] = True
+    settings_email_updates: Optional[bool] = False
 
     model_config = ConfigDict(from_attributes=True)
 

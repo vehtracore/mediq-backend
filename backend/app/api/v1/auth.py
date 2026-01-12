@@ -50,12 +50,32 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 def read_users_me(current_user: User = Depends(deps.get_current_user)): return current_user
 
+# ... keep your imports and other functions the same ...
+
 @router.put("/me", response_model=UserResponse)
-def update_user_me(user_update: UserUpdate, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    if user_update.first_name: current_user.first_name = user_update.first_name
-    if user_update.last_name: current_user.last_name = user_update.last_name
-    if user_update.location: current_user.location = user_update.location
-    if user_update.dob: current_user.dob = user_update.dob
+def update_user_me(
+    user_update: UserUpdate, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(deps.get_current_user)
+):
+    # 1. Update Basic Info
+    if user_update.first_name is not None: current_user.first_name = user_update.first_name
+    if user_update.last_name is not None: current_user.last_name = user_update.last_name
+    if user_update.location is not None: current_user.location = user_update.location
+    if user_update.dob is not None: current_user.dob = user_update.dob
+    
+    # 2. Update Medical History
+    if user_update.blood_type is not None: current_user.blood_type = user_update.blood_type
+    if user_update.allergies is not None: current_user.allergies = user_update.allergies
+    if user_update.chronic_conditions is not None: current_user.chronic_conditions = user_update.chronic_conditions
+    if user_update.medications is not None: current_user.medications = user_update.medications
+    if user_update.past_surgeries is not None: current_user.past_surgeries = user_update.past_surgeries
+
+    # 3. Update Settings
+    if user_update.settings_theme is not None: current_user.settings_theme = user_update.settings_theme
+    if user_update.settings_notifications is not None: current_user.settings_notifications = user_update.settings_notifications
+    if user_update.settings_email_updates is not None: current_user.settings_email_updates = user_update.settings_email_updates
+
     db.commit()
     db.refresh(current_user)
     return current_user
