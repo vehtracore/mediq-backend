@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart'; // Added import for context.push
+import 'package:go_router/go_router.dart';
 import 'doctor_controller.dart';
 import 'widgets/doctor_card.dart';
 
@@ -23,35 +23,40 @@ class _DoctorSearchScreenState extends ConsumerState<DoctorSearchScreen> {
   @override
   Widget build(BuildContext context) {
     final doctorsAsync = ref.watch(doctorListProvider);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF9FAFB),
+      backgroundColor: theme.scaffoldBackgroundColor, // ✅ Dynamic Background
       appBar: AppBar(
-        title: const Text(
+        title: Text(
           "Find a Specialist",
-          style: TextStyle(
-            color: Colors.black,
-            fontSize: 18,
+          style: theme.textTheme.titleLarge?.copyWith(
             fontWeight: FontWeight.bold,
-          ),
+          ), // ✅ Dynamic Text
         ),
-        backgroundColor: Colors.white,
+        backgroundColor: theme.appBarTheme.backgroundColor, // ✅ Dynamic
         elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.black),
+        iconTheme: theme.iconTheme, // ✅ Dynamic Icons
       ),
       body: Column(
         children: [
           // --- Search Bar ---
           Container(
-            color: Colors.white,
+            color: theme.appBarTheme.backgroundColor, // ✅ matches header
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: TextField(
               controller: _searchController,
+              style: theme.textTheme.bodyLarge, // ✅ Dynamic Input Text
               decoration: InputDecoration(
                 hintText: "Search doctors, specialties...",
+                hintStyle: TextStyle(
+                  color: isDark ? Colors.grey[400] : Colors.grey[600],
+                ),
                 prefixIcon: const Icon(Icons.search, color: Colors.grey),
                 filled: true,
-                fillColor: Colors.grey[100],
+                fillColor:
+                    theme.inputDecorationTheme.fillColor, // ✅ Dynamic Fill
                 contentPadding: const EdgeInsets.symmetric(
                   vertical: 0,
                   horizontal: 20,
@@ -80,13 +85,24 @@ class _DoctorSearchScreenState extends ConsumerState<DoctorSearchScreen> {
                       color: Colors.red,
                     ),
                     const SizedBox(height: 16),
-                    Text("Failed to load doctors.\n${err.toString()}"),
+                    Text(
+                      "Failed to load doctors.\n${err.toString()}",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: theme.textTheme.bodyMedium?.color,
+                      ),
+                    ),
                   ],
                 ),
               ),
               data: (doctors) {
                 if (doctors.isEmpty) {
-                  return const Center(child: Text("No doctors found."));
+                  return Center(
+                    child: Text(
+                      "No doctors found.",
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  );
                 }
 
                 return ListView.builder(
@@ -97,7 +113,6 @@ class _DoctorSearchScreenState extends ConsumerState<DoctorSearchScreen> {
                     return DoctorCard(
                       doctor: doctor,
                       onTap: () {
-                        // --- THE UPDATE IS HERE ---
                         context.push('/doctor_detail', extra: doctor);
                       },
                     );

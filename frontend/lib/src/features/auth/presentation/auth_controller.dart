@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart'; // ✅ Use XFile
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/core/storage/storage_service.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
@@ -57,35 +58,63 @@ class AuthController extends AsyncNotifier<void> {
       );
 
       await storageService.saveToken(token);
+      final user = await authRepository.getUserProfile();
+      ref.read(userControllerProvider.notifier).setUser(user);
     });
   }
 
   Future<void> logout() async {
     final storageService = ref.read(storageServiceProvider);
     await storageService.deleteToken();
+    ref.read(userControllerProvider.notifier).logout();
     state = const AsyncValue.data(null);
   }
 
+  // --- 🚀 UPDATE PROFILE (Accepts XFile) ---
   Future<void> updateProfile({
-    required String firstName,
-    required String lastName,
-    required String location,
+    String? firstName,
+    String? lastName,
+    String? location,
+    XFile? profileImage, // ✅ Changed to XFile (matches UI and Repo)
+    String? bloodType,
+    String? allergies,
+    String? chronicConditions,
+    String? medications,
+    String? pastSurgeries,
+    String? settingsTheme,
+    bool? settingsNotifications,
+    bool? settingsEmailUpdates,
   }) async {
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
       final authRepository = ref.read(authRepositoryProvider);
 
-      await authRepository.updateProfile(
-        firstName: firstName,
-        lastName: lastName,
-        location: location,
-      );
+      final Map<String, dynamic> data = {};
+      if (firstName != null) data['first_name'] = firstName;
+      if (lastName != null) data['last_name'] = lastName;
+      if (location != null) data['location'] = location;
 
-      ref.invalidate(userProvider);
+      if (bloodType != null) data['blood_type'] = bloodType;
+      if (allergies != null) data['allergies'] = allergies;
+      if (chronicConditions != null)
+        data['chronic_conditions'] = chronicConditions;
+      if (medications != null) data['medications'] = medications;
+      if (pastSurgeries != null) data['past_surgeries'] = pastSurgeries;
+
+      if (settingsTheme != null) data['settings_theme'] = settingsTheme;
+      if (settingsNotifications != null)
+        data['settings_notifications'] = settingsNotifications;
+      if (settingsEmailUpdates != null)
+        data['settings_email_updates'] = settingsEmailUpdates;
+
+      // Send XFile to Repository
+      final updatedUser =
+          await authRepository.updateProfile(data, profileImage: profileImage);
+
+      ref.read(userControllerProvider.notifier).setUser(updatedUser);
     });
   }
 
-  // --- FIXED METHOD ---
   Future<void> registerDoctor({
     required String fullName,
     required String email,
@@ -95,9 +124,7 @@ class AuthController extends AsyncNotifier<void> {
   }) async {
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
-      // FIX: Using ref.read to get the repository
       final authRepository = ref.read(authRepositoryProvider);
-
       await authRepository.registerDoctor(
         fullName: fullName,
         email: email,

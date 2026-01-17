@@ -11,6 +11,8 @@ class DoctorRequestsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final requestsAsync = ref.watch(requestsControllerProvider);
     final currentTab = ref.watch(requestTabProvider);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return Column(
       children: [
@@ -32,7 +34,6 @@ class DoctorRequestsScreen extends ConsumerWidget {
             ],
             selected: {currentTab},
             onSelectionChanged: (Set<int> newSelection) {
-              // UPDATED: Using the new method
               ref.read(requestTabProvider.notifier).setTab(newSelection.first);
             },
             style: ButtonStyle(
@@ -42,7 +43,7 @@ class DoctorRequestsScreen extends ConsumerWidget {
                 if (states.contains(MaterialState.selected)) {
                   return const Color(0xFF4A90E2);
                 }
-                return Colors.white;
+                return isDark ? Colors.grey[800]! : Colors.white; // ✅ Dynamic
               }),
               foregroundColor: MaterialStateProperty.resolveWith<Color>((
                 Set<MaterialState> states,
@@ -50,7 +51,8 @@ class DoctorRequestsScreen extends ConsumerWidget {
                 if (states.contains(MaterialState.selected)) {
                   return Colors.white;
                 }
-                return Colors.black;
+                return theme.textTheme.bodyLarge?.color ??
+                    Colors.black; // ✅ Dynamic
               }),
             ),
           ),
@@ -67,11 +69,11 @@ class DoctorRequestsScreen extends ConsumerWidget {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.inbox, size: 64, color: Colors.grey[300]),
+                      Icon(Icons.inbox, size: 64, color: theme.disabledColor),
                       const SizedBox(height: 16),
                       Text(
                         "No pending items",
-                        style: TextStyle(color: Colors.grey[600]),
+                        style: theme.textTheme.bodyMedium,
                       ),
                     ],
                   ),
@@ -106,21 +108,22 @@ class _RequestCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.read(requestsControllerProvider.notifier);
-    final dateStr = DateFormat('MMM dd, yyyy').format(appointment.startTime);
     final timeStr = DateFormat('jm').format(appointment.startTime);
+    final theme = Theme.of(context);
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: theme.cardTheme.color, // ✅ Dynamic Background
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.08),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        boxShadow: theme.brightness == Brightness.dark
+            ? []
+            : [
+                BoxShadow(
+                    color: Colors.grey.withOpacity(0.08),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4))
+              ],
         border: isGeneral
             ? Border.all(color: Colors.orange.withOpacity(0.3))
             : null,
@@ -145,14 +148,12 @@ class _RequestCard extends ConsumerWidget {
                 children: [
                   Text(
                     isGeneral ? "General Queue Request" : "Direct Request",
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold), // ✅ Dynamic
                   ),
                   Text(
                     "Requested: $timeStr",
-                    style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                    style: theme.textTheme.bodySmall, // ✅ Dynamic
                   ),
                 ],
               ),
@@ -161,13 +162,10 @@ class _RequestCard extends ConsumerWidget {
           const SizedBox(height: 12),
           Text(
             appointment.notes ?? "No notes",
-            style: TextStyle(
-              color: Colors.grey[800],
-              fontStyle: FontStyle.italic,
-            ),
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(fontStyle: FontStyle.italic), // ✅ Dynamic
           ),
           const SizedBox(height: 16),
-
           if (isGeneral)
             SizedBox(
               width: double.infinity,

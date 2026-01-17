@@ -10,11 +10,11 @@ class ApiConstants {
       // In Production (APK/Release), ALWAYS use the Live URL
       return _liveUrl;
     }
-    
+
     // In Debug Mode, you can still use the Live URL to test the real server
     // Or uncomment the local logic if you want to go back to offline dev.
-    return _liveUrl; 
-    
+    return _liveUrl;
+
     /* // Localhost Logic (Saved for later if needed)
     if (kIsWeb) {
       return 'http://127.0.0.1:8001';

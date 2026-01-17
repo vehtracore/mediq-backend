@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'presentation/auth_controller.dart';
 import 'presentation/user_controller.dart';
-import 'data/auth_repository.dart'; // Needed for repo access
+import 'data/auth_repository.dart';
 
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
@@ -79,33 +79,33 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final authState = ref.watch(authControllerProvider);
     final theme = Theme.of(context);
 
-    ref.listen<AsyncValue<void>>(authControllerProvider, (
-      previous,
-      next,
-    ) async {
-      if (next.hasError)
+    ref.listen<AsyncValue<void>>(authControllerProvider,
+        (previous, next) async {
+      if (next.hasError) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(next.error.toString()),
             backgroundColor: Colors.red,
           ),
         );
+      }
       if (!next.isLoading && !next.hasError) {
         try {
           final user = await ref.refresh(userProvider.future);
           if (!mounted) return;
 
-          if (user.role == 'admin') {
+          // FIX: Added '?' to user.role checks
+          if (user?.role == 'admin') {
             context.go('/admin_dashboard');
-          } else if (user.role == 'doctor') {
+          } else if (user?.role == 'doctor') {
             try {
-              final doctor = await ref
-                  .read(authRepositoryProvider)
-                  .getMyDoctorProfile();
-              if (doctor.isVerified)
+              final doctor =
+                  await ref.read(authRepositoryProvider).getMyDoctorProfile();
+              if (doctor.isVerified) {
                 context.go('/doctor_home');
-              else
+              } else {
                 context.go('/doctor_pending');
+              }
             } catch (e) {
               context.go('/doctor_pending');
             }
@@ -137,25 +137,22 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   style: theme.textTheme.headlineMedium,
                 ),
                 const SizedBox(height: 32),
-
                 if (!_isLogin) ...[
                   Row(
                     children: [
                       Expanded(
                         child: TextFormField(
                           controller: _firstNameController,
-                          decoration: const InputDecoration(
-                            labelText: "First Name",
-                          ),
+                          decoration:
+                              const InputDecoration(labelText: "First Name"),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: TextFormField(
                           controller: _lastNameController,
-                          decoration: const InputDecoration(
-                            labelText: "Last Name",
-                          ),
+                          decoration:
+                              const InputDecoration(labelText: "Last Name"),
                         ),
                       ),
                     ],
@@ -189,7 +186,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   ),
                   const SizedBox(height: 16),
                 ],
-
                 TextFormField(
                   controller: _emailController,
                   decoration: const InputDecoration(labelText: "Email"),
@@ -200,10 +196,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   obscureText: true,
                   decoration: const InputDecoration(labelText: "Password"),
                 ),
-
                 if (!_isLogin) ...[
                   const SizedBox(height: 24),
-                  // --- RESTORED FULL TEXT ---
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
@@ -227,7 +221,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     ),
                   ),
                 ],
-
                 const SizedBox(height: 32),
                 SizedBox(
                   width: double.infinity,
@@ -239,7 +232,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         : Text(_isLogin ? "Login" : "Sign Up"),
                   ),
                 ),
-
                 TextButton(
                   onPressed: () => setState(() => _isLogin = !_isLogin),
                   child: Text(_isLogin ? "Sign Up" : "Login"),

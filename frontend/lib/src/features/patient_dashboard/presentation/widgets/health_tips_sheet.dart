@@ -15,101 +15,68 @@ class HealthTipsSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final tipsAsync = ref.watch(healthTipsProvider);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return DraggableScrollableSheet(
       controller: controller,
-      initialChildSize: 0.3,
-      minChildSize: 0.15,
-      maxChildSize: 1.0,
+      initialChildSize: 0.1, // Show just the tip
+      minChildSize: 0.1,
+      maxChildSize: 0.85,
       snap: true,
       builder: (context, scrollController) {
-        // <--- THIS CONTROLLER
         return ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
           child: BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.9),
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(32),
-                ),
-                border: Border(
-                  top: BorderSide(
-                    color: Colors.white.withOpacity(0.5),
-                    width: 1,
-                  ),
-                ),
+                // ✅ Dynamic Sheet Color
+                color: isDark
+                    ? const Color(0xFF1E1E1E).withOpacity(0.95)
+                    : Colors.white.withOpacity(0.95),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(32)),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 20,
-                    spreadRadius: 5,
-                  ),
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 20,
+                      offset: const Offset(0, -5))
                 ],
               ),
-              child: Column(
-                children: [
-                  Center(
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(vertical: 12),
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey[300],
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 8,
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          "Health Insights",
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(
-                            Icons.refresh,
-                            size: 20,
-                            color: Colors.grey,
-                          ),
-                          onPressed: () => ref.refresh(healthTipsProvider),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: tipsAsync.when(
-                      loading: () =>
-                          const Center(child: CircularProgressIndicator()),
-                      error: (e, _) =>
-                          Center(child: Text("Failed to load tips: $e")),
-                      data: (tips) {
-                        if (tips.isEmpty)
-                          return const Center(
-                            child: Text("No health tips yet."),
-                          );
-                        return ListView.builder(
-                          controller:
-                              scrollController, // <--- MUST BE HERE TO SCROLL/DRAG
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          itemCount: tips.length,
-                          itemBuilder: (context, index) =>
-                              _buildTipCard(tips[index]),
-                        );
-                      },
-                    ),
-                  ),
-                ],
+              child: tipsAsync.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, s) => Center(
+                    child: Text("Failed to load tips",
+                        style: theme.textTheme.bodyMedium)),
+                data: (tips) => ListView.builder(
+                  controller: scrollController,
+                  padding: const EdgeInsets.all(24),
+                  itemCount: tips.length + 1,
+                  itemBuilder: (context, index) {
+                    if (index == 0) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Center(
+                              child: Container(
+                                  width: 40,
+                                  height: 4,
+                                  decoration: BoxDecoration(
+                                      color: Colors.grey[300],
+                                      borderRadius: BorderRadius.circular(2)))),
+                          const SizedBox(height: 24),
+                          Text("Daily Health Tips",
+                              style: theme.textTheme.headlineSmall?.copyWith(
+                                  fontWeight: FontWeight.bold)), // ✅ Dynamic
+                          const SizedBox(height: 16),
+                        ],
+                      );
+                    }
+                    final tip = tips[index - 1];
+                    return _TipCard(tip: tip);
+                  },
+                ),
               ),
             ),
           ),
@@ -117,39 +84,33 @@ class HealthTipsSheet extends ConsumerWidget {
       },
     );
   }
+}
 
-  Widget _buildTipCard(HealthTip tip) {
+class _TipCard extends StatelessWidget {
+  final dynamic tip;
+  const _TipCard({required this.tip});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark
+            ? const Color(0xFF2C2C2C)
+            : Colors.grey[50], // ✅ Dynamic Card
         borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.05),
-            blurRadius: 15,
-            offset: const Offset(0, 5),
-          ),
-        ],
       ),
       child: Row(
         children: [
           Container(
-            width: 70,
-            height: 70,
+            padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: const Color(0xFF4A90E2).withOpacity(0.15),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: tip.imageUrl != null && tip.imageUrl!.isNotEmpty
-                ? Image.network(
-                    tip.imageUrl!,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) =>
-                        const Icon(Icons.article, color: Color(0xFF4A90E2)),
-                  )
-                : const Icon(Icons.article, color: Color(0xFF4A90E2), size: 32),
+                color: Colors.white, borderRadius: BorderRadius.circular(16)),
+            child: const Text("🍎", style: TextStyle(fontSize: 32)),
           ),
           const SizedBox(width: 16),
           Expanded(
@@ -157,37 +118,24 @@ class HealthTipsSheet extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF4A90E2).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    tip.category.toUpperCase(),
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF4A90E2),
-                    ),
-                  ),
+                      color: const Color(0xFF4A90E2).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Text(tip.category.toUpperCase(),
+                      style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF4A90E2))),
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  tip.title,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF2D3436),
-                  ),
-                ),
+                Text(tip.title,
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold)), // ✅ Dynamic
                 const SizedBox(height: 4),
-                Text(
-                  tip.readTime,
-                  style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-                ),
+                Text(tip.readTime,
+                    style: TextStyle(fontSize: 12, color: Colors.grey[500])),
               ],
             ),
           ),

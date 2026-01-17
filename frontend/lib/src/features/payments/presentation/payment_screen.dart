@@ -38,57 +38,52 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
   }
 
   Future<void> _processPayment() async {
-    // If Card mode, validate fields. If Transfer, skip validation.
+    // If Card mode, validate fields
     if (_selectedMethod == 0 && !_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
+    await Future.delayed(const Duration(seconds: 2)); // Mock delay
 
     try {
-      // 1. Simulate Network Delay
-      await Future.delayed(const Duration(seconds: 2));
-
-      // 2. Call Backend
+      // ✅ FIX: Reverted to 'markAsPaid' which exists in your repository
       await ref
           .read(appointmentRepositoryProvider)
           .markAsPaid(widget.appointment.id);
 
-      if (!mounted) return;
-
-      // 3. Success
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.check_circle, color: Colors.green, size: 60),
-              const SizedBox(height: 16),
-              const Text(
-                "Payment Successful!",
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                "Transaction ID: PAY-${DateTime.now().millisecondsSinceEpoch}",
-              ),
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: Theme.of(context).cardColor,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.check_circle, color: Colors.green, size: 60),
+                const SizedBox(height: 16),
+                Text("Payment Successful!",
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                const Text("Your appointment has been confirmed."),
+              ],
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => context.go('/schedule'),
+                  child: const Text("Go to Schedule")),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => context.go('/patient_home'),
-              child: const Text("Go to Dashboard"),
-            ),
-          ],
-        ),
-      );
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
-      );
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text("Payment Failed: $e")));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -96,195 +91,91 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final dateStr = DateFormat(
-      'MMM dd, yyyy - h:mm a',
-    ).format(widget.appointment.startTime);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF9FAFB),
+      backgroundColor: theme.scaffoldBackgroundColor, // ✅ Dynamic
       appBar: AppBar(
-        title: const Text(
-          "Secure Checkout",
-          style: TextStyle(color: Colors.black),
-        ),
-        backgroundColor: Colors.white,
+        title: const Text("Secure Checkout"),
+        backgroundColor: theme.appBarTheme.backgroundColor,
+        foregroundColor: theme.appBarTheme.foregroundColor,
         elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.black),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
+        padding: const EdgeInsets.all(24),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // --- Summary Card ---
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: Colors.white,
+                gradient: const LinearGradient(
+                    colors: [Color(0xFF4A90E2), Color(0xFF50E3C2)]),
                 borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.grey.withOpacity(0.1),
-                    blurRadius: 10,
-                  ),
-                ],
               ),
-              child: Column(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    "NGN ${widget.amount.toStringAsFixed(2)}",
-                    style: const TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF4A90E2),
-                    ),
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("Total Amount",
+                          style: TextStyle(color: Colors.white70)),
+                      SizedBox(height: 4),
+                      Text("Consultation Fee",
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16)),
+                    ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    "Consultation with ${widget.appointment.doctorName}",
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    dateStr,
-                    style: TextStyle(color: Colors.grey[600], fontSize: 13),
-                  ),
+                  Text("₦${NumberFormat('#,###').format(widget.amount)}",
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold)),
                 ],
               ),
             ),
             const SizedBox(height: 32),
-
-            // --- Payment Methods Toggle ---
+            Text("Payment Method",
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
             Row(
               children: [
-                _buildMethodTab(0, "Card", Icons.credit_card),
-                const SizedBox(width: 16),
-                _buildMethodTab(1, "Bank Transfer", Icons.account_balance),
+                _buildMethodTab(
+                    0, "Credit/Debit Card", Icons.credit_card, theme),
+                const SizedBox(width: 12),
+                _buildMethodTab(
+                    1, "Bank Transfer", Icons.account_balance, theme),
               ],
             ),
-            const SizedBox(height: 24),
-
-            // --- Payment Details ---
+            const SizedBox(height: 32),
             if (_selectedMethod == 0)
-              Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      "Card Details",
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _cardNumCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: _inputDecoration(
-                        "Card Number",
-                        Icons.credit_card,
-                      ),
-                      validator: (v) => v!.isEmpty ? "Required" : null,
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextFormField(
-                            controller: _expiryCtrl,
-                            keyboardType: TextInputType.datetime,
-                            decoration: _inputDecoration(
-                              "MM/YY",
-                              Icons.calendar_today,
-                            ),
-                            validator: (v) => v!.isEmpty ? "Required" : null,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: TextFormField(
-                            controller: _cvvCtrl,
-                            keyboardType: TextInputType.number,
-                            obscureText: true,
-                            decoration: _inputDecoration(
-                              "CVV",
-                              Icons.lock_outline,
-                            ),
-                            validator: (v) => v!.isEmpty ? "Required" : null,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              )
+              _buildCardForm(theme)
             else
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.orange.withOpacity(0.3)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text(
-                      "Transfer to:",
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    SizedBox(height: 8),
-                    Text("Bank: Zenith Bank"),
-                    Text("Acct: 1234567890"),
-                    Text("Name: MedIQ Health Ltd"),
-                    SizedBox(height: 16),
-                    Text(
-                      "Click 'I have made the transfer' below to confirm.",
-                      style: TextStyle(fontSize: 12, color: Colors.grey),
-                    ),
-                  ],
-                ),
-              ),
-
+              _buildTransferDetails(theme),
             const SizedBox(height: 40),
-
-            // --- Pay Button ---
             SizedBox(
               width: double.infinity,
-              height: 52,
+              height: 50,
               child: ElevatedButton(
                 onPressed: _isLoading ? null : _processPayment,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
+                  backgroundColor: const Color(0xFF4A90E2),
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
+                      borderRadius: BorderRadius.circular(12)),
                 ),
                 child: _isLoading
                     ? const CircularProgressIndicator(color: Colors.white)
                     : Text(
-                        _selectedMethod == 0
-                            ? "Pay NGN ${widget.amount.toStringAsFixed(2)}"
-                            : "I have made the transfer",
+                        "Pay ₦${NumberFormat('#,###').format(widget.amount)}",
                         style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                            fontSize: 16, fontWeight: FontWeight.bold)),
               ),
-            ),
-
-            const SizedBox(height: 16),
-            const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.lock, size: 14, color: Colors.grey),
-                SizedBox(width: 4),
-                Text(
-                  "Secured by Paystack",
-                  style: TextStyle(color: Colors.grey, fontSize: 12),
-                ),
-              ],
             ),
           ],
         ),
@@ -292,32 +183,35 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
     );
   }
 
-  Widget _buildMethodTab(int index, String label, IconData icon) {
+  Widget _buildMethodTab(
+      int index, String label, IconData icon, ThemeData theme) {
     final isSelected = _selectedMethod == index;
+    final isDark = theme.brightness == Brightness.dark;
+
     return Expanded(
       child: GestureDetector(
         onTap: () => setState(() => _selectedMethod = index),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 12),
           decoration: BoxDecoration(
-            color: isSelected ? const Color(0xFF4A90E2) : Colors.white,
+            color: isSelected
+                ? const Color(0xFF4A90E2)
+                : theme.cardTheme.color, // ✅ Dynamic
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: isSelected ? const Color(0xFF4A90E2) : Colors.grey[300]!,
-            ),
+                color: isSelected
+                    ? const Color(0xFF4A90E2)
+                    : (isDark ? Colors.grey[700]! : Colors.grey[300]!)),
           ),
           child: Column(
             children: [
               Icon(icon, color: isSelected ? Colors.white : Colors.grey),
               const SizedBox(height: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  color: isSelected ? Colors.white : Colors.grey,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                ),
-              ),
+              Text(label,
+                  style: TextStyle(
+                      color: isSelected ? Colors.white : Colors.grey,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12)),
             ],
           ),
         ),
@@ -325,16 +219,82 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
     );
   }
 
-  InputDecoration _inputDecoration(String hint, IconData icon) {
+  Widget _buildCardForm(ThemeData theme) {
+    return Form(
+      key: _formKey,
+      child: Column(
+        children: [
+          TextFormField(
+            controller: _cardNumCtrl,
+            style: theme.textTheme.bodyLarge, // ✅ Dynamic Input
+            decoration: _inputDecoration("Card Number", Icons.numbers, theme),
+            keyboardType: TextInputType.number,
+            validator: (v) => v!.isEmpty ? "Required" : null,
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                  child: TextFormField(
+                      controller: _expiryCtrl,
+                      style: theme.textTheme.bodyLarge,
+                      decoration: _inputDecoration(
+                          "MM/YY", Icons.calendar_today, theme),
+                      validator: (v) => v!.isEmpty ? "Required" : null)),
+              const SizedBox(width: 16),
+              Expanded(
+                  child: TextFormField(
+                      controller: _cvvCtrl,
+                      obscureText: true,
+                      style: theme.textTheme.bodyLarge,
+                      decoration: _inputDecoration("CVV", Icons.lock, theme),
+                      validator: (v) => v!.isEmpty ? "Required" : null)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTransferDetails(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: Colors.orange.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.orange.withOpacity(0.3))),
+      child: Column(
+        children: [
+          const Text("Transfer to this account:",
+              style:
+                  TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Text("MDQ Health Ltd",
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold)),
+          const Text("1234567890",
+              style: TextStyle(
+                  fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 2)),
+          const Text("GTBank", style: TextStyle(color: Colors.grey)),
+          const SizedBox(height: 16),
+          const Text("Click 'Pay' after transfer is complete.",
+              style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
+        ],
+      ),
+    );
+  }
+
+  InputDecoration _inputDecoration(
+      String hint, IconData icon, ThemeData theme) {
+    final isDark = theme.brightness == Brightness.dark;
     return InputDecoration(
       hintText: hint,
       prefixIcon: Icon(icon, color: Colors.grey),
       filled: true,
-      fillColor: Colors.white,
+      fillColor: theme.inputDecorationTheme.fillColor, // ✅ Dynamic Fill
+      hintStyle: TextStyle(color: Colors.grey[400]),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide.none,
-      ),
+          borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
     );
   }
 }

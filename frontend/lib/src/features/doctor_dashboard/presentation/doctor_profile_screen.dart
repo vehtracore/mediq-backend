@@ -14,9 +14,10 @@ class DoctorProfileScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final doctorAsync = ref.watch(myDoctorProfileProvider);
+    final theme = Theme.of(context);
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF9FAFB),
+      backgroundColor: theme.scaffoldBackgroundColor, // ✅ Dynamic Background
       body: doctorAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text("Error: $e")),
@@ -36,49 +37,36 @@ class DoctorProfileScreen extends ConsumerWidget {
                     const SizedBox(height: 16),
                     Text(
                       doctor.fullName,
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: theme.textTheme.headlineSmall
+                          ?.copyWith(fontWeight: FontWeight.bold), // ✅ Dynamic
                     ),
                     Text(
                       doctor.specialty,
-                      style: TextStyle(color: Colors.grey[600]),
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: Colors.grey), // ✅ Dynamic
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 32),
-
-              // --- WIRED BUTTONS ---
-              _buildOption(
-                Icons.edit_outlined,
-                "Edit Public Profile",
-                () => context.push('/doctor_edit_profile', extra: doctor),
-              ),
+              _buildOption(context, Icons.edit_outlined, "Edit Public Profile",
+                  () => context.push('/doctor_edit_profile', extra: doctor)),
               const SizedBox(height: 12),
               _buildOption(
-                Icons.calendar_month_outlined,
-                "Manage Availability",
-                () => context.push('/doctor_availability'),
-              ),
+                  context,
+                  Icons.calendar_month_outlined,
+                  "Manage Availability",
+                  () => context.push('/doctor_availability')),
               const SizedBox(height: 12),
-              _buildOption(Icons.attach_money, "Payout Settings", () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Payout Integration Coming Soon"),
-                  ),
-                );
+              _buildOption(context, Icons.attach_money, "Payout Settings", () {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text("Payout Integration Coming Soon")));
               }),
               const SizedBox(height: 12),
-              _buildOption(
-                Icons.settings_outlined,
-                "App Settings",
-                () => context.push('/settings'),
-              ),
-
+              _buildOption(context, Icons.settings_outlined, "App Settings",
+                  () => context.push('/settings')),
               const SizedBox(height: 40),
-              _buildOption(Icons.logout, "Logout", () async {
+              _buildOption(context, Icons.logout, "Logout", () async {
                 await ref.read(authControllerProvider.notifier).logout();
                 if (context.mounted) context.go('/auth');
               }, isDestructive: true),
@@ -90,22 +78,21 @@ class DoctorProfileScreen extends ConsumerWidget {
   }
 
   Widget _buildOption(
+    BuildContext context,
     IconData icon,
     String title,
     VoidCallback onTap, {
     bool isDestructive = false,
   }) {
+    final theme = Theme.of(context);
+
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: theme.cardTheme.color, // ✅ Dynamic Background
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.05),
-            blurRadius: 5,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        boxShadow: theme.brightness == Brightness.dark
+            ? []
+            : [BoxShadow(color: Colors.grey.withOpacity(0.05), blurRadius: 5)],
       ),
       child: ListTile(
         leading: Icon(
@@ -116,7 +103,9 @@ class DoctorProfileScreen extends ConsumerWidget {
           title,
           style: TextStyle(
             fontWeight: FontWeight.w600,
-            color: isDestructive ? Colors.red : const Color(0xFF2D3436),
+            color: isDestructive
+                ? Colors.red
+                : theme.textTheme.bodyLarge?.color, // ✅ Dynamic Text
           ),
         ),
         trailing: const Icon(Icons.chevron_right, color: Colors.grey),

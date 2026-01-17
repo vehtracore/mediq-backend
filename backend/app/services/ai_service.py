@@ -1,6 +1,7 @@
 import os
 import google.generativeai as genai
 from dotenv import load_dotenv
+import PIL.Image  # <--- NEW IMPORT (Requires 'Pillow' library)
 
 # Load environment variables
 load_dotenv()
@@ -13,49 +14,55 @@ if GEMINI_API_KEY:
 else:
     print("WARNING: GEMINI_API_KEY not found in .env file.")
 
-# Initialize the model
-# CHANGED: using 'gemini-1.5-flash-latest' which is often more stable for resolution
-# If this still fails, we will switch to 'gemini-pro'
-model = genai.GenerativeModel('gemini-2.0-flash')
-
-# ... (imports and model setup remain the same)
+# Initialize the model (Flash is great for vision + speed)
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 SYSTEM_INSTRUCTION = """
 You are MedIQ, an efficient medical triage assistant. 
-Your Goal: Quickly assess symptoms and recommend the next step (Self-care, Doctor, or Emergency).
+Your Goal: Quickly assess symptoms (text or visual) and recommend the next step (Self-care, Doctor, or Emergency).
 
 **Rules for Interaction:**
-1. **Speed is Key:** Do NOT ask endless follow-up questions. Gather the bare minimum context in ONE response, then provide an assessment in the next.
-2. **Assessment Format:**
+1. **Visual Analysis:** If an image is provided, analyze visible symptoms (rashes, swelling, wounds) or read text (prescriptions/reports).
+2. **Speed is Key:** Gather context in ONE response.
+3. **Assessment Format:**
+   - **Visual Observation:** (If image provided: "I see redness/swelling...")
    - **Likely Causes:** (List 1-2 possibilities)
    - **Recommended Action:** (Self-care / See Doctor / Emergency)
-   - **Immediate Relief:** (1 simple tip, e.g., "Hydrate", "Rest in dark room")
-3. **No Disclaimer Spam:** Do NOT include a disclaimer in every message. The application interface handles this legal warning. Only include a warning if the situation is a critical emergency.
-4. **Tone:** Professional, concise, and direct. 
-
-**Example Interaction:**
-User: "I have a throbbing headache and light sensitivity."
-AI: "That sounds like a migraine. **Recommended Action:** Rest in a dark, quiet room. If it persists for >24 hours, consult a doctor."
+   - **Immediate Relief:** (1 simple tip)
+4. **Tone:** Professional, concise, direct. NO disclaimers unless critical.
 """
 
-# ... (rest of the file remains the same)
-
-async def get_medical_response(user_text: str) -> str:
+async def get_medical_response(user_text: str, image_url: str = None) -> str:
     """
-    Sends the user's symptoms to Gemini and returns the triage advice.
+    Sends text AND optional image to Gemini for analysis.
+    image_url: The relative path (e.g., /static/uploads/abc.jpg)
     """
     if not GEMINI_API_KEY:
         return "System Error: AI Service is not configured properly."
 
     try:
-        # Construct the prompt with the persona and user input
-        prompt = f"{SYSTEM_INSTRUCTION}\n\nUser Input: {user_text}"
-        
-        # Async generation for non-blocking I/O
-        response = await model.generate_content_async(prompt)
+        # 1. Prepare inputs list
+        content_parts = [SYSTEM_INSTRUCTION, f"User Input: {user_text}"]
+
+        # 2. If Image exists, load it and add to inputs
+        if image_url:
+            # Clean path: remove leading slash if present to find file on disk
+            # E.g., "/static/uploads/x.jpg" -> "static/uploads/x.jpg"
+            clean_path = image_url.lstrip("/")
+            
+            if os.path.exists(clean_path):
+                img = PIL.Image.open(clean_path)
+                content_parts.append(img) # Add image to prompt
+                content_parts.append("Analyze the medical relevance of this image in context of the user's message.")
+            else:
+                print(f"❌ Image file not found at: {clean_path}")
+                # We continue with just text if image fails to load
+
+        # 3. Generate
+        # Gemini accepts a list [Text, Image, Text...]
+        response = await model.generate_content_async(content_parts)
         
         return response.text
     except Exception as e:
-        # Log the actual error
         print(f"Gemini API Error: {e}")
-        return "I'm having trouble connecting to the medical database right now. Please try again in a moment."
+        return "I'm having trouble analyzing that right now. Please try again."

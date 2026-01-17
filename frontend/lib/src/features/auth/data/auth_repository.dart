@@ -1,52 +1,10 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb; // ✅ Platform check
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mediq_app/src/core/api/api_constants.dart';
+import 'package:image_picker/image_picker.dart'; // ✅ Uses XFile
 import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'user_model.dart';
 import '../../doctors/data/doctor_model.dart';
-
-// --- User Model ---
-class User {
-  final int id;
-  final String email;
-  final String firstName;
-  final String lastName;
-  final DateTime dob;
-  final String? location;
-  final String role;
-  final String plan;
-  // --- NEW FIELD ---
-  final bool isBanned;
-
-  String get fullName => "$firstName $lastName";
-  bool get isPremium => plan == 'premium';
-
-  User({
-    required this.id,
-    required this.email,
-    required this.firstName,
-    required this.lastName,
-    required this.dob,
-    this.location,
-    required this.role,
-    required this.plan,
-    required this.isBanned, // Required in constructor
-  });
-
-  factory User.fromJson(Map<String, dynamic> json) {
-    return User(
-      id: json['id'],
-      email: json['email'],
-      firstName: json['first_name'],
-      lastName: json['last_name'],
-      dob: DateTime.parse(json['dob']),
-      location: json['location'],
-      role: json['role'] ?? 'patient',
-      plan: json['plan'] ?? 'free',
-      // Parse is_banned (default to false if missing)
-      isBanned: json['is_banned'] ?? false,
-    );
-  }
-}
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
   return AuthRepository(ref.watch(dioProvider));
@@ -69,7 +27,7 @@ class AuthRepository {
     try {
       String dobString = dob.toIso8601String().split('T')[0];
       final response = await _dio.post(
-        ApiConstants.signupEndpoint,
+        '/api/v1/auth/signup',
         data: {
           "email": email,
           "password": password,
@@ -121,21 +79,45 @@ class AuthRepository {
     }
   }
 
-  // --- Update Profile ---
-  Future<User> updateProfile({
-    required String firstName,
-    required String lastName,
-    required String location,
-  }) async {
+  // --- 🚀 UPDATE PROFILE (WEB SAFE) ---
+  Future<User> updateProfile(Map<String, dynamic> data,
+      {XFile? profileImage}) async {
     try {
-      final response = await _dio.put(
-        '/api/v1/auth/me',
-        data: {
-          "first_name": firstName,
-          "last_name": lastName,
-          "location": location,
-        },
-      );
+      Response response;
+
+      if (profileImage != null) {
+        // ✅ Create FormData
+        final formData = FormData.fromMap(data);
+
+        // ✅ WEB VS MOBILE SPLIT
+        if (kIsWeb) {
+          // ON WEB: Read bytes directly
+          final bytes = await profileImage.readAsBytes();
+          formData.files.add(MapEntry(
+            'profile_image',
+            MultipartFile.fromBytes(bytes, filename: profileImage.name),
+          ));
+        } else {
+          // ON MOBILE: Read from path
+          formData.files.add(MapEntry(
+            'profile_image',
+            await MultipartFile.fromFile(profileImage.path,
+                filename: profileImage.name),
+          ));
+        }
+
+        response = await _dio.put(
+          '/api/v1/auth/me',
+          data: formData,
+        );
+      } else {
+        // Standard JSON update
+        response = await _dio.put(
+          '/api/v1/auth/me',
+          data: data,
+        );
+      }
+
       return User.fromJson(response.data);
     } on DioException catch (e) {
       throw _handleError(e);
@@ -170,7 +152,7 @@ class AuthRepository {
     }
   }
 
-  // --- Get Doctor Profile ---
+  // --- ✅ RESTORED MISSING METHOD: Get Doctor Profile ---
   Future<Doctor> getMyDoctorProfile() async {
     try {
       final response = await _dio.get('/api/v1/auth/my-doctor-profile');
@@ -180,7 +162,7 @@ class AuthRepository {
     }
   }
 
-  // --- UPGRADE SUBSCRIPTION ---
+  // --- ✅ RESTORED MISSING METHOD: Upgrade Subscription ---
   Future<void> upgradeToPremium() async {
     try {
       await _dio.post('/api/v1/subscription/upgrade');
@@ -188,6 +170,17 @@ class AuthRepository {
       throw _handleError(e);
     } catch (e) {
       throw Exception("System error: $e");
+    }
+  }
+
+  // --- ✅ RESTORED MISSING METHOD: Get Current User (Helper) ---
+  Future<User?> getCurrentUser() async {
+    try {
+      final response = await _dio.get('/api/v1/auth/me');
+      return User.fromJson(response.data);
+    } catch (e) {
+      // Return null instead of throwing, useful for splash screens
+      return null;
     }
   }
 

@@ -1,12 +1,10 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mediq_app/src/core/storage/storage_service.dart'; // Absolute import
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'api_constants.dart';
 
 final dioProvider = Provider<Dio>((ref) {
-  final storage = ref.watch(storageServiceProvider);
-
   final options = BaseOptions(
     baseUrl: ApiConstants.baseUrl,
     connectTimeout: const Duration(seconds: 30),
@@ -16,23 +14,44 @@ final dioProvider = Provider<Dio>((ref) {
 
   final dio = Dio(options);
 
+  // --- FIX: USE CONSISTENT OPTIONS ---
+  const storage = FlutterSecureStorage();
+
+  // Define the EXACT same options as used in storage_service.dart to ensure we read the same file
+  AndroidOptions getAndroidOptions() => const AndroidOptions(
+        encryptedSharedPreferences: true,
+      );
+
   dio.interceptors.add(
     InterceptorsWrapper(
       onRequest: (options, handler) async {
-        // 1. Get Token from Storage
-        final token = await storage.getToken();
+        try {
+          // 1. Read using the secure options
+          // Tries 'auth_token' first (standard for this app)
+          String? token = await storage.read(
+              key: 'auth_token', aOptions: getAndroidOptions());
 
-        // 2. If token exists, add to headers
-        if (token != null && token.isNotEmpty) {
-          options.headers['Authorization'] = 'Bearer $token';
+          // Fallback: Check 'token' just in case of legacy saving
+          if (token == null) {
+            token =
+                await storage.read(key: 'token', aOptions: getAndroidOptions());
+          }
+
+          // 2. Attach Token
+          if (token != null && token.isNotEmpty) {
+            options.headers['Authorization'] = 'Bearer $token';
+          } else {
+            if (kDebugMode)
+              print('⚠️ [AUTH] -> No token found in secure storage.');
+          }
+
+          if (kDebugMode) {
+            print('🌐 [REQ] -> ${options.method} ${options.path}');
+          }
+        } catch (e) {
+          if (kDebugMode) print('⚠️ [AUTH ERROR] -> Could not read token: $e');
         }
 
-        // Debug logging
-        if (kDebugMode) {
-          print('🌐 [REQ] -> ${options.method} ${options.path}');
-          // Don't print full token for security, just confirmation
-          if (token != null) print('🔑 [AUTH] -> Bearer attached');
-        }
         return handler.next(options);
       },
       onResponse: (response, handler) {
@@ -44,11 +63,9 @@ final dioProvider = Provider<Dio>((ref) {
       onError: (DioException e, handler) {
         if (kDebugMode) {
           print('❌ [ERR] -> ${e.message}');
-          // --- ADD THIS SECTION ---
           if (e.response != null) {
             print('📜 [RESP BODY] -> ${e.response?.data}');
           }
-          // ------------------------
         }
         return handler.next(e);
       },

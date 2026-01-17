@@ -1,35 +1,47 @@
-
 class Appointment {
   final int id;
+  final int doctorId;
   final String doctorName;
+  final int patientId; // <--- NEW FIELD
+  final String patientName; // <--- NEW FIELD
+  final DateTime startTime;
   final String status;
   final String paymentStatus;
-  final DateTime startTime;
-  final String? notes;
   final double amount;
-  final bool hasReview; // <--- NEW FIELD
+  final String? notes;
+  final bool hasReview;
 
   Appointment({
     required this.id,
+    required this.doctorId,
     required this.doctorName,
+    required this.patientId, // <--- Required
+    required this.patientName, // <--- Required
+    required this.startTime,
     required this.status,
     required this.paymentStatus,
-    required this.startTime,
+    required this.amount,
     this.notes,
-    this.amount = 0.0,
-    this.hasReview = false, // Default false
+    this.hasReview = false,
   });
 
   factory Appointment.fromJson(Map<String, dynamic> json) {
     return Appointment(
-      id: json['id'],
-      doctorName: json['doctor_name'] ?? 'Unknown',
-      status: json['status'],
-      paymentStatus: json['payment_status'],
+      // The '?? 0' prevents the "Null is not a subtype of int" crash
+      id: json['id'] ?? 0,
+      doctorId: json['doctor_id'] ?? 0,
+      doctorName: json['doctor_name'] ?? 'Doctor',
+
+      // These safe defaults prevent crashes if backend data is missing
+      patientId: json['patient_id'] ?? 0,
+      patientName: json['patient_name'] ?? 'Patient',
+
       startTime: DateTime.parse(json['start_time']),
-      notes: json['notes'],
+      status: json['status'] ?? 'pending',
+      paymentStatus: json['payment_status'] ?? 'unpaid',
       amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
-      hasReview: json['has_review'] ?? false, // Parse it
+      notes: json['notes'],
+      hasReview: json['has_review'] ?? false,
     );
   }
 }
