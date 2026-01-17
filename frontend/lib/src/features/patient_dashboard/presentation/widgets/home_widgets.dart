@@ -5,7 +5,9 @@ import 'package:intl/intl.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_repository.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_model.dart';
+import 'package:mediq_app/src/features/auth/data/user_model.dart'; // ✅ Added for User type
 
+// ✅ REAL DATA PROVIDER: Fetches next confirmed appointment
 final nextAppointmentProvider =
     FutureProvider.autoDispose<Appointment?>((ref) async {
   final appointments =
@@ -20,53 +22,81 @@ final nextAppointmentProvider =
 });
 
 class HomeHeader extends StatelessWidget {
-  final String userName;
-  const HomeHeader({super.key, required this.userName});
+  final User? user; // ✅ Accepts full User object for Avatar + Name
+  const HomeHeader({super.key, this.user});
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    
+    // Data Extraction
+    final userName = user?.firstName ?? "Guest";
+    final imageUrl = user?.imageUrl;
 
     return Container(
       decoration: BoxDecoration(
-        // ✅ Removed hardcoded gradient to allow theme background
         color: theme.scaffoldBackgroundColor,
       ),
       padding: const EdgeInsets.symmetric(vertical: 16),
-      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text("Welcome Back,",
-              style: theme.textTheme.bodyMedium?.copyWith(
-                  fontSize: 16, fontWeight: FontWeight.w500)), // ✅ Dynamic
-          const SizedBox(height: 4),
-          Text(userName,
-              style: theme.textTheme.headlineMedium?.copyWith(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: -0.5)), // ✅ Dynamic
-        ]),
-        GestureDetector(
-            onTap: () => context.push('/notifications'),
-            child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                    color: theme.cardTheme.color, // ✅ Dynamic Card
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                        color: isDark
-                            ? Colors.transparent
-                            : Colors.grey.withOpacity(0.1)),
-                    boxShadow: isDark
-                        ? []
-                        : [
-                            BoxShadow(
-                                color: const Color(0xFF4A90E2).withOpacity(0.1),
-                                blurRadius: 15,
-                                offset: const Offset(0, 5))
-                          ]),
-                child: const Icon(Icons.notifications_none_rounded,
-                    color: Color(0xFF4A90E2), size: 26))),
-      ]),
+      child: Row(
+        children: [
+          // ✅ 1. PROFILE PICTURE
+          CircleAvatar(
+            radius: 24,
+            backgroundColor: theme.cardTheme.color,
+            backgroundImage: (imageUrl != null && imageUrl.isNotEmpty)
+                ? NetworkImage(imageUrl)
+                : null,
+            child: (imageUrl == null || imageUrl.isEmpty)
+                ? Icon(Icons.person, color: Colors.grey[400])
+                : null,
+          ),
+          const SizedBox(width: 16),
+          
+          // ✅ 2. USER WELCOME TEXT
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("Welcome Back,",
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                        fontSize: 14, fontWeight: FontWeight.w500)),
+                Text(userName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.headlineMedium?.copyWith(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: -0.5)),
+              ],
+            ),
+          ),
+
+          // ✅ 3. NOTIFICATION ICON
+          GestureDetector(
+              onTap: () => context.push('/notifications'),
+              child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                      color: theme.cardTheme.color,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                          color: isDark
+                              ? Colors.transparent
+                              : Colors.grey.withOpacity(0.1)),
+                      boxShadow: isDark
+                          ? []
+                          : [
+                              BoxShadow(
+                                  color: const Color(0xFF4A90E2).withOpacity(0.1),
+                                  blurRadius: 15,
+                                  offset: const Offset(0, 5))
+                            ]),
+                  child: const Icon(Icons.notifications_none_rounded,
+                      color: Color(0xFF4A90E2), size: 26))),
+        ],
+      ),
     );
   }
 }
@@ -139,7 +169,6 @@ class AppointmentCard extends ConsumerWidget {
         final timeStr = DateFormat('jm').format(appointment.startTime);
 
         return GestureDetector(
-          // ✅ FIX: Navigate to Schedule on tap so they can see "Start Call" buttons
           onTap: () => context.go('/schedule'),
           child: Container(
             width: double.infinity,
@@ -219,7 +248,7 @@ class AppointmentCard extends ConsumerWidget {
                           ),
                           const SizedBox(height: 4),
                           const Text(
-                            "Tap to view details", // ✅ Added CTA hint
+                            "Tap to view details",
                             style:
                                 TextStyle(color: Colors.white70, fontSize: 13),
                           ),
@@ -241,21 +270,21 @@ class QuickActionGrid extends ConsumerWidget {
   const QuickActionGrid({super.key});
 
   void _showBookingOptions(BuildContext context, WidgetRef ref) {
-    final userAsync = ref.watch(userProvider);
+    // ✅ Safe Read: Use ref.read in callbacks (prevents rebuilds)
+    final user = ref.read(userProvider).value; 
+    
     String priceText = "Loading...";
     double priceVal = 4000.0;
 
-    userAsync.whenData((user) {
-      if (user != null) {
-        if (user.subscriptionTier == 'premium') {
-          priceText = "NGN 2,500 (Premium)";
-          priceVal = 2500.0;
-        } else {
-          priceText = "NGN 4,000 (Standard)";
-          priceVal = 4000.0;
-        }
+    if (user != null) {
+      if (user.subscriptionTier == 'premium') {
+        priceText = "NGN 2,500 (Premium)";
+        priceVal = 2500.0;
+      } else {
+        priceText = "NGN 4,000 (Standard)";
+        priceVal = 4000.0;
       }
-    });
+    }
 
     final theme = Theme.of(context);
 
@@ -272,9 +301,9 @@ class QuickActionGrid extends ConsumerWidget {
               ListTile(
                   title: Text("See a GP Now",
                       style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.bold)), // ✅ Dynamic
+                          ?.copyWith(fontWeight: FontWeight.bold)),
                   subtitle: Text(priceText,
-                      style: theme.textTheme.bodyMedium), // ✅ Dynamic
+                      style: theme.textTheme.bodyMedium),
                   leading: const Icon(Icons.flash_on, color: Colors.orange),
                   onTap: () async {
                     Navigator.pop(ctx);
@@ -295,7 +324,7 @@ class QuickActionGrid extends ConsumerWidget {
               const Divider(),
               ListTile(
                   title: Text("Book a Specialist",
-                      style: theme.textTheme.bodyLarge), // ✅ Dynamic
+                      style: theme.textTheme.bodyLarge),
                   leading: const Icon(Icons.calendar_month,
                       color: Color(0xFF4A90E2)),
                   onTap: () {
@@ -343,7 +372,7 @@ class QuickActionGrid extends ConsumerWidget {
               child: Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                      color: theme.cardTheme.color, // ✅ Dynamic Card
+                      color: theme.cardTheme.color,
                       borderRadius: BorderRadius.circular(24),
                       boxShadow: isDark
                           ? []
@@ -368,7 +397,7 @@ class QuickActionGrid extends ConsumerWidget {
                             textAlign: TextAlign.center,
                             style: theme.textTheme.bodyMedium?.copyWith(
                                 fontWeight: FontWeight.bold,
-                                fontSize: 14)) // ✅ Dynamic Text
+                                fontSize: 14))
                       ])));
         });
   }
