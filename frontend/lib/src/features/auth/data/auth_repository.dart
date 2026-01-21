@@ -79,7 +79,7 @@ class AuthRepository {
     }
   }
 
-  // --- 🚀 UPDATE PROFILE (WEB SAFE) ---
+  // --- 🚀 UPDATE PROFILE (WEB SAFE + BOUNDARY FIX) ---
   Future<User> updateProfile(Map<String, dynamic> data,
       {XFile? profileImage}) async {
     try {
@@ -106,12 +106,15 @@ class AuthRepository {
           ));
         }
 
+        // ⚡ CRITICAL FIX: Set contentType to null.
+        // This forces Dio to let the Browser generate the correct boundary string.
         response = await _dio.put(
           '/api/v1/auth/me',
           data: formData,
+          options: Options(contentType: null), // <--- THE FIX for XMLHttpRequest Error
         );
       } else {
-        // Standard JSON update
+        // Standard JSON update (keep default headers)
         response = await _dio.put(
           '/api/v1/auth/me',
           data: data,
@@ -152,7 +155,7 @@ class AuthRepository {
     }
   }
 
-  // --- ✅ RESTORED MISSING METHOD: Get Doctor Profile ---
+  // --- Get Doctor Profile ---
   Future<Doctor> getMyDoctorProfile() async {
     try {
       final response = await _dio.get('/api/v1/auth/my-doctor-profile');
@@ -162,7 +165,7 @@ class AuthRepository {
     }
   }
 
-  // --- ✅ RESTORED MISSING METHOD: Upgrade Subscription ---
+  // --- Upgrade Subscription ---
   Future<void> upgradeToPremium() async {
     try {
       await _dio.post('/api/v1/subscription/upgrade');
@@ -173,7 +176,7 @@ class AuthRepository {
     }
   }
 
-  // --- ✅ RESTORED MISSING METHOD: Get Current User (Helper) ---
+  // --- Get Current User (Helper) ---
   Future<User?> getCurrentUser() async {
     try {
       final response = await _dio.get('/api/v1/auth/me');
