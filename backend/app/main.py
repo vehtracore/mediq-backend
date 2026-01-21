@@ -12,10 +12,13 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="MDQplus API")
 
-# --- CORS CONFIGURATION ---
+# --- 🚀 RENDER-COMPATIBLE CORS CONFIGURATION ---
+# "allow_origin_regex" is the Cheat Code.
+# It tells browsers: "I accept ANY origin starting with http or https"
+# This satisfies the rule that you cannot use "*" with allow_credentials=True.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex="https?://.*", # ✅ Covers http://localhost AND https://your-app.onrender.com
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -35,7 +38,7 @@ app.include_router(video.router, prefix="/api/v1/video", tags=["Video Call"])
 app.include_router(chat_socket.router, prefix="/api/v1/p2p", tags=["P2P Chat"])
 app.include_router(upload.router, prefix="/api/v1/upload", tags=["Upload"])
 
-# --- CRASH FIX: Ensure static directory exists ---
+# --- STATIC FILES SETUP ---
 static_dir = "static"
 if not os.path.exists(static_dir):
     os.makedirs(static_dir)

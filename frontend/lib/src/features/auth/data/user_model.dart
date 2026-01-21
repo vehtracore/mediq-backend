@@ -1,5 +1,3 @@
-import 'package:mediq_app/src/core/api/api_constants.dart'; // Ensure you have your base URL here
-
 class User {
   final String id;
   final String email;
@@ -7,17 +5,17 @@ class User {
   final String lastName;
   final String role;
   final String subscriptionTier;
-  final String imageUrl; // ✅ This will now ALWAYS be a full URL
+  final String imageUrl; // ✅ Restored (was missing)
   final String? location;
 
-  // Medical
+  // --- 🏥 Medical History ---
   final String? bloodType;
   final String? allergies;
   final String? chronicConditions;
   final String? medications;
   final String? pastSurgeries;
 
-  // Settings
+  // --- ⚙️ Settings ---
   final String settingsTheme;
   final bool settingsNotifications;
   final bool settingsEmailUpdates;
@@ -29,15 +27,13 @@ class User {
     required this.lastName,
     required this.role,
     this.subscriptionTier = 'free',
-    this.imageUrl = '',
+    this.imageUrl = '', // ✅ Default empty
     this.location,
-    
     this.bloodType,
     this.allergies,
     this.chronicConditions,
     this.medications,
     this.pastSurgeries,
-
     this.settingsTheme = 'light',
     this.settingsNotifications = true,
     this.settingsEmailUpdates = false,
@@ -45,45 +41,47 @@ class User {
 
   factory User.fromJson(Map<String, dynamic> json) {
     // 1. EXTRACT Raw Image Path
-    String? rawImage = json['image_url'] ?? json['profile_image'];
+    String rawImage = json['image_url'] ?? json['profile_image'] ?? '';
 
-    // 2. SANITIZE: Ensure it is a full URL
+    // 2. SANITIZE: Handle Render/Remote URLs
     String finalUrl = '';
-    if (rawImage != null && rawImage.isNotEmpty) {
+    if (rawImage.isNotEmpty) {
       if (rawImage.startsWith('http')) {
         finalUrl = rawImage;
       } else {
-        // If backend sends distinct path (e.g. "uploads/x.jpg"), prepend Base URL
-        // We strip any leading slash to avoid double slashes
+        // ✅ RENDER FIX: Prepend your live backend URL
+        // ⚠️ REPLACE THIS STRING WITH YOUR ACTUAL RENDER URL ⚠️
+        const String baseUrl = "https://mediq-backend.onrender.com"; 
+        
         final cleanPath = rawImage.startsWith('/') ? rawImage.substring(1) : rawImage;
-        // NOTE: Replace this string with your actual backend URL variable if available
-        finalUrl = "http://127.0.0.1:8000/$cleanPath"; 
+        finalUrl = "$baseUrl/$cleanPath";
       }
     }
 
     return User(
-      id: json['id'].toString(),
+      id: (json['id'] ?? '').toString(),
       email: json['email'] ?? '',
-      firstName: json['first_name'] ?? '',
-      lastName: json['last_name'] ?? '',
+      firstName: json['first_name'] ?? json['firstName'] ?? '',
+      lastName: json['last_name'] ?? json['lastName'] ?? '',
       role: json['role'] ?? 'patient',
-      subscriptionTier: json['subscription_tier'] ?? 'free',
+      subscriptionTier: json['subscription_tier'] ?? json['plan'] ?? 'free',
       imageUrl: finalUrl, // ✅ Assign Sanitized URL
       location: json['location'],
 
+      // Map new fields
       bloodType: json['blood_type'],
       allergies: json['allergies'],
       chronicConditions: json['chronic_conditions'],
       medications: json['medications'],
       pastSurgeries: json['past_surgeries'],
 
+      // Settings
       settingsTheme: json['settings_theme'] ?? 'light',
       settingsNotifications: json['settings_notifications'] ?? true,
       settingsEmailUpdates: json['settings_email_updates'] ?? false,
     );
   }
 
-  // ... toJson() remains the same ...
   Map<String, dynamic> toJson() {
     return {
       'id': id,
