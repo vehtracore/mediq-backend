@@ -1,3 +1,5 @@
+import 'package:mediq_app/src/core/api/api_constants.dart'; // Ensure you have your base URL here
+
 class User {
   final String id;
   final String email;
@@ -5,8 +7,8 @@ class User {
   final String lastName;
   final String role;
   final String subscriptionTier;
-  final String imageUrl; // ✅ Added
-  final String? location; // ✅ Added
+  final String imageUrl; // ✅ This will now ALWAYS be a full URL
+  final String? location;
 
   // Medical
   final String? bloodType;
@@ -42,6 +44,23 @@ class User {
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
+    // 1. EXTRACT Raw Image Path
+    String? rawImage = json['image_url'] ?? json['profile_image'];
+
+    // 2. SANITIZE: Ensure it is a full URL
+    String finalUrl = '';
+    if (rawImage != null && rawImage.isNotEmpty) {
+      if (rawImage.startsWith('http')) {
+        finalUrl = rawImage;
+      } else {
+        // If backend sends distinct path (e.g. "uploads/x.jpg"), prepend Base URL
+        // We strip any leading slash to avoid double slashes
+        final cleanPath = rawImage.startsWith('/') ? rawImage.substring(1) : rawImage;
+        // NOTE: Replace this string with your actual backend URL variable if available
+        finalUrl = "http://127.0.0.1:8000/$cleanPath"; 
+      }
+    }
+
     return User(
       id: json['id'].toString(),
       email: json['email'] ?? '',
@@ -49,8 +68,7 @@ class User {
       lastName: json['last_name'] ?? '',
       role: json['role'] ?? 'patient',
       subscriptionTier: json['subscription_tier'] ?? 'free',
-      // Check both keys to be safe
-      imageUrl: json['image_url'] ?? json['profile_image'] ?? '', 
+      imageUrl: finalUrl, // ✅ Assign Sanitized URL
       location: json['location'],
 
       bloodType: json['blood_type'],
@@ -65,6 +83,7 @@ class User {
     );
   }
 
+  // ... toJson() remains the same ...
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -75,13 +94,11 @@ class User {
       'subscription_tier': subscriptionTier,
       'image_url': imageUrl,
       'location': location,
-      
       'blood_type': bloodType,
       'allergies': allergies,
       'chronic_conditions': chronicConditions,
       'medications': medications,
       'past_surgeries': pastSurgeries,
-
       'settings_theme': settingsTheme,
       'settings_notifications': settingsNotifications,
       'settings_email_updates': settingsEmailUpdates,
