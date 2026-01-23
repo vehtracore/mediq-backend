@@ -21,6 +21,7 @@ class UserUpdate(BaseModel):
     last_name: Optional[str] = None
     location: Optional[str] = None
     dob: Optional[date] = None
+    image_url: Optional[str] = None # ✅ ADDED
     
     # Medical History
     blood_type: Optional[str] = None
@@ -38,6 +39,7 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     id: int
     is_active: bool
+    image_url: Optional[str] = None # ✅ ADDED
     
     # Medical History
     blood_type: Optional[str] = None
