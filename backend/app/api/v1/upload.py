@@ -1,44 +1,35 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
 import cloudinary
 import cloudinary.uploader
 import shutil
 import os
+from fastapi import APIRouter, UploadFile, File, HTTPException
+from dotenv import load_dotenv
+
+load_dotenv()
 
 router = APIRouter()
 
-# --- CONFIGURATION ---
-# I have plugged in your keys here so it works immediately.
+# 1. Configure Cloudinary
+# (It reads these from your Render Environment Variables)
 cloudinary.config( 
-  cloud_name = "dxx91qxdn", 
-  api_key = "214721641666341", 
-  api_secret = "bwpVumPh9JUxRuguJTZY09ByjMA",
+  cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME"), 
+  api_key = os.getenv("CLOUDINARY_API_KEY"), 
+  api_secret = os.getenv("CLOUDINARY_API_SECRET"),
   secure = True
 )
 
-@router.post("/", response_model=dict)
+@router.post("/")
 async def upload_image(file: UploadFile = File(...)):
-    """
-    Receives a file, uploads it to Cloudinary, and returns the public URL.
-    """
-    # 1. Validate File Type
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image")
-
     try:
-        # 2. Upload to Cloudinary (Directly from the file stream)
-        # 'folder="mediq_chat"' keeps your cloud organized
-        result = cloudinary.uploader.upload(
-            file.file, 
-            folder="mediq_chat",
-            resource_type="image"
-        )
-
-        # 3. Get the Secure URL (https://...)
+        # 2. Upload directly to Cloudinary
+        # "file.file" gives us the actual file object to send
+        result = cloudinary.uploader.upload(file.file, folder="mediq_profile_pics")
+        
+        # 3. Get the Secure URL (starts with https://)
         image_url = result.get("secure_url")
-
-        # 4. Return in the format the Frontend expects
+        
         return {"url": image_url}
 
     except Exception as e:
-        print(f"❌ Cloudinary Upload Error: {e}")
+        print(f"Cloudinary Error: {e}")
         raise HTTPException(status_code=500, detail="Image upload failed")

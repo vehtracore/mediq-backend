@@ -57,19 +57,20 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     }
 
     final controller = ref.read(authControllerProvider.notifier);
+    
+    // ✅ FIX: Use Positional Arguments to match AuthController
     if (_isLogin) {
       await controller.login(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
+        _emailController.text.trim(),
+        _passwordController.text.trim(),
       );
     } else {
+      // ✅ FIX: Pass exactly 4 arguments as required by the Controller
       await controller.signUp(
-        firstName: _firstNameController.text.trim(),
-        lastName: _lastNameController.text.trim(),
-        location: _locationController.text.trim(),
-        dob: _selectedDate!,
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
+        _emailController.text.trim(),
+        _passwordController.text.trim(),
+        _firstNameController.text.trim(),
+        _lastNameController.text.trim(),
       );
     }
   }
@@ -91,10 +92,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       }
       if (!next.isLoading && !next.hasError) {
         try {
+          // Force refresh user data
           final user = await ref.refresh(userProvider.future);
           if (!mounted) return;
 
-          // FIX: Added '?' to user.role checks
+          // Redirect based on role
           if (user?.role == 'admin') {
             context.go('/admin_dashboard');
           } else if (user?.role == 'doctor') {
@@ -113,6 +115,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             context.go('/patient_home');
           }
         } catch (e) {
+          // Fallback if user fetch fails but login succeeded
           context.go('/patient_home');
         }
       }
@@ -145,6 +148,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                           controller: _firstNameController,
                           decoration:
                               const InputDecoration(labelText: "First Name"),
+                          validator: (v) => v!.isEmpty ? "Required" : null,
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -153,6 +157,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                           controller: _lastNameController,
                           decoration:
                               const InputDecoration(labelText: "Last Name"),
+                          validator: (v) => v!.isEmpty ? "Required" : null,
                         ),
                       ),
                     ],
@@ -168,9 +173,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                             child: Text(
                               _selectedDate == null
                                   ? "Select"
-                                  : DateFormat(
-                                      'yyyy-MM-dd',
-                                    ).format(_selectedDate!),
+                                  : DateFormat('yyyy-MM-dd').format(_selectedDate!),
                             ),
                           ),
                         ),
@@ -180,6 +183,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         child: TextFormField(
                           controller: _locationController,
                           decoration: const InputDecoration(labelText: "City"),
+                          // Note: Location is collected but not sent to signup yet
                         ),
                       ),
                     ],
@@ -189,12 +193,14 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 TextFormField(
                   controller: _emailController,
                   decoration: const InputDecoration(labelText: "Email"),
+                  validator: (v) => v!.contains("@") ? null : "Invalid Email",
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _passwordController,
                   obscureText: true,
                   decoration: const InputDecoration(labelText: "Password"),
+                  validator: (v) => v!.length < 6 ? "Min 6 chars" : null,
                 ),
                 if (!_isLogin) ...[
                   const SizedBox(height: 24),
@@ -234,7 +240,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 ),
                 TextButton(
                   onPressed: () => setState(() => _isLogin = !_isLogin),
-                  child: Text(_isLogin ? "Sign Up" : "Login"),
+                  child: Text(_isLogin ? "Create an account" : "Have an account? Login"),
                 ),
                 const Divider(),
                 TextButton(

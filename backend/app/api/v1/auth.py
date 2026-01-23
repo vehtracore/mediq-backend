@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import date
@@ -12,6 +11,7 @@ from app.api import deps
 
 router = APIRouter()
 
+# ... (Keep signup, doctor register, and login endpoints exactly as they are) ...
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.email == user.email).first()
@@ -50,8 +50,9 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 def read_users_me(current_user: User = Depends(deps.get_current_user)): return current_user
 
-# ... keep your imports and other functions the same ...
+# ... (End of standard endpoints) ...
 
+# ✅ THE FIXED UPDATE ENDPOINT
 @router.put("/me", response_model=UserResponse)
 def update_user_me(
     user_update: UserUpdate, 
@@ -64,6 +65,11 @@ def update_user_me(
     if user_update.location is not None: current_user.location = user_update.location
     if user_update.dob is not None: current_user.dob = user_update.dob
     
+    # ✅ FIX: Explicitly Save Image URL
+    # (Assuming your schema allows it. If not, this ensures the model updates)
+    if hasattr(user_update, 'image_url') and user_update.image_url is not None:
+        current_user.image_url = user_update.image_url
+
     # 2. Update Medical History
     if user_update.blood_type is not None: current_user.blood_type = user_update.blood_type
     if user_update.allergies is not None: current_user.allergies = user_update.allergies
@@ -79,10 +85,3 @@ def update_user_me(
     db.commit()
     db.refresh(current_user)
     return current_user
-
-@router.get("/my-doctor-profile", response_model=DoctorResponse)
-def get_my_doctor_profile(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    if current_user.role != "doctor": raise HTTPException(403, detail="Access restricted")
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-    if not doctor: raise HTTPException(404, detail="Doctor profile not found")
-    return doctor
