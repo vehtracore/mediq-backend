@@ -1,5 +1,3 @@
-import 'package:mediq_app/src/features/auth/data/user_model.dart'; // Ensure correct path if needed
-
 class User {
   final String id;
   final String email;
@@ -7,17 +5,17 @@ class User {
   final String lastName;
   final String role;
   final String subscriptionTier;
-  final String imageUrl; // ✅ Sanitized URL
+  final String imageUrl;
   final String? location;
 
-  // --- 🏥 Medical History ---
+  // Medical
   final String? bloodType;
   final String? allergies;
   final String? chronicConditions;
   final String? medications;
   final String? pastSurgeries;
 
-  // --- ⚙️ Settings ---
+  // Settings
   final String settingsTheme;
   final bool settingsNotifications;
   final bool settingsEmailUpdates;
@@ -42,18 +40,19 @@ class User {
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
-    // 1. Get raw path
+    // 1. EXTRACT Raw Image Path
     String rawImage = json['image_url'] ?? json['profile_image'] ?? '';
-    
-    // 2. Fix URL for Render
+
+    // 2. SANITIZE: Force valid Render URL
     String finalUrl = '';
     if (rawImage.isNotEmpty) {
       if (rawImage.startsWith('http')) {
         finalUrl = rawImage;
       } else {
-        // ✅ REAL RENDER URL from your screenshot
-        const baseUrl = "https://mediq-backend-m3ik.onrender.com"; 
+        // ✅ YOUR REAL BACKEND URL
+        const String baseUrl = "https://mediq-backend-m3ik.onrender.com"; 
         
+        // Strip leading slash if present
         final cleanPath = rawImage.startsWith('/') ? rawImage.substring(1) : rawImage;
         finalUrl = "$baseUrl/$cleanPath";
       }
@@ -66,17 +65,15 @@ class User {
       lastName: json['last_name'] ?? json['lastName'] ?? '',
       role: json['role'] ?? 'patient',
       subscriptionTier: json['subscription_tier'] ?? json['plan'] ?? 'free',
-      imageUrl: finalUrl, // ✅ Sanitized
+      imageUrl: finalUrl,
       location: json['location'],
 
-      // Map new fields
       bloodType: json['blood_type'],
       allergies: json['allergies'],
       chronicConditions: json['chronic_conditions'],
       medications: json['medications'],
       pastSurgeries: json['past_surgeries'],
 
-      // Settings
       settingsTheme: json['settings_theme'] ?? 'light',
       settingsNotifications: json['settings_notifications'] ?? true,
       settingsEmailUpdates: json['settings_email_updates'] ?? false,

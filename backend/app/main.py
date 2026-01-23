@@ -10,7 +10,7 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="MDQplus API")
 
-# ✅ RENDER FIX: Use regex to allow HTTPS + Credentials
+# ✅ FORCE FIX: Allow Regex Origins
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex="https?://.*", 
