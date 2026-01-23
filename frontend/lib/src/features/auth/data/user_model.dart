@@ -5,17 +5,17 @@ class User {
   final String lastName;
   final String role;
   final String subscriptionTier;
-  final String imageUrl;
+  final String imageUrl; // ✅ Sanitized URL
   final String? location;
 
-  // Medical
+  // --- 🏥 Medical History ---
   final String? bloodType;
   final String? allergies;
   final String? chronicConditions;
   final String? medications;
   final String? pastSurgeries;
 
-  // Settings
+  // --- ⚙️ Settings ---
   final String settingsTheme;
   final bool settingsNotifications;
   final bool settingsEmailUpdates;
