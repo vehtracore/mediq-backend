@@ -105,29 +105,29 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // ✅ WIRED: Passes full user object to Header for Avatar + Name
               userAsync.when(
-                data: (user) =>
-                    HomeHeader(userName: user?.firstName ?? "Guest"),
-                loading: () => const HomeHeader(userName: "..."),
-                error: (e, _) => const HomeHeader(userName: "Guest"),
+                data: (user) => HomeHeader(user: user),
+                loading: () => const HomeHeader(user: null),
+                error: (e, _) => const HomeHeader(user: null),
               ),
               const SizedBox(height: 32),
 
-              const AppointmentCard(), // ✅ Kept your original widget
+              const AppointmentCard(), // ✅ Real Data (via Provider in widget)
 
               // --- AI CARD ---
               const SizedBox(height: 24),
-              _buildAICard(theme), // ✅ Passed theme
+              _buildAICard(theme),
 
               const SizedBox(height: 24),
               Text(
                 "Quick Actions",
                 style: theme.textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.bold,
-                ), // ✅ Dynamic Text
+                ),
               ),
               const SizedBox(height: 16),
-              const QuickActionGrid(), // ✅ Kept your original widget
+              const QuickActionGrid(),
               const SizedBox(height: 180),
             ],
           ),
@@ -165,7 +165,6 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
   }
 
   Widget _buildAICard(ThemeData theme) {
-    // Keep gradient for AI card, but ensure text is readable
     return Material(
       color: Colors.transparent,
       child: InkWell(
