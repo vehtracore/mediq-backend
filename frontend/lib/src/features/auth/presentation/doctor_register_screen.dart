@@ -3,7 +3,6 @@ import 'package:flutter/foundation.dart'; // Needed for kIsWeb check
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/media/data/media_repository.dart';
@@ -24,7 +23,6 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
 
-  // CHANGED: Use XFile (Cross-Platform) instead of File
   XFile? _licenseImage;
 
   String? _selectedSpecialty;
@@ -53,12 +51,12 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
     final picker = ImagePicker();
     final XFile? pickedFile = await picker.pickImage(
       source: ImageSource.gallery,
-      imageQuality: 80, // Optimize size
+      imageQuality: 80, 
     );
 
     if (pickedFile != null) {
       setState(() {
-        _licenseImage = pickedFile; // Store as XFile
+        _licenseImage = pickedFile; 
       });
     }
   }
@@ -79,21 +77,20 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // 1. Upload Image (Repo handles Web/Mobile logic)
+      // 1. Upload Image
       final String licenseUrl = await ref
           .read(mediaRepositoryProvider)
           .uploadFile(_licenseImage!, folder: "mdq_plus/doctors/licenses");
 
       // 2. Register Doctor
-      await ref
-          .read(authRepositoryProvider)
-          .registerDoctor(
-            fullName: _fullNameCtrl.text.trim(),
-            email: _emailCtrl.text.trim(),
-            password: _passwordCtrl.text.trim(),
-            specialty: _selectedSpecialty!,
-            licenseNumber: licenseUrl, // Save URL to DB
-          );
+      // ✅ FIX: Passed as a Map (Dictionary) to match Repository
+      await ref.read(authRepositoryProvider).registerDoctor({
+        "full_name": _fullNameCtrl.text.trim(),
+        "email": _emailCtrl.text.trim(),
+        "password": _passwordCtrl.text.trim(),
+        "specialty": _selectedSpecialty!,
+        "license_number": licenseUrl,
+      });
 
       if (!mounted) return;
 
@@ -130,14 +127,11 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Helper to get the correct ImageProvider based on platform
     ImageProvider? imageProvider;
     if (_licenseImage != null) {
       if (kIsWeb) {
-        // Web: Use NetworkImage for Blob URLs
         imageProvider = NetworkImage(_licenseImage!.path);
       } else {
-        // Mobile: Use FileImage for disk paths
         imageProvider = FileImage(File(_licenseImage!.path));
       }
     }
@@ -185,7 +179,6 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
               ),
               const SizedBox(height: 24),
 
-              // --- Upload Widget ---
               const Text(
                 "Medical License",
                 style: TextStyle(fontWeight: FontWeight.bold),

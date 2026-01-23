@@ -34,6 +34,7 @@ import '../../features/doctor_dashboard/presentation/doctor_availability_screen.
 import '../../features/emergency/presentation/emergency_screen.dart';
 import '../../features/subscription/presentation/subscription_screen.dart';
 import 'package:mediq_app/src/features/chat/presentation/video_call_screen.dart';
+import '../../features/profile/presentation/medical_history_screen.dart';
 
 final goRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(

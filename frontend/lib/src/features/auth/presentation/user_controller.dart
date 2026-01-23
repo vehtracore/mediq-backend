@@ -2,12 +2,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
 
+// ✅ FIXED: userProvider now correctly handles nullable User?
 final userProvider = FutureProvider<User?>((ref) async {
   final repo = ref.watch(authRepositoryProvider);
 
   try {
-    // This fetches the clean User object directly from the repo
-    final User remote = await repo.getUserProfile();
+    // FIX: Changed type from 'User' to 'User?' to prevent crash
+    final User? remote = await repo.getUserProfile();
     return remote;
   } catch (e) {
     // If user is not logged in or error occurs, return null

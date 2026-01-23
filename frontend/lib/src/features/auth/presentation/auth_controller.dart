@@ -2,12 +2,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
-import 'package:mediq_app/src/features/chat/data/image_upload_service.dart'; // ✅ Import Upload Service
+import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
 
 final authControllerProvider = StateNotifierProvider<AuthController, AsyncValue<void>>((ref) {
   return AuthController(
     ref.read(authRepositoryProvider),
-    ref.read(imageUploadServiceProvider), // ✅ Inject Upload Service
+    ref.read(imageUploadServiceProvider),
     ref,
   );
 });
@@ -26,7 +26,7 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
     _ref.invalidate(userProvider);
   }
 
-  Future<void> signup(String email, String password, String firstName, String lastName) async {
+  Future<void> signUp(String email, String password, String firstName, String lastName) async {
     state = const AsyncLoading();
     state = await AsyncValue.guard(() => _authRepository.signup(email, password, firstName, lastName));
     _ref.invalidate(userProvider);
@@ -39,45 +39,45 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
     _ref.invalidate(userProvider);
   }
 
-  // ✅ THE FIXED UPDATE METHOD
+  // Fix: Added settings parameters here to match Repository
   Future<void> updateProfile({
     String? firstName,
     String? lastName,
     String? location,
-    XFile? profileImage, // Raw file from picker
+    XFile? profileImage,
     String? bloodType,
     String? allergies,
     String? chronicConditions,
     String? medications,
     String? pastSurgeries,
+    String? settingsTheme,
+    bool? settingsNotifications, // <-- Added
+    bool? settingsEmailUpdates,  // <-- Added
   }) async {
     state = const AsyncLoading();
 
     try {
       String? imageUrl;
-
-      // 1. If user picked an image, Upload it first!
       if (profileImage != null) {
-        // We use the existing service to send to Cloudinary
         imageUrl = await _uploadService.uploadFile(profileImage); 
       }
 
-      // 2. Send the URL (and other data) to Backend
       await _authRepository.updateUser(
         firstName: firstName,
         lastName: lastName,
         location: location,
-        imageUrl: imageUrl, // Send the Cloudinary URL
+        imageUrl: imageUrl,
         bloodType: bloodType,
         allergies: allergies,
         chronicConditions: chronicConditions,
         medications: medications,
         pastSurgeries: pastSurgeries,
+        settingsTheme: settingsTheme,
+        settingsNotifications: settingsNotifications, // <-- Passed to Repo
+        settingsEmailUpdates: settingsEmailUpdates,   // <-- Passed to Repo
       );
 
-      // 3. Refresh the User Provider so UI updates immediately
       _ref.invalidate(userProvider);
-      
       state = const AsyncData(null);
     } catch (e, stack) {
       state = AsyncError(e, stack);
