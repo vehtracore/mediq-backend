@@ -4,16 +4,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles 
 from app.core.database import engine, Base
 
+# ✅ KEEP "app." prefix because your main.py is inside the app folder
 from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="MDQplus API")
 
-# ✅ FORCE FIX: Allow Regex Origins
+# --- 🚀 RENDER CORS FIX (The Critical Part) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex="https?://.*", 
+    allow_origin_regex="https?://.*", # ✅ Allows Render + Localhost
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -32,6 +33,7 @@ app.include_router(video.router, prefix="/api/v1/video", tags=["Video Call"])
 app.include_router(chat_socket.router, prefix="/api/v1/p2p", tags=["P2P Chat"])
 app.include_router(upload.router, prefix="/api/v1/upload", tags=["Upload"])
 
+# --- STATIC FILES ---
 static_dir = "static"
 if not os.path.exists(static_dir):
     os.makedirs(static_dir)
