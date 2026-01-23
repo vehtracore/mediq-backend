@@ -14,6 +14,7 @@ class User(Base):
     hashed_password = Column(String)
     dob = Column(Date, nullable=True)
     location = Column(String, nullable=True)
+    image_url = Column(String, nullable=True) # ✅ NEW COLUMN
     
     # --- ROLE & STATUS ---
     role = Column(String, default="patient")

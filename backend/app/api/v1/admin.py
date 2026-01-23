@@ -79,8 +79,19 @@ def verify_doctor(doctor_id: int, db: Session = Depends(get_db), admin: User = D
 def reject_doctor(doctor_id: int, db: Session = Depends(get_db), admin: User = Depends(get_current_admin)):
     doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
     if not doctor: raise HTTPException(404, "Doctor not found")
-    user_to_delete = db.query(User).filter(User.id == doctor.user_id).first()
-    db.delete(doctor)
     if user_to_delete: db.delete(user_to_delete)
     db.commit()
     return {"message": "Doctor application rejected and account removed."}
+
+# --- 🛠️ TEMP: DATABASE MIGRATION HELPER ---
+from sqlalchemy import text
+@router.post("/fix-schema")
+def fix_schema(db: Session = Depends(get_db)):
+    """Run this ONCE to add the missing column"""
+    try:
+        # PostgreSQL specific command
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS image_url VARCHAR;"))
+        db.commit()
+        return {"message": "✅ Schema updated successfully: image_url column added."}
+    except Exception as e:
+        return {"message": f"❌ Error updating schema: {e}"}
