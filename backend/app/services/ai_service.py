@@ -47,9 +47,10 @@ Analyze the user's input and determine the complexity.
 Start your response with the mode tag (e.g., [MODE: SIMPLE]), then provide the answer.
 """
 
-async def get_medical_response(user_text: str, image_url: str = None, user_context: dict = None) -> str:
+async def get_medical_response(user_text: str, history: list = None, image_url: str = None, user_context: dict = None) -> str:
     """
     Intelligently switches between Simple, Complex, and Visual responses.
+    Supports Session-Based Memory via 'history'.
     """
     if not GEMINI_API_KEY:
         return "System Error: AI Service is not configured properly."
@@ -58,8 +59,6 @@ async def get_medical_response(user_text: str, image_url: str = None, user_conte
         # 1. Build Context
         context_str = ""
         if user_context:
-            # Safely get age if dob exists, else 'Unknown'
-            # Assuming user_context has fields passed from chat.py
             age = user_context.get('age', 'Unknown')
             conditions = user_context.get('conditions', 'None')
             context_str = f"""
@@ -68,24 +67,31 @@ async def get_medical_response(user_text: str, image_url: str = None, user_conte
             - Chronic Conditions: {conditions}
             """
 
-        # 2. Combine Prompt with the "Router" Instruction
-        content_parts = [SYSTEM_INSTRUCTION, f"{context_str}\n\nUser Query: {user_text}"]
+        # 2. Setup the "Chat" Session
+        # Initialize with history from frontend (or empty)
+        # Verify history format safeguards here if needed, but assuming frontend sends correct structure
+        chat_session = model.start_chat(history=history or [])
 
-        # 3. Handle Image Input
+        # 3. Prepare the New Message
+        # We stick the Context + Router Instructions to the FRONT of the new message
+        # so the AI sees it immediately for this turn.
+        full_prompt = [SYSTEM_INSTRUCTION, f"{context_str}\n\nUser Query: {user_text}"]
+
+        # 4. Handle Image (If present)
         if image_url:
             clean_path = image_url.lstrip("/")
             if os.path.exists(clean_path):
                 img = PIL.Image.open(clean_path)
-                content_parts.append(img)
-                content_parts.append("Analyze the medical relevance of this image in context of the user's message.")
+                full_prompt.append(img)
+                full_prompt.append("Analyze the medical relevance of this image in context of the user's message.")
             else:
                 logger.warning(f"Image not found at: {clean_path}")
 
-        # 4. Generate
-        response = await model.generate_content_async(content_parts)
+        # 5. Send Message to the Chat Session
+        response = await chat_session.send_message_async(full_prompt)
         raw_text = response.text
 
-        # 5. POST-PROCESSING (The Magic Trick)
+        # 6. POST-PROCESSING (The Magic Trick)
         # Strip the "Mode Tag" so the user doesn't see it
         clean_text = raw_text.replace("[MODE: SIMPLE]", "") \
                              .replace("[MODE: COMPLEX]", "") \
