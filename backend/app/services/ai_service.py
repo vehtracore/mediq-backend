@@ -25,8 +25,8 @@ else:
     logger.warning("WARNING: GEMINI_API_KEY not found in environment.")
 
 # Initialize the model (Flash is great for vision + speed)
-# 'gemini-1.5-flash' was deprecated/not found. Using 'gemini-1.5-flash-latest'
-model = genai.GenerativeModel('gemini-1.5-flash-latest')
+# 'gemini-1.5-flash-latest' failed. Using 'gemini-flash-latest' from list_models output
+model = genai.GenerativeModel('gemini-flash-latest')
 
 SYSTEM_INSTRUCTION = """
 You are MedIQ, an efficient medical triage assistant. 
