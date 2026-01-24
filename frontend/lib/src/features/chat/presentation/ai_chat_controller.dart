@@ -39,13 +39,28 @@ class AiChatController extends StateNotifier<AiChatState> {
       final aiMsg = {'role': 'ai', 'message': response.data['response']};
       state = state
           .copyWith(messages: [...state.messages, aiMsg], isLoading: false);
+    } on DioException catch (e) {
+      String errorMessage = "Connection error. Please try again.";
+      
+      // Extract specific error from backend (e.g. Free Tier Limit)
+      if (e.response != null && e.response?.data != null) {
+         final data = e.response?.data;
+         if (data is Map && data.containsKey('detail')) {
+           errorMessage = data['detail'];
+         }
+      }
+
+      final errorMsg = {
+        'role': 'system',
+        'message': errorMessage
+      };
+      state = state.copyWith(messages: [...state.messages, errorMsg], isLoading: false);
     } catch (e) {
       final errorMsg = {
         'role': 'system',
-        'message': "Connection error. Please try again."
+        'message': "System Error: ${e.toString()}"
       };
-      state = state
-          .copyWith(messages: [...state.messages, errorMsg], isLoading: false);
+      state = state.copyWith(messages: [...state.messages, errorMsg], isLoading: false);
     }
   }
 }
