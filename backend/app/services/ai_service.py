@@ -6,18 +6,23 @@ import PIL.Image  # <--- NEW IMPORT (Requires 'Pillow' library)
 # Load environment variables
 load_dotenv()
 
+import logging
+
+# Configure Logging
+logger = logging.getLogger("uvicorn.error")
+
 # Configure the SDK
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-print(f"DEBUG: Loading AI Service. Key found? {bool(GEMINI_API_KEY)}")
+logger.info(f"DEBUG: Loading AI Service. Key found? {bool(GEMINI_API_KEY)}")
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        print("DEBUG: Gemini Configured Successfully")
+        logger.info("DEBUG: Gemini Configured Successfully")
     except Exception as e:
-        print(f"DEBUG: Gemini Configuration Failed: {e}")
+        logger.error(f"DEBUG: Gemini Configuration Failed: {e}")
 else:
-    print("WARNING: GEMINI_API_KEY not found in .env file.")
+    logger.warning("WARNING: GEMINI_API_KEY not found in environment.")
 
 # Initialize the model (Flash is great for vision + speed)
 model = genai.GenerativeModel('gemini-1.5-flash')
@@ -69,5 +74,7 @@ async def get_medical_response(user_text: str, image_url: str = None) -> str:
         
         return response.text
     except Exception as e:
-        print(f"Gemini API Error: {e}")
-        return "I'm having trouble analyzing that right now. Please try again."
+        logger.error(f"Gemini API Error: {e}")
+        # DEBUG MODE: Return the actual error to the user to see what's wrong
+        return f"System Error: {str(e)}"
+        # return "I'm having trouble analyzing that right now. Please try again."
