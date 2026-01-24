@@ -56,11 +56,23 @@ async def analyze_symptoms(
             detail="You are chatting too fast. Please take a break."
         )
 
-    # 4. Process Request (Now with image_url)
+    # 4. Process Request (Now with image_url and context)
+    
+    # Calculate Age
+    user_age = "Unknown"
+    if current_user.dob:
+        user_age = (now.date() - current_user.dob).days // 365
+        
+    user_context = {
+        "age": f"{user_age} years old",
+        "conditions": current_user.chronic_conditions if current_user.chronic_conditions else "None"
+    }
+
     # We pass the image_url to the service. If it's None, the service handles it.
     ai_response = await ai_service.get_medical_response(
         request.message, 
-        image_url=request.image_url
+        image_url=request.image_url,
+        user_context=user_context
     )
 
     # 5. Increment Counters
