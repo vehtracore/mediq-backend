@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mediq_app/src/core/api/dio_client.dart';
 
 // 1. STATE
 class AiChatState {
@@ -52,13 +53,7 @@ class AiChatController extends StateNotifier<AiChatState> {
 // 3. PROVIDER
 final aiChatControllerProvider =
     StateNotifierProvider<AiChatController, AiChatState>((ref) {
-  // Standalone Dio Client
-  final dio = Dio(BaseOptions(
-    baseUrl: 'https://mediq-backend-m3ik.onrender.com',
-    connectTimeout: const Duration(seconds: 20),
-    receiveTimeout: const Duration(seconds: 20),
-    headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-  ));
-
+  // Use the shared Dio Provider which has the Interceptors and Auth Token
+  final dio = ref.watch(dioProvider); 
   return AiChatController(dio);
 });

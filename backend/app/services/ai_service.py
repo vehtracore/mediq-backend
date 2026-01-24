@@ -9,8 +9,13 @@ load_dotenv()
 # Configure the SDK
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+print(f"DEBUG: Loading AI Service. Key found? {bool(GEMINI_API_KEY)}")
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        print("DEBUG: Gemini Configured Successfully")
+    except Exception as e:
+        print(f"DEBUG: Gemini Configuration Failed: {e}")
 else:
     print("WARNING: GEMINI_API_KEY not found in .env file.")
 
