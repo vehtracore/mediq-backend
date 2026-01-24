@@ -15,11 +15,12 @@ class DoctorRepository {
     return (response.data as List).map((json) => Doctor.fromJson(json)).toList();
   }
 
-  Future<void> updateDoctorProfile({String? bio, double? hourlyRate, int? yearsExperience}) async {
+  Future<void> updateDoctorProfile({String? bio, double? hourlyRate, int? yearsExperience, String? imageUrl}) async {
     await _dio.put('/api/v1/doctors/me', data: {
       if (bio != null) "bio": bio,
       if (hourlyRate != null) "hourly_rate": hourlyRate,
-      if (yearsExperience != null) "years_experience": yearsExperience
+      if (yearsExperience != null) "years_experience": yearsExperience,
+      if (imageUrl != null) "image_url": imageUrl,
     });
   }
 

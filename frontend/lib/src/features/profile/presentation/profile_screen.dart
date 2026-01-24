@@ -42,11 +42,16 @@ class ProfileScreen extends ConsumerWidget {
                       CircleAvatar(
                         radius: 50,
                         backgroundColor: const Color(0xFF4A90E2),
-                        child: Text(initials,
-                            style: const TextStyle(
-                                fontSize: 32,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white)),
+                        backgroundImage: (user?.imageUrl != null && user!.imageUrl.isNotEmpty)
+                            ? NetworkImage(user.imageUrl)
+                            : null,
+                        child: (user?.imageUrl == null || user!.imageUrl.isEmpty)
+                            ? Text(initials,
+                                style: const TextStyle(
+                                    fontSize: 32,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white))
+                            : null,
                       ),
                       const SizedBox(height: 16),
                       Text("$firstName $lastName",

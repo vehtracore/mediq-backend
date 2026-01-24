@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'presentation/auth_controller.dart';
 import 'presentation/user_controller.dart';
 import 'data/auth_repository.dart';
+import 'package:mediq_app/src/features/doctors/data/doctor_model.dart';
 
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
@@ -45,6 +46,45 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     if (picked != null) setState(() => _selectedDate = picked);
   }
 
+  Future<void> _navigateAfterAuth() async {
+    if (!mounted) return;
+    
+    try {
+      // FIX: Call repository directly to avoid Potential Riverpod Refresh hang
+      final authRepo = ref.read(authRepositoryProvider);
+      final user = await authRepo.getUserProfile();
+      
+      // Update the provider manually to keep state in sync
+      if (user != null) {
+         ref.invalidate(userProvider);
+      }
+      
+      if (!mounted) return;
+
+      // Redirect based on role
+      if (user?.role == 'admin') {
+        context.go('/admin_dashboard');
+      } else if (user?.role == 'doctor') {
+        try {
+          final doctor = await ref.read(authRepositoryProvider).getMyDoctorProfile();
+          if (!mounted) return;
+          if (doctor.isVerified) {
+            context.go('/doctor_home');
+          } else {
+            context.go('/doctor_pending');
+          }
+        } catch (e) {
+          if (mounted) context.go('/doctor_pending');
+        }
+      } else {
+        context.go('/patient_home');
+      }
+    } catch (e) {
+      // Fallback if user fetch fails but login succeeded
+      if (mounted) context.go('/patient_home');
+    }
+  }
+
   Future<void> _handleSubmit() async {
     if (!_formKey.currentState!.validate()) return;
     if (!_isLogin && (_selectedDate == null || !_agreedToTerms)) {
@@ -81,7 +121,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final theme = Theme.of(context);
 
     ref.listen<AsyncValue<void>>(authControllerProvider,
-        (previous, next) async {
+        (previous, next) {
       if (next.hasError) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -89,35 +129,14 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             backgroundColor: Colors.red,
           ),
         );
+        return;
       }
-      if (!next.isLoading && !next.hasError) {
-        try {
-          // Force refresh user data
-          final user = await ref.refresh(userProvider.future);
-          if (!mounted) return;
-
-          // Redirect based on role
-          if (user?.role == 'admin') {
-            context.go('/admin_dashboard');
-          } else if (user?.role == 'doctor') {
-            try {
-              final doctor =
-                  await ref.read(authRepositoryProvider).getMyDoctorProfile();
-              if (doctor.isVerified) {
-                context.go('/doctor_home');
-              } else {
-                context.go('/doctor_pending');
-              }
-            } catch (e) {
-              context.go('/doctor_pending');
-            }
-          } else {
-            context.go('/patient_home');
-          }
-        } catch (e) {
-          // Fallback if user fetch fails but login succeeded
-          context.go('/patient_home');
-        }
+      
+      // ✅ FIX: Only navigate when transitioning FROM loading state (after actual login/signup)
+      final wasLoading = previous?.isLoading ?? false;
+      if (wasLoading && !next.isLoading && !next.hasError) {
+        // Navigate immediately - call helper method
+        _navigateAfterAuth();
       }
     });
 

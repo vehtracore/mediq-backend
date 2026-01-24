@@ -85,3 +85,32 @@ def update_user_me(
     db.commit()
     db.refresh(current_user)
     return current_user
+
+@router.get("/my-doctor-profile", response_model=DoctorResponse)
+def get_my_doctor_profile(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user)
+):
+    if current_user.role != "doctor":
+        raise HTTPException(status_code=403, detail="Not a doctor")
+    
+    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+    if not doctor:
+        # Create a default doctor profile if it doesn't exist but user is a doctor
+        # This handles legacy users or sync issues
+        doctor = Doctor(
+            user_id=current_user.id,
+            full_name=f"{current_user.first_name} {current_user.last_name}",
+            specialty="General",
+            license_number=f"TBD-{current_user.id}",
+            is_verified=False,
+            is_available=True,
+            hourly_rate=5000.0,
+            years_experience=0,
+            bio="No bio yet."
+        )
+        db.add(doctor)
+        db.commit()
+        db.refresh(doctor)
+        
+    return doctor

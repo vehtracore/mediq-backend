@@ -1,7 +1,9 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
+import 'package:mediq_app/src/features/doctors/data/doctor_model.dart';
 
 final authRepositoryProvider = Provider((ref) {
   return AuthRepository(ref.watch(dioProvider));
@@ -12,14 +14,23 @@ class AuthRepository {
   AuthRepository(this._dio);
 
   // --- AUTHENTICATION ---
-  
+
   Future<void> login(String email, String password) async {
     try {
-      // Note: FastAPI OAuth2FormRequest usually expects 'username', not 'email'
-      await _dio.post('/api/v1/auth/login', data: {
-        'username': email, 
+      final response = await _dio.post('/api/v1/auth/login', data: {
+        'email': email,
         'password': password,
       });
+
+      final token = response.data['access_token'];
+      if (token != null) {
+        final storage = FlutterSecureStorage();
+        await storage.write(
+          key: 'auth_token',
+          value: token,
+          aOptions: AndroidOptions(encryptedSharedPreferences: true),
+        );
+      }
     } catch (e) {
       throw Exception("Login failed: $e");
     }
@@ -40,12 +51,12 @@ class AuthRepository {
   }
 
   Future<void> logout() async {
-    // Clear tokens logic would go here if managing local storage manually
+    final storage = FlutterSecureStorage();
+    await storage.delete(key: 'auth_token', aOptions: AndroidOptions(encryptedSharedPreferences: true));
   }
 
   // --- USER DATA ---
 
-  // Fix 1: Alias for getCurrentUser so user_controller works
   Future<User?> getUserProfile() => getCurrentUser();
 
   Future<User?> getCurrentUser() async {
@@ -57,7 +68,6 @@ class AuthRepository {
     }
   }
 
-  // Fix 2: Added ALL missing parameters including settings
   Future<void> updateUser({
     String? firstName,
     String? lastName,
@@ -69,23 +79,23 @@ class AuthRepository {
     String? medications,
     String? pastSurgeries,
     String? settingsTheme,
-    bool? settingsNotifications, // <-- ADDED
-    bool? settingsEmailUpdates,  // <-- ADDED
+    bool? settingsNotifications,
+    bool? settingsEmailUpdates,
   }) async {
     try {
       final Map<String, dynamic> data = {};
-      
+
       if (firstName != null) data['first_name'] = firstName;
       if (lastName != null) data['last_name'] = lastName;
       if (location != null) data['location'] = location;
       if (imageUrl != null) data['image_url'] = imageUrl;
-      
+
       if (bloodType != null) data['blood_type'] = bloodType;
       if (allergies != null) data['allergies'] = allergies;
       if (chronicConditions != null) data['chronic_conditions'] = chronicConditions;
       if (medications != null) data['medications'] = medications;
       if (pastSurgeries != null) data['past_surgeries'] = pastSurgeries;
-      
+
       if (settingsTheme != null) data['settings_theme'] = settingsTheme;
       if (settingsNotifications != null) data['settings_notifications'] = settingsNotifications;
       if (settingsEmailUpdates != null) data['settings_email_updates'] = settingsEmailUpdates;
@@ -98,16 +108,15 @@ class AuthRepository {
 
   // --- DOCTOR FEATURES ---
 
-  Future<dynamic> getMyDoctorProfile() async {
+  Future<Doctor> getMyDoctorProfile() async {
     try {
       final response = await _dio.get('/api/v1/auth/my-doctor-profile');
-      return response.data; 
+      return Doctor.fromJson(response.data);
     } catch (e) {
-      throw Exception("Failed to load doctor profile");
+      throw Exception("Failed to load doctor profile: $e");
     }
   }
 
-  // Fix 3: Ensures registerDoctor accepts the Map data
   Future<void> registerDoctor(Map<String, dynamic> data) async {
     try {
       await _dio.post('/api/v1/auth/doctor/register', data: data);
