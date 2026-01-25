@@ -18,56 +18,15 @@ import smtplib
 import os
 from email.message import EmailMessage
 
+# --- 📧 HELPER: Mock Email Service ---
 def send_email(to_email: str, subject: str, body: str):
-    smtp_email = os.getenv("SMTP_EMAIL")
-    smtp_password = os.getenv("SMTP_PASSWORD")
-
-    if not smtp_email or not smtp_password:
-        print("❌ SMTP Credentials Missing. Email NOT sent.")
-        return
-
-    try:
-        msg = EmailMessage()
-        msg.set_content(body)
-        msg['Subject'] = subject
-        msg['From'] = smtp_email
-        msg['To'] = to_email
-
-        def try_connect(port, use_ssl):
-            # Force IPv4 Resolution
-            target_ip = socket.gethostbyname("smtp.gmail.com")
-            print(f"Attempting SMTP on {target_ip}:{port} (SSL={use_ssl})...")
-            
-            if use_ssl:
-                # Bypass hostname resolution in smtplib by using IP
-                with smtplib.SMTP_SSL(target_ip, port, timeout=15) as server:
-                    # We might get a Cert Hostname Mismatch here because we connected to IP.
-                    # In a real production app we'd construct a custom SSLContext to verify 'smtp.gmail.com'.
-                    # For now, let's see if we can even CONNECT.
-                    server.login(smtp_email, smtp_password)
-                    server.send_message(msg)
-            else:
-                with smtplib.SMTP(target_ip, port, timeout=15) as server:
-                    server.starttls()
-                    server.login(smtp_email, smtp_password)
-                    server.send_message(msg)
-        
-        import socket # Ensure socket is imported
-        
-        # Try 587 first
-        try:
-            try_connect(587, False)
-            print(f"✅ Email sent successfully to {to_email} (Port 587)")
-            return
-        except Exception as e1:
-            print(f"⚠️ Port 587 ipv4 failed: {e1}. Retrying on 465...")
-            
-        # Try 465 backup
-        try_connect(465, True)
-        print(f"✅ Email sent successfully to {to_email} (Port 465)")
-
-    except Exception as e:
-        print(f"❌ Failed to send email (Both ports): {e}")
+    # In a real app, integrate SES/SendGrid/SMTP here.
+    # Note: Render Free Tier blocks SMTP ports 25/465/587, so we mock this.
+    print(f"------------ EMAIL SENDING (MOCK) ------------")
+    print(f"TO: {to_email}")
+    print(f"SUBJECT: {subject}")
+    print(f"BODY: {body}")
+    print(f"----------------------------------------------")
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -83,7 +42,7 @@ def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session
         location=user.location, 
         hashed_password=hashed_pwd, 
         role=user.role,
-        is_verified=False 
+        is_verified=True # ✅ Auto-verify since email is mocked
     )
     db.add(new_user)
     db.commit()
@@ -267,71 +226,7 @@ def approve_doctor(
     
     return {"message": f"Doctor {doctor.full_name} approved"}
 
-@router.get("/debug-email")
-def debug_email(email: str):
-    """
-    Temporary endpoint to debug SMTP on Render.
-    Usage: GET /api/v1/auth/debug-email?email=your@email.com
-    """
-    import smtplib
-    import os
-    from email.message import EmailMessage
 
-    smtp_email = os.getenv("SMTP_EMAIL")
-    smtp_password = os.getenv("SMTP_PASSWORD")
-
-    result = {
-        "env_email_found": bool(smtp_email),
-        "env_password_found": bool(smtp_password),
-        "smtp_email_value": smtp_email, 
-    }
-
-    if not smtp_email or not smtp_password:
-        return {"status": "error", "details": "Environment variables missing", "debug_info": result}
-
-    msg = EmailMessage()
-    msg.set_content(f"Debug Test from Render. If you read this, SMTP is working.\n\nDebug Info:\nSMTP_EMAIL: {smtp_email}")
-    msg['Subject'] = "MedIQ Debug Email (IPv4 Forced)"
-    msg['From'] = smtp_email
-    msg['To'] = email
-
-    logs = []
-    import socket
-
-    def try_send(port, use_ssl):
-        try:
-            # ✅ Force IPv4 Resolution
-            target_ip = socket.gethostbyname("smtp.gmail.com")
-            logs.append(f"Resolved 'smtp.gmail.com' to IPv4: {target_ip}")
-            logs.append(f"Connecting to {target_ip}:{port} (SSL={use_ssl})...")
-            
-            if use_ssl:
-                server = smtplib.SMTP_SSL(target_ip, port, timeout=10)
-            else:
-                server = smtplib.SMTP(target_ip, port, timeout=10)
-                server.starttls()
-            
-            logs.append("Connected. Logging in...")
-            server.login(smtp_email, smtp_password)
-            server.send_message(msg)
-            server.quit()
-            logs.append("✅ SUCCESS")
-            return True, None
-        except Exception as e:
-            logs.append(f"❌ Failed on port {port}: {e}")
-            return False, str(e)
-
-    # Try Port 587 first
-    success, err = try_send(587, False)
-    if success:
-        return {"status": "success", "port": 587, "logs": logs, "debug_info": result}
-    
-    # Try Port 465 as backup
-    success, err = try_send(465, True)
-    if success:
-        return {"status": "success", "port": 465, "logs": logs, "debug_info": result}
-
-    return {"status": "error", "logs": logs, "last_error": err, "debug_info": result}
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
