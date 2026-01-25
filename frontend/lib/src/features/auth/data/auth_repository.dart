@@ -36,13 +36,14 @@ class AuthRepository {
     }
   }
 
-  Future<void> signup(String email, String password, String firstName, String lastName) async {
+  Future<void> signup(String email, String password, String firstName, String lastName, DateTime dob) async {
     try {
       await _dio.post('/api/v1/auth/signup', data: {
         'email': email,
         'password': password,
         'first_name': firstName,
         'last_name': lastName,
+        'dob': dob.toIso8601String().split('T')[0], // YYYY-MM-DD
         'role': 'patient'
       });
     } catch (e) {

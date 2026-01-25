@@ -112,6 +112,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         _passwordController.text.trim(),
         _firstNameController.text.trim(),
         _lastNameController.text.trim(),
+        _selectedDate!, // ✅ Pass DOB
       );
     }
   }
@@ -230,7 +231,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                       labelText: "Password",
                       suffixIcon: IconButton( // ✅ Eye Button
                         icon: Icon(
-                          _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                          _obscurePassword ? Icons.visibility_off : Icons.visibility,
                         ),
                         onPressed: () {
                           setState(() {
