@@ -33,8 +33,10 @@ def send_email(to_email: str, subject: str, body: str):
         msg['From'] = smtp_email
         msg['To'] = to_email
 
-        # Gmail usually uses port 465 (SSL) or 587 (TLS)
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        # ✅ USE PORT 587 (STARTTLS) + TIMEOUT
+        print("Connecting to Gmail SMTP (587)...")
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
+            server.starttls() # Secure the connection
             server.login(smtp_email, smtp_password)
             server.send_message(msg)
         
@@ -269,11 +271,12 @@ def debug_email(email: str):
         msg['From'] = smtp_email
         msg['To'] = email
 
-        # Try connecting with verbose output capture (simulated via try/catch steps)
-        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
-        server.login(smtp_email, smtp_password)
-        server.send_message(msg)
-        server.quit()
+        # ✅ USE PORT 587 (STARTTLS) + TIMEOUT
+        # This prevents hanging indefinitely
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:
+            server.starttls()
+            server.login(smtp_email, smtp_password)
+            server.send_message(msg)
         
         return {"status": "success", "message": f"Email sent to {email}", "debug_info": result}
     except Exception as e:
