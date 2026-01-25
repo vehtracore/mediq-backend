@@ -58,6 +58,6 @@ cloudinary==1.36.0
 python-multipart
 agora-token-builder==1.0.0
 websockets
-python-multipart
+
 Pillow
  
