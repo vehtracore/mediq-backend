@@ -22,7 +22,7 @@ class UserUpdate(BaseModel):
     location: Optional[str] = None
     dob: Optional[date] = None
     dob: Optional[date] = None
-    # image_url: Optional[str] = None # ✅ ADDED
+    image_url: Optional[str] = None # ✅ ADDED
     
     # Medical History
     blood_type: Optional[str] = None
@@ -42,8 +42,8 @@ class UserResponse(UserBase):
     is_active: bool
     id: int
     is_active: bool
-    # image_url: Optional[str] = None # ✅ ADDED
-    # is_verified: Optional[bool] = False # ✅ Optional: column may not exist in prod DB
+    image_url: Optional[str] = None # ✅ ADDED
+    is_verified: Optional[bool] = False # ✅ Optional: column may not exist in prod DB
     
     # Medical History
     blood_type: Optional[str] = None
