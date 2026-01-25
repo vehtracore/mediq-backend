@@ -27,7 +27,6 @@ def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session
     if db_user: raise HTTPException(400, detail="Email already registered")
     
     hashed_pwd = security.get_password_hash(user.password)
-    # ✅ Set is_verified = False
     new_user = User(
         email=user.email, 
         first_name=user.first_name, 
@@ -35,8 +34,8 @@ def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session
         dob=user.dob, 
         location=user.location, 
         hashed_password=hashed_pwd, 
-        role=user.role,
-        is_verified=False 
+        role=user.role
+        # is_verified=False # Removed: column doesn't exist in prod DB yet
     )
     db.add(new_user)
     db.commit()
@@ -82,8 +81,8 @@ def register_doctor(doctor_in: DoctorRegister, background_tasks: BackgroundTasks
         license_number=doctor_in.license_number, 
         is_verified=False, 
         is_available=False, 
-        hourly_rate=0.0,
-        status="pending" # ✅ Pending State
+        hourly_rate=0.0
+        # status="pending" # Removed: column doesn't exist in prod DB yet
     )
     db.add(new_doctor)
     db.commit()
