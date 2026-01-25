@@ -28,7 +28,17 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
 
   Future<void> signUp(String email, String password, String firstName, String lastName, DateTime dob) async {
     state = const AsyncLoading();
-    state = await AsyncValue.guard(() => _authRepository.signup(email, password, firstName, lastName, dob));
+    
+    // 1. Sign Up
+    final signupResult = await AsyncValue.guard(() => _authRepository.signup(email, password, firstName, lastName, dob));
+    
+    if (signupResult.hasError) {
+      state = signupResult;
+      return;
+    }
+
+    // 2. Auto Login
+    state = await AsyncValue.guard(() => _authRepository.login(email, password));
     _ref.invalidate(userProvider);
   }
 

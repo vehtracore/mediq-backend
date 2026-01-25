@@ -13,13 +13,34 @@ from app.api import deps
 router = APIRouter()
 
 # --- 📧 HELPER: Mock Email Service ---
+# --- 📧 REAL EMAIL SERVICE ---
+import smtplib
+import os
+from email.message import EmailMessage
+
 def send_email(to_email: str, subject: str, body: str):
-    # In a real app, integrate SES/SendGrid/SMTP here.
-    print(f"------------ EMAIL SENDING ------------")
-    print(f"TO: {to_email}")
-    print(f"SUBJECT: {subject}")
-    print(f"BODY: {body}")
-    print(f"---------------------------------------")
+    smtp_email = os.getenv("SMTP_EMAIL")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+
+    if not smtp_email or not smtp_password:
+        print("❌ SMTP Credentials Missing. Email NOT sent.")
+        return
+
+    try:
+        msg = EmailMessage()
+        msg.set_content(body)
+        msg['Subject'] = subject
+        msg['From'] = smtp_email
+        msg['To'] = to_email
+
+        # Gmail usually uses port 465 (SSL) or 587 (TLS)
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(smtp_email, smtp_password)
+            server.send_message(msg)
+        
+        print(f"✅ Email sent successfully to {to_email}")
+    except Exception as e:
+        print(f"❌ Failed to send email: {e}")
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
