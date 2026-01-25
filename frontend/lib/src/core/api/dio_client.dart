@@ -7,8 +7,8 @@ import 'api_constants.dart';
 final dioProvider = Provider<Dio>((ref) {
   final options = BaseOptions(
     baseUrl: ApiConstants.baseUrl,
-    connectTimeout: const Duration(seconds: 30),
-    receiveTimeout: const Duration(seconds: 30),
+    connectTimeout: const Duration(seconds: 90),
+    receiveTimeout: const Duration(seconds: 90),
     headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
   );
 

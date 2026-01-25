@@ -23,6 +23,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   final _passwordController = TextEditingController();
   DateTime? _selectedDate;
   bool _agreedToTerms = false;
+  bool _obscurePassword = true;  // ✅ State for password visibility
   final _formKey = GlobalKey<FormState>();
 
   @override
@@ -209,18 +210,37 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   ),
                   const SizedBox(height: 16),
                 ],
-                TextFormField(
-                  controller: _emailController,
-                  decoration: const InputDecoration(labelText: "Email"),
-                  validator: (v) => v!.contains("@") ? null : "Invalid Email",
-                ),
+                  TextFormField(
+                    controller: _emailController,
+                    decoration: const InputDecoration(labelText: "Email"),
+                    validator: (v) {
+                       // ✅ Email Regex
+                       final emailRegex = RegExp(r"^[a-zA-Z0-9.]+@[a-zA-Z0-9]+\.[a-zA-Z]+");
+                       if (v == null || v.isEmpty || !emailRegex.hasMatch(v)) {
+                         return "Enter a valid email (e.g., name@domain.com)";
+                       }
+                       return null;
+                    },
+                  ),
                 const SizedBox(height: 16),
-                TextFormField(
-                  controller: _passwordController,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: "Password"),
-                  validator: (v) => v!.length < 6 ? "Min 6 chars" : null,
-                ),
+                  TextFormField(
+                    controller: _passwordController,
+                    obscureText: _obscurePassword, // ✅ Toggles
+                    decoration: InputDecoration(
+                      labelText: "Password",
+                      suffixIcon: IconButton( // ✅ Eye Button
+                        icon: Icon(
+                          _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _obscurePassword = !_obscurePassword;
+                          });
+                        },
+                      ),
+                    ),
+                    validator: (v) => (v != null && v.length >= 6) ? null : "Min 6 chars",
+                  ),
                 if (!_isLogin) ...[
                   const SizedBox(height: 24),
                   Container(

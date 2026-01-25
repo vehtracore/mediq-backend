@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from pydantic import EmailStr
 from sqlalchemy.orm import Session
 from datetime import date
 from app.core.database import get_db
@@ -11,33 +12,91 @@ from app.api import deps
 
 router = APIRouter()
 
-# ... (Keep signup, doctor register, and login endpoints exactly as they are) ...
+# --- 📧 HELPER: Mock Email Service ---
+def send_email(to_email: str, subject: str, body: str):
+    # In a real app, integrate SES/SendGrid/SMTP here.
+    print(f"------------ EMAIL SENDING ------------")
+    print(f"TO: {to_email}")
+    print(f"SUBJECT: {subject}")
+    print(f"BODY: {body}")
+    print(f"---------------------------------------")
+
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def create_user(user: UserCreate, db: Session = Depends(get_db)):
+def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user: raise HTTPException(400, detail="Email already registered")
+    
     hashed_pwd = security.get_password_hash(user.password)
-    new_user = User(email=user.email, first_name=user.first_name, last_name=user.last_name, dob=user.dob, location=user.location, hashed_password=hashed_pwd, role=user.role)
+    # ✅ Set is_verified = False
+    new_user = User(
+        email=user.email, 
+        first_name=user.first_name, 
+        last_name=user.last_name, 
+        dob=user.dob, 
+        location=user.location, 
+        hashed_password=hashed_pwd, 
+        role=user.role,
+        is_verified=False 
+    )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+    
+    # ✅ Background Task: Send Verification Email
+    verification_link = f"http://localhost:8000/api/v1/auth/verify-email?email={new_user.email}"
+    background_tasks.add_task(
+        send_email, 
+        new_user.email, 
+        "Verify your Mediq Account", 
+        f"Click here to verify: {verification_link}"
+    )
+
     return new_user
 
 @router.post("/doctor/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register_doctor(doctor_in: DoctorRegister, db: Session = Depends(get_db)):
+def register_doctor(doctor_in: DoctorRegister, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == doctor_in.email).first(): raise HTTPException(400, detail="Email registered")
     if db.query(Doctor).filter(Doctor.license_number == doctor_in.license_number).first(): raise HTTPException(400, detail="License registered")
     
     hashed_pwd = security.get_password_hash(doctor_in.password)
     names = doctor_in.full_name.split(" ")
-    new_user = User(email=doctor_in.email, first_name=names[0], last_name=names[-1] if len(names)>1 else "", hashed_password=hashed_pwd, role="doctor", is_active=True, dob=date(1980, 1, 1), location="Princeton-Plainsboro")
+    
+    # ✅ Doctor user is INACTIVE initially
+    new_user = User(
+        email=doctor_in.email, 
+        first_name=names[0], 
+        last_name=names[-1] if len(names)>1 else "", 
+        hashed_password=hashed_pwd, 
+        role="doctor", 
+        is_active=False, # Wait for Admin
+        dob=date(1980, 1, 1), 
+        location="Princeton-Plainsboro"
+    )
     db.add(new_user)
     db.flush()
 
-    new_doctor = Doctor(user_id=new_user.id, full_name=doctor_in.full_name, specialty=doctor_in.specialty, license_number=doctor_in.license_number, is_verified=False, is_available=False, hourly_rate=0.0)
+    new_doctor = Doctor(
+        user_id=new_user.id, 
+        full_name=doctor_in.full_name, 
+        specialty=doctor_in.specialty, 
+        license_number=doctor_in.license_number, 
+        is_verified=False, 
+        is_available=False, 
+        hourly_rate=0.0,
+        status="pending" # ✅ Pending State
+    )
     db.add(new_doctor)
     db.commit()
     db.refresh(new_user)
+
+    # ✅ Notify Admin
+    background_tasks.add_task(
+        send_email,
+        "admin@mediq.com",
+        "New Doctor Application",
+        f"Dr. {doctor_in.full_name} has applied. License: {doctor_in.license_number}"
+    )
+
     return new_user
 
 @router.post("/login", response_model=Token)
@@ -45,6 +104,8 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == login_data.email).first()
     if not user or not security.verify_password(login_data.password, user.hashed_password):
         raise HTTPException(401, detail="Incorrect email or password", headers={"WWW-Authenticate": "Bearer"})
+    if not user.is_active:
+        raise HTTPException(400, detail="Account is pending approval or inactive")
     return {"access_token": security.create_access_token(data={"sub": user.email}), "token_type": "bearer"}
 
 @router.get("/me", response_model=UserResponse)
@@ -114,3 +175,47 @@ def get_my_doctor_profile(
         db.refresh(doctor)
         
     return doctor
+
+# --- ✅ NEW: Verification Endpoints ---
+
+@router.get("/verify-email")
+def verify_email(email: str, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(404, detail="User not found")
+    
+    user.is_verified = True
+    db.commit()
+    return {"message": "Email verified successfully"}
+
+@router.post("/admin/approve-doctor/{doctor_id}")
+def approve_doctor(
+    doctor_id: int, 
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    # In real app: current_user: User = Depends(deps.get_current_active_superuser)
+):
+    doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
+    if not doctor:
+        raise HTTPException(404, detail="Doctor not found")
+        
+    user = db.query(User).filter(User.id == doctor.user_id).first()
+    if not user:
+        raise HTTPException(404, detail="User associated with doctor not found")
+
+    # Approve
+    doctor.status = "active"
+    doctor.is_verified = True
+    user.is_active = True
+    
+    db.commit()
+    
+    # Notify Doctor
+    background_tasks.add_task(
+        send_email,
+        user.email,
+        "Application Approved!",
+        "Your doctor account is now active. You can log in."
+    )
+    
+    return {"message": f"Doctor {doctor.full_name} approved"}

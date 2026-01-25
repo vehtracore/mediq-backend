@@ -40,6 +40,7 @@ class UserResponse(UserBase):
     id: int
     is_active: bool
     image_url: Optional[str] = None # ✅ ADDED
+    is_verified: bool = False # ✅ ADDED
     
     # Medical History
     blood_type: Optional[str] = None
