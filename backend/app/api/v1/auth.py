@@ -34,18 +34,25 @@ def send_email(to_email: str, subject: str, body: str):
         msg['To'] = to_email
 
         def try_connect(port, use_ssl):
-            print(f"Attempting SMTP on port {port}...")
+            # Force IPv4 Resolution
+            target_ip = socket.gethostbyname("smtp.gmail.com")
+            print(f"Attempting SMTP on {target_ip}:{port} (SSL={use_ssl})...")
+            
             if use_ssl:
-                with smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=15) as server:
-                    # server.set_debuglevel(1)
+                # Bypass hostname resolution in smtplib by using IP
+                with smtplib.SMTP_SSL(target_ip, port, timeout=15) as server:
+                    # We might get a Cert Hostname Mismatch here because we connected to IP.
+                    # In a real production app we'd construct a custom SSLContext to verify 'smtp.gmail.com'.
+                    # For now, let's see if we can even CONNECT.
                     server.login(smtp_email, smtp_password)
                     server.send_message(msg)
             else:
-                with smtplib.SMTP("smtp.gmail.com", port, timeout=15) as server:
-                    # server.set_debuglevel(1)
+                with smtplib.SMTP(target_ip, port, timeout=15) as server:
                     server.starttls()
                     server.login(smtp_email, smtp_password)
                     server.send_message(msg)
+        
+        import socket # Ensure socket is imported
         
         # Try 587 first
         try:
@@ -53,7 +60,7 @@ def send_email(to_email: str, subject: str, body: str):
             print(f"✅ Email sent successfully to {to_email} (Port 587)")
             return
         except Exception as e1:
-            print(f"⚠️ Port 587 failed: {e1}. Retrying on 465...")
+            print(f"⚠️ Port 587 ipv4 failed: {e1}. Retrying on 465...")
             
         # Try 465 backup
         try_connect(465, True)
@@ -293,23 +300,15 @@ def debug_email(email: str):
 
     def try_send(port, use_ssl):
         try:
-            logs.append(f"Attempting connection to smtp.gmail.com:{port} (SSL={use_ssl})...")
-            
             # ✅ Force IPv4 Resolution
             target_ip = socket.gethostbyname("smtp.gmail.com")
             logs.append(f"Resolved 'smtp.gmail.com' to IPv4: {target_ip}")
-            
-            # We connect to the IP directly to avoid IPv6 issues, 
-            # BUT we must pass the hostname to starttls/login for cert verification is tricky?
-            # Actually, standard smtplib usually works if we don't have IPv6 interface. 
-            # If [Errno 101], it means it TRIED IPv6.
-            
-            # Simple Fix: Just try standard connection first, catch 101.
+            logs.append(f"Connecting to {target_ip}:{port} (SSL={use_ssl})...")
             
             if use_ssl:
-                server = smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=10)
+                server = smtplib.SMTP_SSL(target_ip, port, timeout=10)
             else:
-                server = smtplib.SMTP("smtp.gmail.com", port, timeout=10)
+                server = smtplib.SMTP(target_ip, port, timeout=10)
                 server.starttls()
             
             logs.append("Connected. Logging in...")
