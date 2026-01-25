@@ -40,7 +40,7 @@ class UserResponse(UserBase):
     id: int
     is_active: bool
     image_url: Optional[str] = None # ✅ ADDED
-    is_verified: bool = False # ✅ ADDED
+    is_verified: Optional[bool] = False # ✅ Optional: column may not exist in prod DB
     
     # Medical History
     blood_type: Optional[str] = None
