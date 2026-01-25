@@ -14,8 +14,8 @@ app = FastAPI(title="MDQplus API")
 # --- 🚀 RENDER CORS FIX (The Critical Part) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=".*", # ✅ Permissive for Dev/Dynamic Ports
-    allow_credentials=True,
+    allow_origins=["*"],  # ✅ Explicit wildcard
+    allow_credentials=False,  # ✅ Disabled to work with wildcard
     allow_methods=["*"],
     allow_headers=["*"],
 )
