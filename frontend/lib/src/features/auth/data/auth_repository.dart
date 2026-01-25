@@ -31,6 +31,9 @@ class AuthRepository {
           aOptions: AndroidOptions(encryptedSharedPreferences: true),
         );
       }
+    } on DioException catch (e) {
+      final msg = e.response?.data['detail'] ?? "Login failed. Please check your connection.";
+      throw Exception(msg);
     } catch (e) {
       throw Exception("Login failed: $e");
     }
@@ -46,6 +49,9 @@ class AuthRepository {
         'dob': dob.toIso8601String().split('T')[0], // YYYY-MM-DD
         'role': 'patient'
       });
+    } on DioException catch (e) {
+      final msg = e.response?.data['detail'] ?? "Signup failed. Please try again.";
+      throw Exception(msg);
     } catch (e) {
       throw Exception("Signup failed: $e");
     }

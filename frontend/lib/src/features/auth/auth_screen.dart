@@ -125,9 +125,16 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     ref.listen<AsyncValue<void>>(authControllerProvider,
         (previous, next) {
       if (next.hasError) {
+        String errorMsg = next.error.toString();
+        // The Repository now throws clean Exceptions like "Exception: Email already registered"
+        // We just need to remove the "Exception: " prefix
+        if (errorMsg.startsWith("Exception: ")) {
+          errorMsg = errorMsg.replaceFirst("Exception: ", "");
+        }
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(next.error.toString()),
+            content: Text(errorMsg),
             backgroundColor: Colors.red,
           ),
         );

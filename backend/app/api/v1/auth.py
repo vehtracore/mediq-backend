@@ -239,3 +239,42 @@ def approve_doctor(
     )
     
     return {"message": f"Doctor {doctor.full_name} approved"}
+
+@router.get("/debug-email")
+def debug_email(email: str):
+    """
+    Temporary endpoint to debug SMTP on Render.
+    Usage: GET /api/v1/auth/debug-email?email=your@email.com
+    """
+    import smtplib
+    import os
+    from email.message import EmailMessage
+
+    smtp_email = os.getenv("SMTP_EMAIL")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+
+    result = {
+        "env_email_found": bool(smtp_email),
+        "env_password_found": bool(smtp_password),
+        "smtp_email_value": smtp_email, 
+    }
+
+    if not smtp_email or not smtp_password:
+        return {"status": "error", "details": "Environment variables missing", "debug_info": result}
+
+    try:
+        msg = EmailMessage()
+        msg.set_content(f"Debug Test from Render. If you read this, SMTP is working.")
+        msg['Subject'] = "MedIQ Debug Email"
+        msg['From'] = smtp_email
+        msg['To'] = email
+
+        # Try connecting with verbose output capture (simulated via try/catch steps)
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        server.login(smtp_email, smtp_password)
+        server.send_message(msg)
+        server.quit()
+        
+        return {"status": "success", "message": f"Email sent to {email}", "debug_info": result}
+    except Exception as e:
+        return {"status": "error", "error_message": str(e), "error_type": type(e).__name__, "debug_info": result}
