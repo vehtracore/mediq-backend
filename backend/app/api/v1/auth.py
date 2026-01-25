@@ -31,29 +31,18 @@ def send_email(to_email: str, subject: str, body: str):
         msg.set_content(body)
         msg['Subject'] = subject
         msg['From'] = smtp_email
-def send_email(to_email: str, subject: str, body: str):
-    smtp_email = os.getenv("SMTP_EMAIL")
-    smtp_password = os.getenv("SMTP_PASSWORD")
-
-    if not smtp_email or not smtp_password:
-        print("❌ SMTP Credentials Missing. Email NOT sent.")
-        return
-
-    try:
-        msg = EmailMessage()
-        msg.set_content(body)
-        msg['Subject'] = subject
-        msg['From'] = smtp_email
         msg['To'] = to_email
 
         def try_connect(port, use_ssl):
             print(f"Attempting SMTP on port {port}...")
             if use_ssl:
                 with smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=15) as server:
+                    # server.set_debuglevel(1)
                     server.login(smtp_email, smtp_password)
                     server.send_message(msg)
             else:
                 with smtplib.SMTP("smtp.gmail.com", port, timeout=15) as server:
+                    # server.set_debuglevel(1)
                     server.starttls()
                     server.login(smtp_email, smtp_password)
                     server.send_message(msg)
