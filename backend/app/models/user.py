@@ -14,8 +14,8 @@ class User(Base):
     hashed_password = Column(String)
     dob = Column(Date, nullable=True)
     location = Column(String, nullable=True)
-    image_url = Column(String, nullable=True) # ✅ NEW COLUMN
-    is_verified = Column(Boolean, default=False) # ✅ NEW: Email Verification
+    # image_url = Column(String, nullable=True) # ✅ NEW COLUMN
+    # is_verified = Column(Boolean, default=False) # ✅ NEW: Email Verification
     
     # --- ROLE & STATUS ---
     role = Column(String, default="patient")
