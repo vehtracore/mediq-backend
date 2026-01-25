@@ -70,10 +70,16 @@ def get_pending_doctors(db: Session = Depends(get_db), admin: User = Depends(get
 def verify_doctor(doctor_id: int, db: Session = Depends(get_db), admin: User = Depends(get_current_admin)):
     doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
     if not doctor: raise HTTPException(404, "Doctor not found")
+    
+    user = db.query(User).filter(User.id == doctor.user_id).first()
+    if not user: raise HTTPException(404, "User for doctor not found")
+
     doctor.is_verified = True
     doctor.is_available = True 
+    user.is_active = True # ✅ Unblock login
+    
     db.commit()
-    return {"message": "Doctor verified."}
+    return {"message": "Doctor verified and account activated."}
 
 @router.delete("/doctors/{doctor_id}/reject")
 def reject_doctor(doctor_id: int, db: Session = Depends(get_db), admin: User = Depends(get_current_admin)):
