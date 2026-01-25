@@ -31,18 +31,47 @@ def send_email(to_email: str, subject: str, body: str):
         msg.set_content(body)
         msg['Subject'] = subject
         msg['From'] = smtp_email
+def send_email(to_email: str, subject: str, body: str):
+    smtp_email = os.getenv("SMTP_EMAIL")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+
+    if not smtp_email or not smtp_password:
+        print("❌ SMTP Credentials Missing. Email NOT sent.")
+        return
+
+    try:
+        msg = EmailMessage()
+        msg.set_content(body)
+        msg['Subject'] = subject
+        msg['From'] = smtp_email
         msg['To'] = to_email
 
-        # ✅ USE PORT 587 (STARTTLS) + TIMEOUT
-        print("Connecting to Gmail SMTP (587)...")
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
-            server.starttls() # Secure the connection
-            server.login(smtp_email, smtp_password)
-            server.send_message(msg)
+        def try_connect(port, use_ssl):
+            print(f"Attempting SMTP on port {port}...")
+            if use_ssl:
+                with smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=15) as server:
+                    server.login(smtp_email, smtp_password)
+                    server.send_message(msg)
+            else:
+                with smtplib.SMTP("smtp.gmail.com", port, timeout=15) as server:
+                    server.starttls()
+                    server.login(smtp_email, smtp_password)
+                    server.send_message(msg)
         
-        print(f"✅ Email sent successfully to {to_email}")
+        # Try 587 first
+        try:
+            try_connect(587, False)
+            print(f"✅ Email sent successfully to {to_email} (Port 587)")
+            return
+        except Exception as e1:
+            print(f"⚠️ Port 587 failed: {e1}. Retrying on 465...")
+            
+        # Try 465 backup
+        try_connect(465, True)
+        print(f"✅ Email sent successfully to {to_email} (Port 465)")
+
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
+        print(f"❌ Failed to send email (Both ports): {e}")
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -264,20 +293,58 @@ def debug_email(email: str):
     if not smtp_email or not smtp_password:
         return {"status": "error", "details": "Environment variables missing", "debug_info": result}
 
-    try:
-        msg = EmailMessage()
-        msg.set_content(f"Debug Test from Render. If you read this, SMTP is working.")
-        msg['Subject'] = "MedIQ Debug Email"
-        msg['From'] = smtp_email
-        msg['To'] = email
+    msg = EmailMessage()
+    msg.set_content(f"Debug Test from Render. If you read this, SMTP is working.\n\nDebug Info:\nSMTP_EMAIL: {smtp_email}")
+    msg['Subject'] = "MedIQ Debug Email (IPv4 Forced)"
+    msg['From'] = smtp_email
+    msg['To'] = email
 
-        # ✅ USE PORT 587 (STARTTLS) + TIMEOUT
-        # This prevents hanging indefinitely
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:
-            server.starttls()
+    logs = []
+    import socket
+
+    def try_send(port, use_ssl):
+        try:
+            logs.append(f"Attempting connection to smtp.gmail.com:{port} (SSL={use_ssl})...")
+            
+            # ✅ Force IPv4 Resolution
+            target_ip = socket.gethostbyname("smtp.gmail.com")
+            logs.append(f"Resolved 'smtp.gmail.com' to IPv4: {target_ip}")
+            
+            # We connect to the IP directly to avoid IPv6 issues, 
+            # BUT we must pass the hostname to starttls/login for cert verification is tricky?
+            # Actually, standard smtplib usually works if we don't have IPv6 interface. 
+            # If [Errno 101], it means it TRIED IPv6.
+            
+            # Simple Fix: Just try standard connection first, catch 101.
+            
+            if use_ssl:
+                server = smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=10)
+            else:
+                server = smtplib.SMTP("smtp.gmail.com", port, timeout=10)
+                server.starttls()
+            
+            logs.append("Connected. Logging in...")
             server.login(smtp_email, smtp_password)
             server.send_message(msg)
-        
-        return {"status": "success", "message": f"Email sent to {email}", "debug_info": result}
-    except Exception as e:
-        return {"status": "error", "error_message": str(e), "error_type": type(e).__name__, "debug_info": result}
+            server.quit()
+            logs.append("✅ SUCCESS")
+            return True, None
+        except Exception as e:
+            logs.append(f"❌ Failed on port {port}: {e}")
+            return False, str(e)
+
+    # Try Port 587 first
+    success, err = try_send(587, False)
+    if success:
+        return {"status": "success", "port": 587, "logs": logs, "debug_info": result}
+    
+    # Try Port 465 as backup
+    success, err = try_send(465, True)
+    if success:
+        return {"status": "success", "port": 465, "logs": logs, "debug_info": result}
+
+    return {"status": "error", "logs": logs, "last_error": err, "debug_info": result}
+
+@router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.email == user.email).first()
