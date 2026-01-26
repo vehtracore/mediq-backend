@@ -12,6 +12,37 @@ from app.api import deps
 
 router = APIRouter()
 
+# --- 🧪 DIAGNOSTIC: Test Email Endpoint ---
+@router.get("/test-email/{email}")
+def test_email_endpoint(email: str):
+    """
+    Diagnostic endpoint to test email delivery.
+    Sends synchronously and returns result directly.
+    """
+    import os
+    import resend
+    
+    try:
+        api_key = os.getenv("RESEND_API_KEY")
+        from_email = os.getenv("RESEND_FROM_EMAIL", "MedIQ <onboarding@resend.dev>")
+        
+        if not api_key:
+            return {"success": False, "error": "RESEND_API_KEY not found in environment"}
+        
+        resend.api_key = api_key
+        
+        result = resend.Emails.send({
+            "from": from_email,
+            "to": [email],
+            "subject": "MedIQ Email Test",
+            "text": "This is a test email from MedIQ. If you received this, email delivery is working!"
+        })
+        
+        return {"success": True, "email_id": result.get("id"), "sent_to": email}
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 # --- 📧 EMAIL SERVICE (Resend HTTP API) ---
 import os
 import logging
