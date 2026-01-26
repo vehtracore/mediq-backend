@@ -18,15 +18,33 @@ import smtplib
 import os
 from email.message import EmailMessage
 
-# --- 📧 HELPER: Mock Email Service ---
+# --- 📧 REAL EMAIL SERVICE ---
 def send_email(to_email: str, subject: str, body: str):
-    # In a real app, integrate SES/SendGrid/SMTP here.
-    # Note: Render Free Tier blocks SMTP ports 25/465/587, so we mock this.
-    print(f"------------ EMAIL SENDING (MOCK) ------------")
-    print(f"TO: {to_email}")
-    print(f"SUBJECT: {subject}")
-    print(f"BODY: {body}")
-    print(f"----------------------------------------------")
+    try:
+        smtp_user = os.getenv("SMTP_EMAIL")
+        smtp_password = os.getenv("SMTP_PASSWORD")
+        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+        smtp_port = int(os.getenv("SMTP_PORT", 587))
+
+        if not smtp_user or not smtp_password:
+            print("⚠️ EMAIL NOT SENT: Missing SMTP credentials in .env")
+            return
+
+        msg = EmailMessage()
+        msg.set_content(body)
+        msg["Subject"] = subject
+        msg["From"] = smtp_user
+        msg["To"] = to_email
+
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.send_message(msg)
+        
+        print(f"✅ EMAIL SENT to {to_email}")
+
+    except Exception as e:
+        print(f"❌ EMAIL FAILED: {e}")
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -42,19 +60,21 @@ def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session
         location=user.location, 
         hashed_password=hashed_pwd, 
         role=user.role,
-        is_verified=True # ✅ Auto-verify since email is mocked
+        is_verified=False # ✅ Set to False so they MUST verify
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
     
     # ✅ Background Task: Send Verification Email
-    verification_link = f"http://localhost:8000/api/v1/auth/verify-email?email={new_user.email}"
+    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+    verification_link = f"{backend_url}/api/v1/auth/verify-email?email={new_user.email}"
+    
     background_tasks.add_task(
         send_email, 
         new_user.email, 
         "Verify your Mediq Account", 
-        f"Click here to verify: {verification_link}"
+        f"Welcome to MedIQ! Please click here to verify your account: {verification_link}"
     )
 
     return new_user
@@ -112,6 +132,14 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(401, detail="Incorrect email or password", headers={"WWW-Authenticate": "Bearer"})
     if not user.is_active:
         raise HTTPException(400, detail="Account is pending approval or inactive")
+        
+    # ✅ FIX: Doctor "Double-Lock"
+    # If the user is a doctor, we MUST check the Doctor table for 'active' status
+    if user.role == "doctor":
+        doctor = db.query(Doctor).filter(Doctor.user_id == user.id).first()
+        if not doctor or doctor.status != "active":
+            raise HTTPException(400, detail="Doctor account is pending approval")
+
     return {"access_token": security.create_access_token(data={"sub": user.email}), "token_type": "bearer"}
 
 @router.get("/me", response_model=UserResponse)

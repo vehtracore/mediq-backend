@@ -258,7 +258,19 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
         prefixIcon: Icon(icon),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       ),
-      validator: (v) => v!.isEmpty ? "Required" : null,
+      validator: (v) {
+        if (v == null || v.isEmpty) return "Required";
+        
+        // 🔒 STRICT VALIDATION
+        if (label == "Email") {
+          final emailRegex = RegExp(r"^[a-zA-Z0-9.]+@[a-zA-Z0-9]+\.[a-zA-Z]+");
+          if (!emailRegex.hasMatch(v)) return "Invalid Email";
+        }
+        
+        if (isPassword && v.length < 6) return "Min 6 chars";
+        
+        return null;
+      },
     );
   }
 }
