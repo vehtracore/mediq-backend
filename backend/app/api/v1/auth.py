@@ -22,13 +22,23 @@ def test_email_endpoint(email: str):
     import os
     import resend
     
+    # Debug: List all env vars that contain 'RESEND' or start with key letters
+    all_env = os.environ
+    resend_vars = {k: v[:10]+"..." if v else v for k, v in all_env.items() if "RESEND" in k.upper()}
+    
+    api_key = os.getenv("RESEND_API_KEY")
+    from_email = os.getenv("RESEND_FROM_EMAIL", "MedIQ <onboarding@resend.dev>")
+    
+    debug_info = {
+        "resend_env_vars_found": resend_vars,
+        "api_key_present": bool(api_key),
+        "api_key_prefix": api_key[:10] + "..." if api_key else None
+    }
+    
+    if not api_key:
+        return {"success": False, "error": "RESEND_API_KEY not found", "debug": debug_info}
+    
     try:
-        api_key = os.getenv("RESEND_API_KEY")
-        from_email = os.getenv("RESEND_FROM_EMAIL", "MedIQ <onboarding@resend.dev>")
-        
-        if not api_key:
-            return {"success": False, "error": "RESEND_API_KEY not found in environment"}
-        
         resend.api_key = api_key
         
         result = resend.Emails.send({
@@ -38,10 +48,10 @@ def test_email_endpoint(email: str):
             "text": "This is a test email from MedIQ. If you received this, email delivery is working!"
         })
         
-        return {"success": True, "email_id": result.get("id"), "sent_to": email}
+        return {"success": True, "email_id": result.get("id"), "sent_to": email, "debug": debug_info}
         
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": str(e), "debug": debug_info}
 
 # --- 📧 EMAIL SERVICE (Resend HTTP API) ---
 import os
