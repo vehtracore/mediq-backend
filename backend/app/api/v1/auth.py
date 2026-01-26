@@ -14,19 +14,28 @@ router = APIRouter()
 
 # --- 📧 EMAIL SERVICE (Resend HTTP API) ---
 import os
+import logging
 import resend
+
+# Configure logger for email service
+logger = logging.getLogger("uvicorn.error")
 
 def send_email(to_email: str, subject: str, body: str):
     """
     Send email using Resend HTTP API.
     This works on Render Free Tier (which blocks SMTP ports).
     """
+    logger.info(f"[EMAIL] Attempting to send email to: {to_email}")
+    
     try:
         api_key = os.getenv("RESEND_API_KEY")
         from_email = os.getenv("RESEND_FROM_EMAIL", "MedIQ <onboarding@resend.dev>")
         
+        logger.info(f"[EMAIL] API Key present: {bool(api_key)}")
+        logger.info(f"[EMAIL] From: {from_email}")
+        
         if not api_key:
-            print("EMAIL NOT SENT: Missing RESEND_API_KEY in environment")
+            logger.error("[EMAIL] NOT SENT: Missing RESEND_API_KEY in environment")
             return
         
         resend.api_key = api_key
@@ -38,10 +47,10 @@ def send_email(to_email: str, subject: str, body: str):
             "text": body
         })
         
-        print(f"EMAIL SENT to {to_email} (ID: {result.get('id', 'N/A')})")
+        logger.info(f"[EMAIL] SUCCESS! Sent to {to_email} (ID: {result.get('id', 'N/A')})")
 
     except Exception as e:
-        print(f"EMAIL FAILED: {e}")
+        logger.error(f"[EMAIL] FAILED: {e}")
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
