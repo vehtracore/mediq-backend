@@ -12,39 +12,36 @@ from app.api import deps
 
 router = APIRouter()
 
-# --- 📧 HELPER: Mock Email Service ---
-# --- 📧 REAL EMAIL SERVICE ---
-import smtplib
+# --- 📧 EMAIL SERVICE (Resend HTTP API) ---
 import os
-from email.message import EmailMessage
+import resend
 
-# --- 📧 REAL EMAIL SERVICE ---
 def send_email(to_email: str, subject: str, body: str):
+    """
+    Send email using Resend HTTP API.
+    This works on Render Free Tier (which blocks SMTP ports).
+    """
     try:
-        smtp_user = os.getenv("SMTP_EMAIL")
-        smtp_password = os.getenv("SMTP_PASSWORD")
-        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", 587))
-
-        if not smtp_user or not smtp_password:
-            print("⚠️ EMAIL NOT SENT: Missing SMTP credentials in .env")
-            return
-
-        msg = EmailMessage()
-        msg.set_content(body)
-        msg["Subject"] = subject
-        msg["From"] = smtp_user
-        msg["To"] = to_email
-
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.send_message(msg)
+        api_key = os.getenv("RESEND_API_KEY")
+        from_email = os.getenv("RESEND_FROM_EMAIL", "MedIQ <onboarding@resend.dev>")
         
-        print(f"✅ EMAIL SENT to {to_email}")
+        if not api_key:
+            print("EMAIL NOT SENT: Missing RESEND_API_KEY in environment")
+            return
+        
+        resend.api_key = api_key
+        
+        result = resend.Emails.send({
+            "from": from_email,
+            "to": [to_email],
+            "subject": subject,
+            "text": body
+        })
+        
+        print(f"EMAIL SENT to {to_email} (ID: {result.get('id', 'N/A')})")
 
     except Exception as e:
-        print(f"❌ EMAIL FAILED: {e}")
+        print(f"EMAIL FAILED: {e}")
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
