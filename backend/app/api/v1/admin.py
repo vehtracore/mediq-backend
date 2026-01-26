@@ -76,7 +76,8 @@ def verify_doctor(doctor_id: int, db: Session = Depends(get_db), admin: User = D
 
     doctor.is_verified = True
     doctor.is_available = True 
-    user.is_active = True # ✅ Unblock login
+    doctor.status = "active"  # ✅ FIX: Enable Double-Lock login
+    user.is_active = True     # ✅ Unblock login
     
     db.commit()
     return {"message": "Doctor verified and account activated."}

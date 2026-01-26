@@ -13,7 +13,7 @@ load_dotenv()
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 
 # DEBUG PRINT: This will tell us exactly what the script is seeing
-print(f"🔌 CONNECTING TO: {SQLALCHEMY_DATABASE_URL}")
+print(f"CONNECTING TO: {SQLALCHEMY_DATABASE_URL}")
 
 if not SQLALCHEMY_DATABASE_URL:
     print("❌ ERROR: Could not find DATABASE_URL in .env file.")
