@@ -115,12 +115,25 @@ def register_doctor(doctor_in: DoctorRegister, background_tasks: BackgroundTasks
     db.commit()
     db.refresh(new_user)
 
-    # ✅ Notify Admin
+    # ✅ Email 1: Confirmation to the Doctor
     background_tasks.add_task(
         send_email,
-        "admin@mediq.com",
-        "New Doctor Application",
-        f"Dr. {doctor_in.full_name} has applied. License: {doctor_in.license_number}"
+        doctor_in.email,
+        "MedIQ: Application Received!",
+        f"Hello Dr. {doctor_in.full_name},\n\n"
+        f"Thank you for applying to join MedIQ!\n\n"
+        f"Your application is now pending admin review. "
+        f"You will receive another email once your account is approved.\n\n"
+        f"- The MedIQ Team"
+    )
+
+    # ✅ Email 2: Notify Admin (using SMTP_EMAIL as admin for now)
+    admin_email = os.getenv("SMTP_EMAIL", "admin@mediq.com")
+    background_tasks.add_task(
+        send_email,
+        admin_email,
+        "MedIQ: New Doctor Application",
+        f"Dr. {doctor_in.full_name} has applied.\n\nEmail: {doctor_in.email}\nLicense: {doctor_in.license_number}\n\nPlease review in the Admin Dashboard."
     )
 
     return new_user
