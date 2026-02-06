@@ -35,6 +35,7 @@ import '../../features/emergency/presentation/emergency_screen.dart';
 import '../../features/subscription/presentation/subscription_screen.dart';
 import 'package:mediq_app/src/features/chat/presentation/video_call_screen.dart';
 import '../../features/profile/presentation/medical_history_screen.dart';
+import '../../features/lab/presentation/lab_scanner_screen.dart';
 
 final goRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
@@ -164,6 +165,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
             amount: (data['amount'] as num).toDouble(),
           );
         },
+      ),
+      GoRoute(
+        path: '/lab_scanner',
+        builder: (context, state) => const LabScannerScreen(),
       ),
     ],
   );

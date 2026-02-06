@@ -104,3 +104,114 @@ async def get_medical_response(user_text: str, history: list = None, image_url: 
     except Exception as e:
         logger.error(f"Gemini API Error: {e}")
         return f"System Error: {str(e)}"
+
+
+# --- LAB TECHNICIAN PROMPT FOR URINALYSIS STRIP ANALYSIS ---
+LAB_TECHNICIAN_PROMPT = """
+You are a certified laboratory technician with expertise in urinalysis test strip interpretation.
+Your task is to analyze the provided image of a urinalysis test strip with EXTREME precision.
+
+**STEP 1: QUALITY CONTROL**
+First, assess the image quality:
+- Is the image blurry or out of focus?
+- Is the lighting adequate (not too dark, not overexposed)?
+- Is the test strip clearly visible and properly oriented?
+
+If the image fails quality control, respond ONLY with:
+{"status": "REJECTED", "reason": "[specific issue]", "lighting_score": "Poor"}
+
+**STEP 2: CALIBRATION**
+Look for a white background or reference area in the image.
+Mentally calibrate for any color cast or lighting conditions.
+Note the overall lighting quality as "Good", "Acceptable", or "Poor".
+
+**STEP 3: VALUE EXTRACTION**
+For each test pad on the strip, compare the color to the standard reference chart.
+Extract values for ALL of the following parameters:
+- Leukocytes (LEU)
+- Nitrites (NIT)
+- Urobilinogen (UBG)
+- Protein (PRO)
+- pH
+- Blood (BLD)
+- Specific Gravity (SG)
+- Ketones (KET)
+- Bilirubin (BIL)
+- Glucose (GLU)
+
+**STEP 4: RESPONSE FORMAT**
+Return ONLY valid JSON in this exact format (no markdown, no explanation):
+{
+    "status": "SUCCESS",
+    "lighting_score": "Good|Acceptable|Poor",
+    "readings": {
+        "leukocytes": {"value": "Negative|Trace|+|++|+++", "color": "observed color"},
+        "nitrites": {"value": "Negative|Positive", "color": "observed color"},
+        "urobilinogen": {"value": "Normal|+|++|+++", "color": "observed color"},
+        "protein": {"value": "Negative|Trace|+|++|+++", "color": "observed color"},
+        "ph": {"value": "5.0-9.0", "color": "observed color"},
+        "blood": {"value": "Negative|Trace|+|++|+++", "color": "observed color"},
+        "specific_gravity": {"value": "1.000-1.030", "color": "observed color"},
+        "ketones": {"value": "Negative|Trace|+|++|+++", "color": "observed color"},
+        "bilirubin": {"value": "Negative|+|++|+++", "color": "observed color"},
+        "glucose": {"value": "Negative|Trace|+|++|+++", "color": "observed color"}
+    },
+    "notes": "Any additional observations about the sample"
+}
+"""
+
+
+async def analyze_lab_strip(image_bytes: bytes) -> dict:
+    """
+    Analyze a urinalysis test strip image using Gemini Vision.
+    
+    Args:
+        image_bytes: Raw bytes of the uploaded image
+        
+    Returns:
+        dict: Analysis results with status, readings, and quality score
+    """
+    import io
+    import json
+    
+    if not GEMINI_API_KEY:
+        return {"status": "ERROR", "reason": "AI Service is not configured properly."}
+    
+    try:
+        # 1. Load Image from Bytes
+        img = PIL.Image.open(io.BytesIO(image_bytes))
+        
+        # 2. Initialize Vision Model
+        vision_model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # 3. Send to Gemini with Lab Technician Prompt
+        response = await vision_model.generate_content_async([
+            LAB_TECHNICIAN_PROMPT,
+            img,
+            "Analyze this urinalysis test strip image and provide the results in the specified JSON format."
+        ])
+        
+        raw_text = response.text.strip()
+        
+        # 4. Clean Response (remove markdown code blocks if present)
+        if raw_text.startswith("```"):
+            # Remove ```json and trailing ```
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+            raw_text = raw_text.strip()
+        
+        # 5. Parse JSON Response
+        result = json.loads(raw_text)
+        
+        logger.info(f"Lab Strip Analysis: Status={result.get('status')}, Lighting={result.get('lighting_score')}")
+        return result
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"Lab Strip JSON Parse Error: {e}")
+        logger.error(f"Raw response: {raw_text[:500] if 'raw_text' in dir() else 'N/A'}")
+        return {"status": "ERROR", "reason": "Failed to parse AI response"}
+        
+    except Exception as e:
+        logger.error(f"Lab Strip Analysis Error: {e}")
+        return {"status": "ERROR", "reason": str(e)}

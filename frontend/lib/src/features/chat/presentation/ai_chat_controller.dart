@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import '../../lab/data/lab_result_model.dart';
 
 // 1. STATE
 class AiChatState {
@@ -92,8 +93,63 @@ class AiChatController extends StateNotifier<AiChatState> {
       };
       state = state.copyWith(messages: [...state.messages, errorMsg], isLoading: false);
     }
+
+  }
+
+  Future<void> sendLabResult(LabAnalysisResponse result) async {
+    // 1. Create a "Medical Card" message for the user's UI
+    final userMsg = {
+      'role': 'user',
+      'message': 'Lab Result Scanned',
+      'type': 'lab_result',
+      'lab_data': result, // Store full object for bubble rendering
+    };
+    
+    // Add to local state immediately
+    state = state.copyWith(messages: [...state.messages, userMsg], isLoading: true);
+
+    // 2. Construct the Hidden System Prompt for Gemini
+    final hiddenPrompt = _buildSystemPrompt(result);
+
+    try {
+      // Connects to your backend
+      final response = await _dio.post('/api/v1/chat/analyze',
+          data: {
+            "message": hiddenPrompt, 
+            "history": [] // TODO: Add history if needed
+          });
+
+      final aiMsg = {'role': 'ai', 'message': response.data['response']};
+      state = state.copyWith(messages: [...state.messages, aiMsg], isLoading: false);
+      
+    } catch (e) {
+      final errorMsg = {'role': 'system', 'message': "AI Analysis Failed: $e"};
+      state = state.copyWith(messages: [...state.messages, errorMsg], isLoading: false);
+    }
+  }
+
+  String _buildSystemPrompt(LabAnalysisResponse result) {
+    if (result.readings == null) return "User scanned a test strip but no readings were found.";
+    
+    final r = result.readings!;
+    // Build a concise summary for the AI
+    return """
+[SYSTEM NOTIFICATION: User performed a urinalysis scan.]
+RESULTS:
+- Leukocytes: ${r.leukocytes?.value}
+- Nitrites: ${r.nitrites?.value}
+- Protein: ${r.protein?.value}
+- pH: ${r.ph?.value}
+- Blood: ${r.blood?.value}
+- Glucose: ${r.glucose?.value}
+- Ketones: ${r.ketones?.value}
+- Billirubin: ${r.bilirubin?.value}
+
+INSTRUCTION: Analyze these results. If any values are abnormal (Positive/High), explain what they might indicate in simple terms. Ask if they have specific symptoms related to these findings.
+""";
   }
 }
+
 
 // 3. PROVIDER
 // autoDispose ensures the session is wiped when user leaves the screen

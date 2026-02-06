@@ -8,6 +8,9 @@ import 'package:mediq_app/src/features/chat/presentation/ai_chat_controller.dart
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:go_router/go_router.dart';
+import '../../lab/data/lab_result_model.dart';
+import 'widgets/lab_result_bubble.dart';
 
 class AiChatScreen extends ConsumerStatefulWidget {
   const AiChatScreen({super.key});
@@ -119,13 +122,41 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     }
   }
 
-  Future<void> _handleImageUpload() async {
-    final url = await ref.read(imageUploadServiceProvider).pickAndUploadImage();
-    if (url != null) {
-      ref
-          .read(aiChatControllerProvider.notifier)
-          .sendMessage("Analyze this image", imageUrl: url);
-    }
+  Future<void> _showAttachmentMenu() async {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.science, color: Colors.blueAccent),
+              title: const Text('Scan Urine Test Strip'),
+              subtitle: const Text('Analyze urinalysis strip with AI'),
+              onTap: () async {
+                Navigator.pop(context); // Close menu
+                final result = await context.push<LabAnalysisResponse>('/lab_scanner');
+                if (result != null) {
+                  ref.read(aiChatControllerProvider.notifier).sendLabResult(result);
+                }
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.image, color: Colors.orangeAccent),
+              title: const Text('Upload Photo'),
+              subtitle: const Text('Skin issues, wounds, etc.'),
+              onTap: () async {
+                Navigator.pop(context);
+                final url = await ref.read(imageUploadServiceProvider).pickAndUploadImage();
+                if (url != null) {
+                  ref.read(aiChatControllerProvider.notifier)
+                     .sendMessage("Analyze this image", imageUrl: url);
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -184,6 +215,15 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                     itemBuilder: (context, index) {
                       final msg = chatState.messages[index];
                       final isMe = msg['role'] == 'user';
+                      
+                      // 1. Check for Lab Result Message
+                      if (msg['type'] == 'lab_result' && msg['lab_data'] != null) {
+                        return LabResultBubble(
+                          result: msg['lab_data'] as LabAnalysisResponse,
+                          isMe: isMe,
+                        );
+                      }
+
                       return _buildMessageBubble(
                         msg['message'],
                         isMe,
@@ -212,9 +252,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             child: Row(
               children: [
                 IconButton(
-                  icon: Icon(Icons.add_photo_alternate,
-                      color: theme.iconTheme.color),
-                  onPressed: _handleImageUpload,
+                  icon: const Icon(Icons.add_circle_outline, color: Colors.blue),
+                  onPressed: _showAttachmentMenu,
                 ),
                 Expanded(
                   child: TextField(

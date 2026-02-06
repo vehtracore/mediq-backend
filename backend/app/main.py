@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from app.core.database import engine, Base
 
 # ✅ KEEP "app." prefix because your main.py is inside the app folder
-from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload
+from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab
 
 Base.metadata.create_all(bind=engine)
 
@@ -32,6 +32,7 @@ app.include_router(media.router, prefix="/api/v1/media", tags=["Media"])
 app.include_router(video.router, prefix="/api/v1/video", tags=["Video Call"])
 app.include_router(chat_socket.router, prefix="/api/v1/p2p", tags=["P2P Chat"])
 app.include_router(upload.router, prefix="/api/v1/upload", tags=["Upload"])
+app.include_router(lab.router, prefix="/api/v1/lab", tags=["Lab Scanner"])
 
 # --- STATIC FILES ---
 static_dir = "static"
