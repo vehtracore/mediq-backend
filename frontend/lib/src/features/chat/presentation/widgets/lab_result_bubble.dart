@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../lab/data/lab_result_model.dart';
+import 'package:mediq_app/src/features/lab/data/lab_result_model.dart';
 
 class LabResultBubble extends StatelessWidget {
   final LabAnalysisResponse result;

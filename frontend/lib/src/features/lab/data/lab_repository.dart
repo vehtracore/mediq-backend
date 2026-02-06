@@ -1,15 +1,15 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../../core/api/api_constants.dart';
-import '../../../../core/api/dio_client.dart';
+import 'package:mediq_app/src/core/api/api_constants.dart';
+import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'lab_result_model.dart';
 import 'package:http_parser/http_parser.dart';
 
-final labRepositoryProvider = Provider((ref) => LabRepository(ref.read(dioClientProvider)));
+final labRepositoryProvider = Provider((ref) => LabRepository(ref.read(dioProvider)));
 
 class LabRepository {
-  final DioClient _dioClient;
+  final Dio _dioClient;
 
   LabRepository(this._dioClient);
 
