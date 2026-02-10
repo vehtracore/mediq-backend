@@ -72,7 +72,7 @@ def send_email(to_email: str, subject: str, body: str):
     try:
         api_key = os.getenv("RESEND_API_KEY")
         # ✅ FIX: Use verified domain
-        from_email = os.getenv("RESEND_FROM_EMAIL", "MedIQ <noreply@mdqplus.com>")
+        from_email = os.getenv("RESEND_FROM_EMAIL", "mdqplus <noreply@mdqplus.com>")
         
         if not api_key:
             logger.error("[EMAIL] NOT SENT: Missing RESEND_API_KEY")
