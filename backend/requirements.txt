@@ -60,5 +60,5 @@ agora-token-builder==1.0.0
 websockets
 
 Pillow
-resend
+resend==2.4.0
  

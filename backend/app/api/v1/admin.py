@@ -109,7 +109,8 @@ def fix_schema(db: Session = Depends(get_db)):
     try:
         # PostgreSQL specific command
         db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS image_url VARCHAR;"))
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token VARCHAR;"))
         db.commit()
-        return {"message": "✅ Schema updated successfully: image_url column added."}
+        return {"message": "✅ Schema updated successfully: image_url and verification_token columns added."}
     except Exception as e:
         return {"message": f"❌ Error updating schema: {e}"}

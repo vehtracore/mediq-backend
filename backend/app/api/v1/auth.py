@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi.responses import HTMLResponse
+import uuid
 from pydantic import EmailStr
 from sqlalchemy.orm import Session
 from datetime import date
@@ -64,19 +66,16 @@ logger = logging.getLogger("uvicorn.error")
 def send_email(to_email: str, subject: str, body: str):
     """
     Send email using Resend HTTP API.
-    This works on Render Free Tier (which blocks SMTP ports).
     """
     logger.info(f"[EMAIL] Attempting to send email to: {to_email}")
     
     try:
         api_key = os.getenv("RESEND_API_KEY")
-        from_email = os.getenv("RESEND_FROM_EMAIL", "MedIQ <onboarding@resend.dev>")
-        
-        logger.info(f"[EMAIL] API Key present: {bool(api_key)}")
-        logger.info(f"[EMAIL] From: {from_email}")
+        # ✅ FIX: Use verified domain
+        from_email = os.getenv("RESEND_FROM_EMAIL", "MedIQ <noreply@mdqplus.com>")
         
         if not api_key:
-            logger.error("[EMAIL] NOT SENT: Missing RESEND_API_KEY in environment")
+            logger.error("[EMAIL] NOT SENT: Missing RESEND_API_KEY")
             return
         
         resend.api_key = api_key
@@ -85,7 +84,7 @@ def send_email(to_email: str, subject: str, body: str):
             "from": from_email,
             "to": [to_email],
             "subject": subject,
-            "text": body
+            "html": body.replace("\n", "<br>") # Simple conversion for now
         })
         
         logger.info(f"[EMAIL] SUCCESS! Sent to {to_email} (ID: {result.get('id', 'N/A')})")
@@ -107,7 +106,8 @@ def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session
         location=user.location, 
         hashed_password=hashed_pwd, 
         role=user.role,
-        is_verified=False # ✅ Set to False so they MUST verify
+        is_verified=False, # ✅ Set to False so they MUST verify
+        verification_token=str(uuid.uuid4()) # ✅ Generate Token
     )
     db.add(new_user)
     db.commit()
@@ -115,13 +115,13 @@ def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session
     
     # ✅ Background Task: Send Verification Email
     backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
-    verification_link = f"{backend_url}/api/v1/auth/verify-email?email={new_user.email}"
+    verification_link = f"{backend_url}/api/v1/auth/verify-email?token={new_user.verification_token}"
     
     background_tasks.add_task(
         send_email, 
         new_user.email, 
         "Verify your Mediq Account", 
-        f"Welcome to MedIQ! Please click here to verify your account: {verification_link}"
+        f"Welcome to MedIQ! PLease click the link below to verify your account:<br><br><a href='{verification_link}'>Verify Email</a>"
     )
 
     return new_user
@@ -143,7 +143,9 @@ def register_doctor(doctor_in: DoctorRegister, background_tasks: BackgroundTasks
         role="doctor", 
         is_active=False, # Wait for Admin
         dob=date(1980, 1, 1), 
-        location="Princeton-Plainsboro"
+        location="Princeton-Plainsboro",
+        is_verified=False,
+        verification_token=str(uuid.uuid4()) # ✅ Generate Token
     )
     db.add(new_user)
     db.flush()
@@ -272,15 +274,25 @@ def get_my_doctor_profile(
 
 # --- ✅ NEW: Verification Endpoints ---
 
-@router.get("/verify-email")
-def verify_email(email: str, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == email).first()
+@router.get("/verify-email", response_class=HTMLResponse)
+def verify_email(token: str, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.verification_token == token).first()
     if not user:
-        raise HTTPException(404, detail="User not found")
+        return HTMLResponse(content="<h1>Invalid or expired token</h1>", status_code=400)
     
     user.is_verified = True
+    user.verification_token = None # Clear token
     db.commit()
-    return {"message": "Email verified successfully"}
+    
+    return HTMLResponse(content="""
+        <html>
+            <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+                <h1 style="color: green;">Email Verified! ✅</h1>
+                <p>Your account has been successfully verified.</p>
+                <p>You can now close this window and log in to the app.</p>
+            </body>
+        </html>
+    """)
 
 @router.post("/admin/approve-doctor/{doctor_id}")
 def approve_doctor(
