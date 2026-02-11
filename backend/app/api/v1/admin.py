@@ -126,6 +126,10 @@ def delete_test_users(emails: dict, db: Session = Depends(get_db)):
         for email in emails.get("emails", []):
             user = db.query(User).filter(User.email == email).first()
             if user:
+                # Delete associated doctor record first (FK constraint)
+                doctor = db.query(Doctor).filter(Doctor.user_id == user.id).first()
+                if doctor:
+                    db.delete(doctor)
                 db.delete(user)
                 deleted.append(email)
         db.commit()
