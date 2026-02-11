@@ -194,6 +194,10 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(401, detail="Incorrect email or password", headers={"WWW-Authenticate": "Bearer"})
     if not user.is_active:
         raise HTTPException(400, detail="Account is pending approval or inactive")
+    
+    # ✅ Email Verification Gate
+    if not user.is_verified:
+        raise HTTPException(403, detail="Please verify your email before logging in. Check your inbox for a verification link.")
         
     # ✅ FIX: Doctor "Double-Lock"
     # If the user is a doctor, we MUST check the Doctor table for 'active' status

@@ -114,3 +114,20 @@ def fix_schema(db: Session = Depends(get_db)):
         return {"message": "✅ Schema updated successfully: image_url and verification_token columns added."}
     except Exception as e:
         return {"message": f"❌ Error updating schema: {e}"}
+
+# --- 🛠️ TEMP: Delete test users ---
+@router.post("/delete-test-users")
+def delete_test_users(emails: dict, db: Session = Depends(get_db)):
+    """Delete test users by email list. Body: {"emails": ["a@b.com"]}"""
+    try:
+        deleted = []
+        for email in emails.get("emails", []):
+            user = db.query(User).filter(User.email == email).first()
+            if user:
+                db.delete(user)
+                deleted.append(email)
+        db.commit()
+        return {"message": f"Deleted {len(deleted)} users", "deleted": deleted}
+    except Exception as e:
+        db.rollback()
+        return {"message": f"Error: {e}"}
