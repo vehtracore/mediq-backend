@@ -29,7 +29,7 @@ def test_email_endpoint(email: str):
     resend_vars = {k: v[:10]+"..." if v else v for k, v in all_env.items() if "RESEND" in k.upper()}
     
     api_key = os.getenv("RESEND_API_KEY")
-    from_email = os.getenv("RESEND_FROM_EMAIL", "MedIQ <onboarding@resend.dev>")
+    from_email = os.getenv("RESEND_FROM_EMAIL", "mdqplus <noreply@mdqplus.com>")
     
     debug_info = {
         "resend_env_vars_found": resend_vars,
@@ -46,8 +46,8 @@ def test_email_endpoint(email: str):
         result = resend.Emails.send({
             "from": from_email,
             "to": [email],
-            "subject": "MedIQ Email Test",
-            "text": "This is a test email from MedIQ. If you received this, email delivery is working!"
+            "subject": "mdqplus Email Test",
+            "text": "This is a test email from mdqplus. If you received this, email delivery is working!"
         })
         
         return {"success": True, "email_id": result.get("id"), "sent_to": email, "debug": debug_info}
@@ -120,8 +120,8 @@ def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session
     background_tasks.add_task(
         send_email, 
         new_user.email, 
-        "Verify your Mediq Account", 
-        f"Welcome to MedIQ! PLease click the link below to verify your account:<br><br><a href='{verification_link}'>Verify Email</a>"
+        "Verify your mdqplus Account", 
+        f"Welcome to mdqplus! PLease click the link below to verify your account:<br><br><a href='{verification_link}'>Verify Email</a>"
     )
 
     return new_user
@@ -168,12 +168,12 @@ def register_doctor(doctor_in: DoctorRegister, background_tasks: BackgroundTasks
     background_tasks.add_task(
         send_email,
         doctor_in.email,
-        "MedIQ: Application Received!",
+        "mdqplus: Application Received!",
         f"Hello Dr. {doctor_in.full_name},\n\n"
-        f"Thank you for applying to join MedIQ!\n\n"
+        f"Thank you for applying to join mdqplus!\n\n"
         f"Your application is now pending admin review. "
         f"You will receive another email once your account is approved.\n\n"
-        f"- The MedIQ Team"
+        f"- The mdqplus Team"
     )
 
     # ✅ Email 2: Notify Admin (using SMTP_EMAIL as admin for now)
@@ -181,7 +181,7 @@ def register_doctor(doctor_in: DoctorRegister, background_tasks: BackgroundTasks
     background_tasks.add_task(
         send_email,
         admin_email,
-        "MedIQ: New Doctor Application",
+        "mdqplus: New Doctor Application",
         f"Dr. {doctor_in.full_name} has applied.\n\nEmail: {doctor_in.email}\nLicense: {doctor_in.license_number}\n\nPlease review in the Admin Dashboard."
     )
 
