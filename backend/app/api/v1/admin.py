@@ -87,8 +87,8 @@ def verify_doctor(doctor_id: int, background_tasks: BackgroundTasks, db: Session
     background_tasks.add_task(
         send_email,
         user.email,
-        "MedIQ: Your Application is Approved!",
-        f"Congratulations Dr. {doctor.full_name}!\n\nYour MedIQ doctor account is now active. You can log in and start accepting patients."
+        "MDQ+: Your Application is Approved!",
+        f"Congratulations Dr. {doctor.full_name}!\n\nYour MDQ+ doctor account is now active. You can log in and start accepting patients."
     )
     
     return {"message": "Doctor verified and account activated."}

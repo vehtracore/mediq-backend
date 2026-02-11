@@ -43,4 +43,4 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.get("/")
 def root():
-    return {"message": "MedIQ Brain is Online"}
+    return {"message": "MDQ+ Brain is Online"}
