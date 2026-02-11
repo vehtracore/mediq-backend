@@ -17,6 +17,7 @@ class User(Base):
     image_url = Column(String, nullable=True) # ✅ NEW COLUMN
     is_verified = Column(Boolean, default=False) # ✅ NEW: Email Verification
     verification_token = Column(String, nullable=True) # ✅ NEW: Verification Token
+    auth_provider = Column(String, nullable=True, default=None)  # "google" | None (password)
     
     # --- ROLE & STATUS ---
     role = Column(String, default="patient")

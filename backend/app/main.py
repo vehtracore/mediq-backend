@@ -1,15 +1,23 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles 
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 from app.core.database import engine, Base
 
 # ✅ KEEP "app." prefix because your main.py is inside the app folder
 from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab
+from app.api.v1 import google_auth
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="MDQplus API")
+
+# --- Session Middleware (required for Google OAuth state tracking) ---
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv("SECRET_KEY", "supersecretkey"),
+)
 
 # --- 🚀 RENDER CORS FIX (The Critical Part) ---
 app.add_middleware(
@@ -33,6 +41,7 @@ app.include_router(video.router, prefix="/api/v1/video", tags=["Video Call"])
 app.include_router(chat_socket.router, prefix="/api/v1/p2p", tags=["P2P Chat"])
 app.include_router(upload.router, prefix="/api/v1/upload", tags=["Upload"])
 app.include_router(lab.router, prefix="/api/v1/lab", tags=["Lab Scanner"])
+app.include_router(google_auth.router, prefix="/auth/google", tags=["Google OAuth"])
 
 # --- STATIC FILES ---
 static_dir = "static"
