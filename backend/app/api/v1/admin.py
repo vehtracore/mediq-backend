@@ -110,8 +110,10 @@ def fix_schema(db: Session = Depends(get_db)):
         # PostgreSQL specific command
         db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS image_url VARCHAR;"))
         db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token VARCHAR;"))
+        # Backfill: existing users (created before verification) should be verified
+        db.execute(text("UPDATE users SET is_verified = TRUE WHERE is_verified IS NULL OR is_verified = FALSE;"))
         db.commit()
-        return {"message": "✅ Schema updated successfully: image_url and verification_token columns added."}
+        return {"message": "✅ Schema updated + existing users marked as verified."}
     except Exception as e:
         return {"message": f"❌ Error updating schema: {e}"}
 
