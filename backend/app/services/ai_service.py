@@ -21,7 +21,7 @@ else:
     logger.warning("WARNING: GEMINI_API_KEY not found in environment.")
 
 # Initialize Model (Preserving the WORKING model name)
-model = genai.GenerativeModel('gemini-flash-latest')
+model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 # 1. THE BRAIN: This prompt forces the AI to classify the request first.
 SYSTEM_INSTRUCTION = """
@@ -182,7 +182,7 @@ async def analyze_lab_strip(image_bytes: bytes) -> dict:
         img = PIL.Image.open(io.BytesIO(image_bytes))
         
         # 2. Initialize Vision Model
-        vision_model = genai.GenerativeModel('gemini-1.5-flash')
+        vision_model = genai.GenerativeModel('gemini-1.5-flash-latest')
         
         # 3. Send to Gemini with Lab Technician Prompt
         response = await vision_model.generate_content_async([

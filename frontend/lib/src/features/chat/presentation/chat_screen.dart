@@ -227,6 +227,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     child: TextField(
                       controller: _msgController,
                       style: theme.textTheme.bodyLarge, // ✅ Dynamic Text
+                      minLines: 1,
+                      maxLines: 5,
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
                       decoration: InputDecoration(
                         hintText: "Type a message...",
                         hintStyle: TextStyle(color: Colors.grey[400]),

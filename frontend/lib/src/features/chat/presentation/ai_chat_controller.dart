@@ -2,7 +2,12 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
-import '../../lab/data/lab_result_model.dart';
+import 'package:mediq_app/src/features/lab/data/lab_result_model.dart';
+import 'package:mediq_app/src/features/chat/data/pdf_service.dart';
+import 'package:open_file/open_file.dart';
+import 'package:printing/printing.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:io';
 
 // 1. STATE
 class AiChatState {
@@ -147,6 +152,59 @@ RESULTS:
 
 INSTRUCTION: Analyze these results. If any values are abnormal (Positive/High), explain what they might indicate in simple terms. Ask if they have specific symptoms related to these findings.
 """;
+  }
+
+  Future<void> summarizeSession() async {
+    state = state.copyWith(isLoading: true);
+    
+    // 1. Identify if we have Lab Results in the chat
+    LabAnalysisResponse? lastLabResult;
+    try {
+      final labMsg = state.messages.lastWhere((m) => m['type'] == 'lab_result', orElse: () => {});
+      if (labMsg.isNotEmpty) {
+        lastLabResult = labMsg['lab_data'] as LabAnalysisResponse;
+      }
+    } catch (_) {}
+
+    // 2. Ask AI to Summarize the text conversation
+    String summaryText = "Consultation Summary unavailable.";
+    try {
+      final response = await _dio.post('/api/v1/chat/analyze', data: {
+        "message": "Summarize this entire conversation into a structured medical note. Sections: 1. Patient Symptoms, 2. Lab Results (if any), 3. Recommended Actions. Keep it professional.",
+        "history": state.messages.map((m) => {
+          'role': m['role'] == 'user' ? 'user' : 'model',
+          'parts': [m['message']]
+        }).toList()
+      });
+      summaryText = response.data['response'];
+    } catch (e) {
+      summaryText = "Could not generate AI summary due to error: $e";
+    }
+
+    // 3. Generate PDF
+    try {
+      final pdfBytes = await PdfService().generateMedicalNote(
+        messages: state.messages,
+        labResult: lastLabResult,
+        summary: summaryText,
+      );
+
+      // 4. Save & Open
+      final output = await getApplicationDocumentsDirectory();
+      final file = File("${output.path}/mediq_summary_${DateTime.now().millisecondsSinceEpoch}.pdf");
+      await file.writeAsBytes(pdfBytes);
+      
+      state = state.copyWith(isLoading: false);
+      
+      // Open the file
+      await OpenFile.open(file.path);
+      
+    } catch (e) {
+      state = state.copyWith(isLoading: false);
+      print("PDF Error: $e");
+      // Ideally show a snackbar here, but controller shouldn't handle UI. 
+      // We can rely on OpenFile throwing if it fails.
+    }
   }
 }
 

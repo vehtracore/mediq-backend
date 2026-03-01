@@ -11,6 +11,7 @@ import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:go_router/go_router.dart';
 import '../../lab/data/lab_result_model.dart';
 import 'widgets/lab_result_bubble.dart';
+import 'widgets/markdown_bubble.dart';
 
 class AiChatScreen extends ConsumerStatefulWidget {
   const AiChatScreen({super.key});
@@ -173,7 +174,60 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
-    return Scaffold(
+    return PopScope(
+      canPop: false, // Prevent immediate close
+      onPopInvoked: (didPop) async {
+        if (didPop) return;
+        
+        final shouldClose = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text("End Session & Clear History?"),
+            content: const Text(
+                "This chat is ephemeral. All data will be wiped when you leave.\n\nWould you like to save a medical summary first?"),
+            actions: [
+               TextButton(
+                onPressed: () => Navigator.of(context).pop(false), // Stay
+                child: const Text("Cancel"),
+              ),
+              TextButton(
+                onPressed: () {
+                   // Just exit, no save
+                   Navigator.of(context).pop(true);
+                },
+                style: TextButton.styleFrom(foregroundColor: Colors.red),
+                child: const Text("End & Delete"),
+              ),
+              FilledButton.icon(
+                icon: const Icon(Icons.download),
+                label: const Text("Save Summary"),
+                onPressed: () async {
+                  Navigator.of(context).pop(true); // Close dialog first
+                  
+                  // Trigger Header Loading?
+                  // Actually controller handles loading state which shows spinner
+                  await ref.read(aiChatControllerProvider.notifier).summarizeSession();
+                  
+                  // Now exiting is handled by logic or user manually backing out again?
+                  // The instruction says "Download Summary" then exit.
+                  // summarizeSession() opens the file.
+                  
+                  // Let's force exit after a delay? Or let user exit? 
+                  // User requested "End Session", so we should close after save.
+                  if (context.mounted) {
+                     Navigator.of(context).pop(); // Actually pop the screen
+                  }
+                },
+              ),
+            ],
+          ),
+        );
+
+        if (shouldClose == true) {
+           if (context.mounted) Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
         title: Row(
@@ -259,6 +313,10 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                   child: TextField(
                     controller: _messageController,
                     style: theme.textTheme.bodyLarge,
+                    minLines: 1,
+                    maxLines: 5,
+                    keyboardType: TextInputType.multiline,
+                    textInputAction: TextInputAction.newline,
                     decoration: InputDecoration(
                       hintText: _isListening
                           ? "Listening..."
@@ -275,15 +333,6 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 20, vertical: 10),
                     ),
-                    onSubmitted: (_) {
-                      final text = _messageController.text.trim();
-                      if (text.isNotEmpty) {
-                        ref
-                            .read(aiChatControllerProvider.notifier)
-                            .sendMessage(text);
-                        _messageController.clear();
-                      }
-                    },
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -322,6 +371,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -365,12 +415,10 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                   ),
                 ),
               ),
-            Text(
-              text,
-              style: TextStyle(
-                  color: isMe
-                      ? Colors.white
-                      : (isDark ? Colors.white : Colors.black87)),
+            MarkdownBubble(
+              data: text,
+              isMe: isMe,
+              isDark: isDark,
             ),
           ],
         ),

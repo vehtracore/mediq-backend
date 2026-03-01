@@ -7,7 +7,7 @@ print("=" * 50)
 print("1. Testing GET / (Root Endpoint)")
 print("=" * 50)
 try:
-    response = requests.get(f"{BASE_URL}/", timeout=60)
+    response = requests.get(f"{BASE_URL}/", timeout=60, verify=False)
     print(f"Status: {response.status_code}")
     print(f"Body: {response.json()}")
 except Exception as e:
@@ -26,12 +26,16 @@ try:
         "dob": "2000-01-01",
         "role": "patient"
     }
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     response = requests.post(
         f"{BASE_URL}/api/v1/auth/signup",
         json=data,
         headers=headers,
-        timeout=60
+        timeout=60,
+        verify=False
     )
     print(f"Status: {response.status_code}")
     print(f"Body: {response.text}")
@@ -50,12 +54,14 @@ try:
     headers = {
         "Origin": "http://localhost:58155",
         "Access-Control-Request-Method": "POST",
-        "Access-Control-Request-Headers": "content-type"
+        "Access-Control-Request-Headers": "content-type",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     response = requests.options(
         f"{BASE_URL}/api/v1/auth/signup",
         headers=headers,
-        timeout=60
+        timeout=60,
+        verify=False
     )
     print(f"Status: {response.status_code}")
     print(f"Headers:")

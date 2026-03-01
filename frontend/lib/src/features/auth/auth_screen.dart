@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart'; // ✅ Added for Google Auth
 import 'presentation/auth_controller.dart';
 import 'presentation/user_controller.dart';
 import 'data/auth_repository.dart';
@@ -285,6 +286,58 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         : Text(_isLogin ? "Login" : "Sign Up"),
                   ),
                 ),
+                const SizedBox(height: 16),
+                
+                // --- 🔴 Google Sign In Button ---
+                if (_isLogin) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: OutlinedButton.icon(
+                      icon: const Text(
+                        "G", 
+                        style: TextStyle(
+                          fontSize: 24, 
+                          fontWeight: FontWeight.bold,
+                          color: Colors.red, // Google Brand Color
+                        ),
+                      ),
+                      label: const Text(
+                        "Sign in with Google",
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Colors.black87,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.grey),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                      ),
+                      onPressed: () async {
+                        // 1. Define the backend URL
+                        final url = Uri.parse("https://mediq-backend-m3ik.onrender.com/auth/google/login");
+                        
+                        // 2. Launch in the same tab ('_self') for web flow
+                        if (await canLaunchUrl(url)) {
+                          await launchUrl(
+                            url, 
+                            webOnlyWindowName: '_self', // Keeps in same tab
+                          );
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text("Could not launch Google Login")),
+                          );
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                // --------------------------------
                 TextButton(
                   onPressed: () => setState(() => _isLogin = !_isLogin),
                   child: Text(_isLogin ? "Create an account" : "Have an account? Login"),

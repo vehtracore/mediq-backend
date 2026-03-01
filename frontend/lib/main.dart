@@ -5,7 +5,41 @@ import 'src/core/theme/app_theme.dart';
 import 'src/features/auth/presentation/user_controller.dart';
 import 'src/features/auth/data/user_model.dart';
 
-void main() {
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+// import 'package:web/web.dart' as web; // For cleaning URL (Optional)
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // --- 🔴 Google Auth: Capture Token from URL (Web) ---
+  final uri = Uri.base; // Get current URL
+  
+  // 1. Try standard query params (e.g. ?token=...)
+  String? token = uri.queryParameters['token'];
+  
+  // 2. Try Fragment (Hash) params (Common in Flutter Web e.g. /#/auth_callback?token=...)
+  if (token == null && uri.fragment.isNotEmpty) {
+     try {
+       // We construct a dummy URL with the fragment as the path/query to parse it easily
+       // Example fragment: "/auth_callback?token=abc"
+       final fragmentUri = Uri.parse("http://dummy${uri.fragment}");
+       token = fragmentUri.queryParameters['token'];
+     } catch (e) {
+       print("Error parsing URL fragment: $e");
+     }
+  }
+  
+  if (token != null && token.isNotEmpty) {
+    // print("🔹 [Google Auth] Token found: ${token.substring(0, 10)}...");
+    
+    // 1. Save Token
+    const storage = FlutterSecureStorage();
+    await storage.write(key: 'auth_token', value: token); 
+    
+    // 2. The App Router (UserController) will pick this up on load and auto-login.
+  }
+  // ----------------------------------------------------
+
   runApp(const ProviderScope(child: MDQApp()));
 }
 
