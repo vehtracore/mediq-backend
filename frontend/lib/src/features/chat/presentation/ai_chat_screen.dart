@@ -205,15 +205,13 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                         ),
                         ElevatedButton(
                           onPressed: () {
-                            final router = GoRouter.of(context);
                             Navigator.pop(dialogContext);
-                            router.push('/subscription');
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.amber,
                             foregroundColor: Colors.black,
                           ),
-                          child: const Text("Upgrade Now"),
+                          child: const Text("Understood"),
                         ),
                       ],
                     ),
