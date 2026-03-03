@@ -432,11 +432,11 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.photo_camera, color: Colors.blue),
-                title: const Text('Take a Photo'),
+                leading: const Icon(Icons.camera_alt, color: Colors.blue),
+                title: const Text('Capture with Scanner'),
                 onTap: () {
                   Navigator.of(context).pop();
-                  _pickAndAnalyzeImage(ImageSource.camera);
+                  _takePicture();
                 },
               ),
             ],
