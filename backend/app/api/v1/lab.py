@@ -43,6 +43,13 @@ async def analyze_lab_image(
     - Returns the analysis results
     """
     
+    # 0. Check Subscription
+    if current_user.plan != "premium":
+        raise HTTPException(
+            status_code=403,
+            detail="Upgrade to MDQ+ Premium to access AI Urinalysis."
+        )
+
     # 1. Validate File Type
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(

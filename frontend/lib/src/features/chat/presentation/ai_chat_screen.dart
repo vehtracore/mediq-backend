@@ -181,6 +181,46 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
               subtitle: const Text('Analyze urinalysis strip with AI'),
               onTap: () async {
                 Navigator.pop(context); // Close menu
+                
+                final user = ref.read(userProvider).value;
+                if (user?.subscriptionTier != 'premium') {
+                  // SHOW PAYWALL DIALOG
+                  showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Row(
+                        children: [
+                          Icon(Icons.star, color: Colors.amber),
+                          SizedBox(width: 8),
+                          Text("MDQ+ Premium Required", style: TextStyle(fontSize: 18)),
+                        ],
+                      ),
+                      content: const Text(
+                        "AI Urinalysis is exclusively available for MDQ+ Premium subscribers. Upgrade your plan to unlock this and other advanced medical analysis features."
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text("Maybe Later", style: TextStyle(color: Colors.grey)),
+                        ),
+                        ElevatedButton(
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            context.push('/subscription');
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.amber,
+                            foregroundColor: Colors.black,
+                          ),
+                          child: const Text("Upgrade Now"),
+                        ),
+                      ],
+                    ),
+                  );
+                  return;
+                }
+
+                // Premium User -> Proceed to scanner
                 final result = await context.push<LabAnalysisResponse>('/lab_scanner');
                 if (result != null) {
                   ref.read(aiChatControllerProvider.notifier).sendLabResult(result);
