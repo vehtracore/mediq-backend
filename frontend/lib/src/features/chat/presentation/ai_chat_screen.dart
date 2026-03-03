@@ -29,26 +29,26 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   bool _isListening = false;
   bool _speechEnabled = false; // Tracks if init succeeded
 
+  // --- IMAGE STAGING STATE ---
+  String? _stagedImageUrl; // Cloudinary URL after upload
+  bool _isUploadingImage = false;
+
   @override
   void initState() {
     super.initState();
     _speech = stt.SpeechToText();
-    // 2. REMOVED _initSpeech() from here!
-    // We wait for the user to click the button.
   }
 
-  /// 3. New "Lazy" Initialization
+  /// Lazy speech initialization
   Future<bool> _ensureSpeechInitialized() async {
-    if (_speechEnabled) return true; // Already ready
+    if (_speechEnabled) return true;
 
     try {
-      // On mobile, request permission first. On web, skip (browser handles it).
       if (!kIsWeb) {
         var status = await Permission.microphone.request();
         if (status != PermissionStatus.granted) return false;
       }
 
-      // Initialize - This MUST happen after a button click on Web
       bool available = await _speech.initialize(
         onStatus: (status) {
           print('🎤 Status: $status');
@@ -74,7 +74,6 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   }
 
   void _toggleListening() async {
-    // 4. Initialize ON DEMAND (The User Gesture)
     final isAvailable = await _ensureSpeechInitialized();
 
     if (!isAvailable) {
@@ -115,12 +114,59 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+      });
     }
+  }
+
+  /// Stage an image: pick → upload → store URL for preview
+  Future<void> _stageImage() async {
+    setState(() => _isUploadingImage = true);
+    try {
+      final url = await ref.read(imageUploadServiceProvider).pickAndUploadImage();
+      if (url != null && mounted) {
+        setState(() => _stagedImageUrl = url);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Image upload failed: $e")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isUploadingImage = false);
+    }
+  }
+
+  void _clearStagedImage() {
+    setState(() => _stagedImageUrl = null);
+  }
+
+  /// Send message with optional staged image
+  void _sendMessage() {
+    final text = _messageController.text.trim();
+    final imageUrl = _stagedImageUrl;
+
+    // Need either text or an image
+    if (text.isEmpty && imageUrl == null) return;
+
+    final messageText = text.isNotEmpty ? text : "Analyze this image";
+
+    ref.read(aiChatControllerProvider.notifier)
+        .sendMessage(messageText, imageUrl: imageUrl);
+
+    _messageController.clear();
+    setState(() => _stagedImageUrl = null);
+
+    // Scroll after state update
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
   }
 
   Future<void> _showAttachmentMenu() async {
@@ -138,6 +184,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                 final result = await context.push<LabAnalysisResponse>('/lab_scanner');
                 if (result != null) {
                   ref.read(aiChatControllerProvider.notifier).sendLabResult(result);
+                  WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
                 }
               },
             ),
@@ -145,13 +192,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
               leading: const Icon(Icons.image, color: Colors.orangeAccent),
               title: const Text('Upload Photo'),
               subtitle: const Text('Skin issues, wounds, etc.'),
-              onTap: () async {
+              onTap: () {
                 Navigator.pop(context);
-                final url = await ref.read(imageUploadServiceProvider).pickAndUploadImage();
-                if (url != null) {
-                  ref.read(aiChatControllerProvider.notifier)
-                     .sendMessage("Analyze this image", imageUrl: url);
-                }
+                _stageImage(); // Stage, don't send immediately
               },
             ),
           ],
@@ -167,16 +210,12 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    final baseUrl = ref.watch(dioProvider).options.baseUrl;
-    final cleanBaseUrl = baseUrl.endsWith('/')
-        ? baseUrl.substring(0, baseUrl.length - 1)
-        : baseUrl;
-
+    // Scroll to bottom when messages change
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
     return PopScope(
       canPop: false, // Prevent immediate close
-      onPopInvoked: (didPop) async {
+      onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
         
         final shouldClose = await showDialog<bool>(
@@ -192,7 +231,6 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
               ),
               TextButton(
                 onPressed: () {
-                   // Just exit, no save
                    Navigator.of(context).pop(true);
                 },
                 style: TextButton.styleFrom(foregroundColor: Colors.red),
@@ -202,20 +240,10 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                 icon: const Icon(Icons.download),
                 label: const Text("Save Summary"),
                 onPressed: () async {
-                  Navigator.of(context).pop(true); // Close dialog first
-                  
-                  // Trigger Header Loading?
-                  // Actually controller handles loading state which shows spinner
+                  Navigator.of(context).pop(true);
                   await ref.read(aiChatControllerProvider.notifier).summarizeSession();
-                  
-                  // Now exiting is handled by logic or user manually backing out again?
-                  // The instruction says "Download Summary" then exit.
-                  // summarizeSession() opens the file.
-                  
-                  // Let's force exit after a delay? Or let user exit? 
-                  // User requested "End Session", so we should close after save.
                   if (context.mounted) {
-                     Navigator.of(context).pop(); // Actually pop the screen
+                     Navigator.of(context).pop();
                   }
                 },
               ),
@@ -282,7 +310,6 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                         msg['message'],
                         isMe,
                         imageUrl: msg['image'],
-                        baseUrl: cleanBaseUrl,
                         theme: theme,
                         isDark: isDark,
                       );
@@ -295,6 +322,67 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
               child: Text("MDQ+ is analyzing...",
                   style: TextStyle(color: theme.hintColor)),
             ),
+
+          // --- STAGED IMAGE PREVIEW ---
+          if (_stagedImageUrl != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: isDark ? Colors.grey[900] : Colors.grey[100],
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.network(
+                      _stagedImageUrl!,
+                      width: 60,
+                      height: 60,
+                      fit: BoxFit.cover,
+                      errorBuilder: (c, e, s) => Container(
+                        width: 60, height: 60,
+                        color: Colors.grey[300],
+                        child: const Icon(Icons.broken_image, size: 24),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      "Image attached",
+                      style: TextStyle(
+                        color: isDark ? Colors.grey[400] : Colors.grey[600],
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 20),
+                    onPressed: _clearStagedImage,
+                    color: Colors.redAccent,
+                    tooltip: "Remove image",
+                  ),
+                ],
+              ),
+            ),
+
+          // --- UPLOADING INDICATOR ---
+          if (_isUploadingImage)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: isDark ? Colors.grey[900] : Colors.grey[100],
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 20, height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 10),
+                  Text("Uploading image...",
+                    style: TextStyle(color: theme.hintColor, fontSize: 13)),
+                ],
+              ),
+            ),
+
+          // --- INPUT BAR ---
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -320,7 +408,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                     decoration: InputDecoration(
                       hintText: _isListening
                           ? "Listening..."
-                          : "Describe symptoms...",
+                          : (_stagedImageUrl != null
+                              ? "Add a message or tap send..."
+                              : "Describe symptoms..."),
                       hintStyle: TextStyle(
                           color: _isListening
                               ? Colors.redAccent
@@ -354,15 +444,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                 const SizedBox(width: 8),
 
                 FloatingActionButton(
-                  onPressed: () {
-                    final text = _messageController.text.trim();
-                    if (text.isNotEmpty) {
-                      ref
-                          .read(aiChatControllerProvider.notifier)
-                          .sendMessage(text);
-                      _messageController.clear();
-                    }
-                  },
+                  onPressed: _sendMessage,
                   mini: true,
                   backgroundColor: const Color(0xFF4A90E2),
                   child: const Icon(Icons.send, color: Colors.white),
@@ -378,14 +460,32 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   Widget _buildMessageBubble(String text, bool isMe,
       {String? imageUrl,
-      String? baseUrl,
       required ThemeData theme,
       required bool isDark}) {
+
+    // Resolve the image URL: if it's already a full URL, use it directly
+    String? resolvedImageUrl;
+    if (imageUrl != null) {
+      if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+        resolvedImageUrl = imageUrl;
+      } else {
+        // Legacy: relative path — prepend backend base URL
+        final baseUrl = ref.read(dioProvider).options.baseUrl;
+        final cleanBaseUrl = baseUrl.endsWith('/')
+            ? baseUrl.substring(0, baseUrl.length - 1)
+            : baseUrl;
+        resolvedImageUrl = "$cleanBaseUrl$imageUrl";
+      }
+    }
+
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.8,
+        ),
         decoration: BoxDecoration(
           color: isMe
               ? Colors.blue
@@ -400,18 +500,36 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (imageUrl != null && baseUrl != null)
+            if (resolvedImageUrl != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8.0),
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.network(
-                    "$baseUrl$imageUrl",
-                    height: 150,
-                    width: 200,
-                    fit: BoxFit.cover,
-                    errorBuilder: (c, e, s) =>
-                        const Icon(Icons.broken_image, color: Colors.white),
+                  borderRadius: BorderRadius.circular(10),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 200),
+                    child: Image.network(
+                      resolvedImageUrl,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      loadingBuilder: (context, child, loadingProgress) {
+                        if (loadingProgress == null) return child;
+                        return Container(
+                          height: 120,
+                          color: Colors.grey[300],
+                          child: const Center(
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        );
+                      },
+                      errorBuilder: (c, e, s) => Container(
+                        height: 120,
+                        color: Colors.grey[300],
+                        child: const Center(
+                          child: Icon(Icons.broken_image,
+                              color: Colors.grey, size: 32),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),

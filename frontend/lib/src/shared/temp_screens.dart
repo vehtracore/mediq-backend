@@ -41,7 +41,7 @@ class SafetyDisclaimerScreen extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              "MedIQ AI provides triage suggestions but does not replace professional medical advice. For emergencies, consult a doctor",
+              "MDQ+ AI provides triage suggestions but does not replace professional medical advice. For emergencies, consult a doctor",
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyLarge,
             ),

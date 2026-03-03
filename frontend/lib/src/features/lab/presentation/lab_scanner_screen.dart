@@ -3,6 +3,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../data/lab_result_model.dart';
 import 'lab_controller.dart';
@@ -360,9 +361,9 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                   icon: const Icon(Icons.close, color: Colors.white, size: 32),
                 ),
                 
-                // Shutter Button
+                // Shutter Button — opens source picker
                 GestureDetector(
-                  onTap: labState.isLoading ? null : _takePicture,
+                  onTap: labState.isLoading ? null : _showImageSourceSheet,
                   child: Container(
                     width: 80,
                     height: 80,
@@ -408,6 +409,45 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Show bottom sheet to choose camera or gallery
+  void _showImageSourceSheet() {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt, color: Colors.blueAccent),
+              title: const Text('Take a Photo'),
+              subtitle: const Text('Use the camera to capture the strip'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _takePicture();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library, color: Colors.orangeAccent),
+              title: const Text('Upload from Gallery'),
+              subtitle: const Text('Select an existing photo'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                final picker = ImagePicker();
+                final XFile? image = await picker.pickImage(
+                  source: ImageSource.gallery,
+                  imageQuality: 70,
+                );
+                if (image != null) {
+                  await ref.read(labControllerProvider.notifier).analyzeImage(image);
+                  _checkResult();
+                }
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
