@@ -198,22 +198,6 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                       content: const Text(
                         "AI Urinalysis is exclusively available for MDQ+ Premium subscribers. Upgrade your plan to unlock this and other advanced medical analysis features."
                       ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(dialogContext),
-                          child: const Text("Maybe Later", style: TextStyle(color: Colors.grey)),
-                        ),
-                        ElevatedButton(
-                          onPressed: () {
-                            Navigator.pop(dialogContext);
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.amber,
-                            foregroundColor: Colors.black,
-                          ),
-                          child: const Text("Understood"),
-                        ),
-                      ],
                     ),
                   );
                   return;
