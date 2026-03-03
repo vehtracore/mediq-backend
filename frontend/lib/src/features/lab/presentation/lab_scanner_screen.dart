@@ -363,7 +363,7 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                 
                 // Shutter Button — opens source picker
                 GestureDetector(
-                  onTap: labState.isLoading ? null : _showImageSourceSheet,
+                  onTap: labState.isLoading ? null : () => _showImageSourceBottomSheet(context),
                   child: Container(
                     width: 80,
                     height: 80,
@@ -413,42 +413,45 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
     );
   }
 
-  /// Show bottom sheet to choose camera or gallery
-  void _showImageSourceSheet() {
+  void _showImageSourceBottomSheet(BuildContext context) {
     showModalBottomSheet(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.camera_alt, color: Colors.blueAccent),
-              title: const Text('Take a Photo'),
-              subtitle: const Text('Use the camera to capture the strip'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _takePicture();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library, color: Colors.orangeAccent),
-              title: const Text('Upload from Gallery'),
-              subtitle: const Text('Select an existing photo'),
-              onTap: () async {
-                Navigator.pop(ctx);
-                final picker = ImagePicker();
-                final XFile? image = await picker.pickImage(
-                  source: ImageSource.gallery,
-                  imageQuality: 70,
-                );
-                if (image != null) {
-                  await ref.read(labControllerProvider.notifier).analyzeImage(image);
-                  _checkResult();
-                }
-              },
-            ),
-          ],
-        ),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: Wrap(
+            children: <Widget>[
+              ListTile(
+                leading: const Icon(Icons.photo_library, color: Colors.blue),
+                title: const Text('Upload from Gallery'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _pickAndAnalyzeImage(ImageSource.gallery);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_camera, color: Colors.blue),
+                title: const Text('Take a Photo'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _pickAndAnalyzeImage(ImageSource.camera);
+                },
+              ),
+            ],
+          ),
+        );
+      },
     );
+  }
+
+  Future<void> _pickAndAnalyzeImage(ImageSource source) async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: source);
+    if (pickedFile != null) {
+      await ref.read(labControllerProvider.notifier).analyzeImage(pickedFile);
+      _checkResult();
+    }
   }
 }
