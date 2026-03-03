@@ -212,6 +212,11 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                     color: Colors.green,
                     icon: Icons.payments),
                 _StatCard(
+                    title: "Subscribed",
+                    value: "${stats['subscribed_users'] ?? 0}",
+                    color: Colors.amber,
+                    icon: Icons.star_border),
+                _StatCard(
                     title: "Pending Docs",
                     value: "${stats['pending_verifications']}",
                     color: Colors.orange,
@@ -355,7 +360,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                 itemBuilder: (ctx, i) {
                   final user = filtered[i];
                   final fullName = "${user.firstName} ${user.lastName}";
-                  final isBanned = false; // Placeholder
+                  final isBanned = user.isBanned; // ✅ Dynamic status
 
                   if (user.role == 'admin') {
                     return ListTile(
@@ -384,9 +389,9 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                       trailing: ElevatedButton(
                         onPressed: () => _suspendUser(user.id),
                         style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red,
+                            backgroundColor: isBanned ? Colors.green : Colors.red,
                             foregroundColor: Colors.white),
-                        child: const Text("Suspend"),
+                        child: Text(isBanned ? "Reactivate" : "Suspend"),
                       ),
                     ),
                   );

@@ -40,8 +40,8 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     id: int
     is_active: bool
-    id: int
-    is_active: bool
+    is_banned: bool = False
+    plan: str = "free"
     image_url: Optional[str] = None # ✅ ADDED
     is_verified: Optional[bool] = False # ✅ Optional: column may not exist in prod DB
     

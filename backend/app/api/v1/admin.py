@@ -23,6 +23,7 @@ def get_current_admin(current_user: User = Depends(deps.get_current_user)):
 class AdminStats(BaseModel):
     total_users: int
     total_doctors: int
+    subscribed_users: int
     pending_verifications: int
     total_revenue: float
     active_appointments: int
@@ -31,6 +32,7 @@ class AdminStats(BaseModel):
 def get_admin_stats(db: Session = Depends(get_db), admin: User = Depends(get_current_admin)):
     total_users = db.query(User).filter(User.role == "patient").count()
     total_doctors = db.query(User).filter(User.role == "doctor").count()
+    subscribed_users = db.query(User).filter(User.plan == "premium").count()
     pending_verifications = db.query(Doctor).filter(Doctor.is_verified == False).count()
     
     paid_appts = db.query(Appointment).filter(Appointment.payment_status == "paid").all()
@@ -41,6 +43,7 @@ def get_admin_stats(db: Session = Depends(get_db), admin: User = Depends(get_cur
     return {
         "total_users": total_users,
         "total_doctors": total_doctors,
+        "subscribed_users": subscribed_users,
         "pending_verifications": pending_verifications,
         "total_revenue": total_revenue,
         "active_appointments": active_appointments
@@ -58,7 +61,7 @@ def suspend_user(user_id: int, db: Session = Depends(get_db), admin: User = Depe
     if not user: raise HTTPException(404, "User not found")
     user.is_banned = not user.is_banned
     db.commit()
-    status = "suspended" if user.is_banned else "active"
+    status = "suspended" if user.is_banned else "reactivated"
     return {"message": f"User is now {status}."}
 
 # --- NEW: FETCH PENDING DOCTORS ---

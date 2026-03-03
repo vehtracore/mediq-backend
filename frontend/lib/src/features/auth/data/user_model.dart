@@ -7,6 +7,7 @@ class User {
   final String subscriptionTier;
   final String imageUrl; // ✅ Sanitized URL
   final String? location;
+  final bool isBanned;
 
   // --- 🏥 Medical History ---
   final String? bloodType;
@@ -29,6 +30,7 @@ class User {
     this.subscriptionTier = 'free',
     this.imageUrl = '',
     this.location,
+    this.isBanned = false,
     this.bloodType,
     this.allergies,
     this.chronicConditions,
@@ -67,6 +69,7 @@ class User {
       subscriptionTier: json['subscription_tier'] ?? json['plan'] ?? 'free',
       imageUrl: finalUrl,
       location: json['location'],
+      isBanned: json['is_banned'] ?? false,
 
       bloodType: json['blood_type'],
       allergies: json['allergies'],
@@ -90,6 +93,7 @@ class User {
       'subscription_tier': subscriptionTier,
       'image_url': imageUrl,
       'location': location,
+      'is_banned': isBanned,
       'blood_type': bloodType,
       'allergies': allergies,
       'chronic_conditions': chronicConditions,
