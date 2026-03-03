@@ -20,12 +20,13 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
   CameraController? _controller;
   Future<void>? _initializeControllerFuture;
   bool _isCameraInitialized = false;
+  bool _isCameraMode = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initCamera();
+    // Camera is NOT initialized here — user chooses source first
   }
 
   @override
@@ -47,7 +48,7 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
     if (state == AppLifecycleState.inactive) {
       cameraController.dispose();
     } else if (state == AppLifecycleState.resumed) {
-      _initCamera();
+      if (_isCameraMode) _initCamera();
     }
   }
 
@@ -58,6 +59,7 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Camera permission is required to scan.')),
         );
+        setState(() => _isCameraMode = false);
       }
       return;
     }
@@ -249,10 +251,106 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
     );
   }
 
+  Future<void> _pickAndAnalyzeImage(ImageSource source) async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: source);
+    if (pickedFile != null) {
+      await ref.read(labControllerProvider.notifier).analyzeImage(pickedFile);
+      _checkResult();
+    }
+  }
+
+  // ──────────────────────────────────────────────
+  //  BUILD
+  // ──────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final labState = ref.watch(labControllerProvider);
 
+    // ── Source-choice screen (default) ──
+    if (!_isCameraMode) {
+      return Scaffold(
+        backgroundColor: const Color(0xFF0A1628),
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          foregroundColor: Colors.white,
+          title: const Text("Lab Strip Scanner"),
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.science_outlined, size: 80, color: Colors.blueAccent),
+                const SizedBox(height: 24),
+                Text(
+                  "How would you like to scan?",
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  "Choose a urine test strip image source",
+                  style: TextStyle(color: Colors.grey[400], fontSize: 14),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 40),
+
+                // ── Gallery button ──
+                SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.photo_library, size: 24),
+                    label: const Text("Upload from Gallery", style: TextStyle(fontSize: 16)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blueAccent,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    ),
+                    onPressed: labState.isLoading ? null : () => _pickAndAnalyzeImage(ImageSource.gallery),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // ── Camera button ──
+                SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.camera_alt, size: 24),
+                    label: const Text("Capture with Scanner", style: TextStyle(fontSize: 16)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.blueAccent, width: 1.5),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    ),
+                    onPressed: labState.isLoading ? null : () {
+                      setState(() => _isCameraMode = true);
+                      _initCamera();
+                    },
+                  ),
+                ),
+
+                if (labState.isLoading) ...[
+                  const SizedBox(height: 24),
+                  const CircularProgressIndicator(color: Colors.blueAccent),
+                  const SizedBox(height: 12),
+                  Text("Analyzing strip...", style: TextStyle(color: Colors.grey[400])),
+                ],
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // ── Camera loading spinner ──
     if (!_isCameraInitialized) {
       return const Scaffold(
         backgroundColor: Colors.black,
@@ -260,6 +358,7 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
       );
     }
 
+    // ── Camera mode (existing scanner UI) ──
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -356,14 +455,22 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
+                // Back to source choice
                 IconButton(
-                  onPressed: () => context.pop(),
-                  icon: const Icon(Icons.close, color: Colors.white, size: 32),
+                  onPressed: () {
+                    _controller?.dispose();
+                    setState(() {
+                      _isCameraMode = false;
+                      _isCameraInitialized = false;
+                      _controller = null;
+                    });
+                  },
+                  icon: const Icon(Icons.arrow_back, color: Colors.white, size: 32),
                 ),
                 
-                // Shutter Button — opens source picker
+                // Shutter Button — captures with existing camera
                 GestureDetector(
-                  onTap: labState.isLoading ? null : () => _showImageSourceBottomSheet(context),
+                  onTap: labState.isLoading ? null : _takePicture,
                   child: Container(
                     width: 80,
                     height: 80,
@@ -411,47 +518,5 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
         ],
       ),
     );
-  }
-
-  void _showImageSourceBottomSheet(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (BuildContext context) {
-        return SafeArea(
-          child: Wrap(
-            children: <Widget>[
-              ListTile(
-                leading: const Icon(Icons.photo_library, color: Colors.blue),
-                title: const Text('Upload from Gallery'),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _pickAndAnalyzeImage(ImageSource.gallery);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.camera_alt, color: Colors.blue),
-                title: const Text('Capture with Scanner'),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _takePicture();
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _pickAndAnalyzeImage(ImageSource source) async {
-    final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: source);
-    if (pickedFile != null) {
-      await ref.read(labControllerProvider.notifier).analyzeImage(pickedFile);
-      _checkResult();
-    }
   }
 }
