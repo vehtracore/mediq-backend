@@ -205,8 +205,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                         ),
                         ElevatedButton(
                           onPressed: () {
-                            Navigator.pop(ctx);
-                            context.push('/subscription');
+                            Navigator.pop(ctx); // Close the dialog
+                            context.push('/subscription'); // Navigate to paywall
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.amber,
