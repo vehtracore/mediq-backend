@@ -187,7 +187,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                   // SHOW PAYWALL DIALOG
                   showDialog(
                     context: context,
-                    builder: (ctx) => AlertDialog(
+                    builder: (BuildContext dialogContext) => AlertDialog(
                       title: const Row(
                         children: [
                           Icon(Icons.star, color: Colors.amber),
@@ -200,13 +200,15 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                       ),
                       actions: [
                         TextButton(
-                          onPressed: () => Navigator.pop(ctx),
+                          onPressed: () => Navigator.pop(dialogContext),
                           child: const Text("Maybe Later", style: TextStyle(color: Colors.grey)),
                         ),
                         ElevatedButton(
                           onPressed: () {
-                            Navigator.pop(ctx); // Close the dialog
-                            context.push('/subscription'); // Navigate to paywall
+                            Navigator.pop(dialogContext);
+                            if (context.mounted) {
+                              context.push('/subscription');
+                            }
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.amber,
