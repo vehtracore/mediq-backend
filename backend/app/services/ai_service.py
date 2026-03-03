@@ -77,15 +77,19 @@ async def get_medical_response(user_text: str, history: list = None, image_url: 
         # so the AI sees it immediately for this turn.
         full_prompt = [SYSTEM_INSTRUCTION, f"{context_str}\n\nUser Query: {user_text}"]
 
-        # 4. Handle Image (If present)
+        # 4. Handle Image (If present — fetch from URL)
         if image_url:
-            clean_path = image_url.lstrip("/")
-            if os.path.exists(clean_path):
-                img = PIL.Image.open(clean_path)
-                full_prompt.append(img)
-                full_prompt.append("Analyze the medical relevance of this image in context of the user's message.")
-            else:
-                logger.warning(f"Image not found at: {clean_path}")
+            try:
+                import httpx
+                import io
+                async with httpx.AsyncClient() as client:
+                    img_response = await client.get(image_url, timeout=15.0)
+                    img_response.raise_for_status()
+                    img = PIL.Image.open(io.BytesIO(img_response.content))
+                    full_prompt.append(img)
+                    full_prompt.append("Analyze the medical relevance of this image in context of the user's message.")
+            except Exception as img_err:
+                logger.warning(f"Failed to fetch image from URL: {image_url}, error: {img_err}")
 
         # 5. Send Message to the Chat Session
         response = await chat_session.send_message_async(full_prompt)
