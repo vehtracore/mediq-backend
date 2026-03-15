@@ -40,6 +40,10 @@
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>We need speech recognition to convert your voice to text.</string>
 
+	<!-- Photo Library Save Permission -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>We need access to save medical images and prescriptions to your photo library.</string>
+
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 

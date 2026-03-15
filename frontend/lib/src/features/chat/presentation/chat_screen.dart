@@ -5,6 +5,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
+import 'package:mediq_app/src/features/chat/presentation/full_screen_image_viewer.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   final int appointmentId;
@@ -182,18 +183,32 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: isImage
-                              ? ClipRRect(
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Image.network(
-                                    content.startsWith('http')
+                              ? GestureDetector(
+                                  onTap: () {
+                                    final fullUrl = content.startsWith('http')
                                         ? content
-                                        : "$cleanBaseUrl$content",
-                                    height: 200,
-                                    width: 200,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (c, e, s) => const Icon(
-                                        Icons.broken_image,
-                                        color: Colors.white),
+                                        : "$cleanBaseUrl$content";
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => FullScreenImageViewer(
+                                          imageUrl: fullUrl,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.network(
+                                      content.startsWith('http')
+                                          ? content
+                                          : "$cleanBaseUrl$content",
+                                      height: 200,
+                                      width: 200,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (c, e, s) => const Icon(
+                                          Icons.broken_image,
+                                          color: Colors.white),
+                                    ),
                                   ),
                                 )
                               : Text(
