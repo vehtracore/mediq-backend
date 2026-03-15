@@ -60,37 +60,62 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF4A90E2),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.health_and_safety, size: 100, color: Colors.white),
-            const SizedBox(height: 16),
-            // FIX: Removed GoogleFonts. Using standard TextStyle so text appears offline.
-            const Text(
-              "MDQ+",
-              style: TextStyle(
-                fontSize: 40,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
+      body: Stack(
+        children: [
+          Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.health_and_safety, size: 100, color: Colors.white),
+                const SizedBox(height: 16),
+                // FIX: Removed GoogleFonts. Using standard TextStyle so text appears offline.
+                const Text(
+                  "MDQ+",
+                  style: TextStyle(
+                    fontSize: 40,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 40),
+                const CircularProgressIndicator(color: Colors.white),
+                const SizedBox(height: 50),
+                TextButton.icon(
+                  onPressed: () async {
+                    await ref.read(storageServiceProvider).deleteToken();
+                    if (context.mounted) context.go('/auth');
+                  },
+                  icon: const Icon(Icons.delete_forever, color: Colors.white70),
+                  label: const Text(
+                    "Stuck? Clear Data",
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // --- BRANDING WATERMARK ---
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 16.0),
+                child: Center(
+                  child: Text(
+                    'Powered by Vehtr',
+                    style: TextStyle(
+                      color: Colors.grey.shade400,
+                      fontSize: 12,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                ),
               ),
             ),
-            const SizedBox(height: 40),
-            const CircularProgressIndicator(color: Colors.white),
-            const SizedBox(height: 50),
-            TextButton.icon(
-              onPressed: () async {
-                await ref.read(storageServiceProvider).deleteToken();
-                if (context.mounted) context.go('/auth');
-              },
-              icon: const Icon(Icons.delete_forever, color: Colors.white70),
-              label: const Text(
-                "Stuck? Clear Data",
-                style: TextStyle(color: Colors.white70),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

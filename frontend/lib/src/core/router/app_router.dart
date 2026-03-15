@@ -37,8 +37,12 @@ import 'package:mediq_app/src/features/chat/presentation/video_call_screen.dart'
 import '../../features/profile/presentation/medical_history_screen.dart';
 import '../../features/lab/presentation/lab_scanner_screen.dart';
 
+// Global key so Dio interceptor can navigate imperatively
+final rootNavigatorKey = GlobalKey<NavigatorState>();
+
 final goRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
+    navigatorKey: rootNavigatorKey,
     initialLocation: '/',
     routes: [
       GoRoute(path: '/', builder: (context, state) => const SplashScreen()),

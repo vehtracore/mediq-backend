@@ -1,8 +1,11 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:go_router/go_router.dart';
 import 'api_constants.dart';
+import '../router/app_router.dart';
 
 final dioProvider = Provider<Dio>((ref) {
   final options = BaseOptions(
@@ -60,13 +63,55 @@ final dioProvider = Provider<Dio>((ref) {
         }
         return handler.next(response);
       },
-      onError: (DioException e, handler) {
+      onError: (DioException e, handler) async {
         if (kDebugMode) {
           print('❌ [ERR] -> ${e.message}');
           if (e.response != null) {
             print('📜 [RESP BODY] -> ${e.response?.data}');
           }
         }
+
+        // --- SUSPENSION CHECK: 403 with "Account suspended" ---
+        if (e.response?.statusCode == 403) {
+          final data = e.response?.data;
+          final detail = data is Map ? data['detail'] : data?.toString();
+
+          if (detail != null &&
+              detail.toString().contains('Account suspended')) {
+            if (kDebugMode) {
+              print('🚫 [AUTH] -> Account suspended. Logging out...');
+            }
+
+            // 1. Clear token
+            await storage.delete(
+                key: 'auth_token', aOptions: getAndroidOptions());
+
+            // 2. Show dialog & navigate to login
+            final context = rootNavigatorKey.currentContext;
+            if (context != null && context.mounted) {
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (_) => AlertDialog(
+                  title: const Text('Account Suspended'),
+                  content: const Text(
+                    'Your account has been suspended. Please contact support for assistance.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.of(context).pop(); // close dialog
+                        GoRouter.of(context).go('/auth');
+                      },
+                      child: const Text('Understood'),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+        }
+
         return handler.next(e);
       },
     ),

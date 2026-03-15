@@ -40,6 +40,14 @@ def get_current_user(
         print(f"❌ [DEBUG] User {email} not found in Database.")
         raise credentials_exception
         
+    # --- SUSPENSION / BAN CHECK ---
+    if not user.is_active or user.is_banned:
+        print(f"🚫 [DEBUG] User {user.email} is suspended/banned.")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account suspended. Please contact support."
+        )
+
     # FIXED LINE BELOW: Changed .full_name to .first_name
     print(f"✅ [DEBUG] User authenticated: {user.first_name}")
     return user
