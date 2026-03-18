@@ -1,5 +1,6 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
@@ -13,17 +14,33 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="MDQplus API")
 
+@app.middleware("http")
+async def limit_payload_size(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > 10 * 1024 * 1024:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": "Payload exceeds the 10MB limit."}
+        )
+    return await call_next(request)
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError("FATAL: SECRET_KEY environment variable is missing.")
+
 # --- Session Middleware (required for Google OAuth state tracking) ---
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv("SECRET_KEY", "supersecretkey"),
+    secret_key=SECRET_KEY,
 )
+
+origins = os.getenv("ALLOWED_ORIGINS", "http://localhost,http://localhost:3000").split(",")
 
 # --- 🚀 RENDER CORS FIX (The Critical Part) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ✅ Explicit wildcard
-    allow_credentials=False,  # ✅ Disabled to work with wildcard
+    allow_origins=origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
