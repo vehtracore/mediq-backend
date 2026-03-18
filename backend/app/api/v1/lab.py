@@ -1,7 +1,7 @@
 import cloudinary
 import cloudinary.uploader
 import os
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 
@@ -13,6 +13,8 @@ from app.services.ai_service import analyze_lab_strip
 from app.schemas.lab import LabAnalysisResponse
 
 load_dotenv()
+
+from app.core.limiter import limiter
 
 router = APIRouter()
 
@@ -29,7 +31,9 @@ ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
 
 
 @router.post("/analyze", response_model=LabAnalysisResponse)
+@limiter.limit("10/minute")
 async def analyze_lab_image(
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)

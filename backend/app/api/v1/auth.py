@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse
 import uuid
 from pydantic import EmailStr
@@ -11,6 +11,7 @@ from app.schemas.user import UserCreate, UserResponse, LoginRequest, Token, User
 from app.schemas.doctor import DoctorResponse, DoctorRegister
 from app.core import security
 from app.api import deps
+from app.core.limiter import limiter
 
 router = APIRouter()
 
@@ -188,7 +189,8 @@ def register_doctor(doctor_in: DoctorRegister, background_tasks: BackgroundTasks
     return new_user
 
 @router.post("/login", response_model=Token)
-def login(login_data: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def login(request: Request, login_data: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == login_data.email).first()
     if not user or not security.verify_password(login_data.password, user.hashed_password):
         raise HTTPException(401, detail="Incorrect email or password", headers={"WWW-Authenticate": "Bearer"})

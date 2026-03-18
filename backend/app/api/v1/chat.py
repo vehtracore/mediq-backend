@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from pydantic import BaseModel, HttpUrl
@@ -8,6 +8,7 @@ from app.services import ai_service
 from app.core.database import get_db
 from app.models.user import User
 from app.api import deps
+from app.core.limiter import limiter
 
 router = APIRouter()
 
@@ -21,12 +22,14 @@ class ChatResponse(BaseModel):
     response: str
 
 @router.post("/analyze", response_model=ChatResponse)
+@limiter.limit("10/minute")
 async def analyze_symptoms(
-    request: ChatRequest,
+    request: Request,
+    chat_request: ChatRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user)
 ):
-    if not request.message.strip() and not request.image_url:
+    if not chat_request.message.strip() and not chat_request.image_url:
         raise HTTPException(status_code=400, detail="Message or Image is required")
 
     now = datetime.utcnow()
@@ -48,9 +51,9 @@ async def analyze_symptoms(
 
     # We pass the history and image_url to the service.
     ai_response = await ai_service.get_medical_response(
-        request.message, 
-        history=request.history,
-        image_url=request.image_url,
+        chat_request.message, 
+        history=chat_request.history,
+        image_url=chat_request.image_url,
         user_context=user_context
     )
 
