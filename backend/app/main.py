@@ -73,5 +73,5 @@ if not os.path.exists(static_dir):
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.get("/")
-def root():
-    return {"message": "MDQ+ Brain is Online"}
+async def health_check():
+    return {"status": "healthy", "service": "MDQ+ API"}
