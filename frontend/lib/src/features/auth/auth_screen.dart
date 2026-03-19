@@ -127,24 +127,18 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final theme = Theme.of(context);
 
     ref.listen<AsyncValue<void>>(authControllerProvider,
+        (previous, next) {
+      if (next.hasError) {
+        String errorMsg = next.error.toString();
+        // The Repository now throws clean Exceptions like "Exception: Email already registered"
+        // We just need to remove the "Exception: " prefix
+        if (errorMsg.startsWith("Exception: ")) {
+          errorMsg = errorMsg.replaceFirst("Exception: ", "");
+        }
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(errorMsg),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-      
-      // ✅ FIX: Only navigate when transitioning FROM loading state (after actual login/signup)
-      final wasLoading = previous?.isLoading ?? false;
-      if (wasLoading && !next.isLoading && !next.hasError) {
-        // Navigate immediately - call helper method
-        _navigateAfterAuth();
-      }
-    });
-
-    return Scaffold(
             backgroundColor: Colors.red,
           ),
         );
