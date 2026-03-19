@@ -354,6 +354,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         ),
       ),
     );
+  }
+
   Widget _buildLegalCheckbox({
     required String title,
     required String linkText,
