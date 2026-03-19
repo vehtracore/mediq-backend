@@ -39,11 +39,13 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   Future<void> _pickDate() async {
     final now = DateTime.now();
+    final eighteenYearsAgo = DateTime(now.year - 18, now.month, now.day);
     final picked = await showDatePicker(
       context: context,
       initialDate: DateTime(2000),
       firstDate: DateTime(1900),
-      lastDate: now,
+      lastDate: eighteenYearsAgo,
+      helpText: 'You must be 18 or older to create an account.',
     );
     if (picked != null) setState(() => _selectedDate = picked);
   }

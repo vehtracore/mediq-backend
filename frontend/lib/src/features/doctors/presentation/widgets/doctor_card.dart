@@ -32,9 +32,10 @@ class DoctorCard extends StatelessWidget {
               tag: 'doc_${doctor.id}',
               child: CircleAvatar(
                 radius: 40,
-                backgroundColor: Colors.grey[100],
-                backgroundImage: NetworkImage(doctor.imageUrl),
-                onBackgroundImageError: (_, __) => const Icon(Icons.person),
+                backgroundColor: (doctor.imageUrl.isNotEmpty) ? Colors.grey[100] : const Color(0xFF4A90E2),
+                backgroundImage: (doctor.imageUrl.isNotEmpty) ? NetworkImage(doctor.imageUrl) : null,
+                onBackgroundImageError: (_, __) {},
+                child: (doctor.imageUrl.isEmpty) ? const Icon(Icons.medical_services, color: Colors.white, size: 30) : null,
               ),
             ),
             const SizedBox(width: 16),

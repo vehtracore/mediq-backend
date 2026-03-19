@@ -231,7 +231,7 @@ class AppointmentCard extends ConsumerWidget {
                         radius: 26,
                         backgroundColor: Colors.white24,
                         child:
-                            Icon(Icons.person, color: Colors.white, size: 28),
+                            Icon(Icons.medical_services, color: Colors.white, size: 28),
                       ),
                     ),
                     const SizedBox(width: 16),

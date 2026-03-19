@@ -116,9 +116,10 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                   children: [
                     CircleAvatar(
                       radius: 30,
-                      backgroundImage: NetworkImage(widget.doctor.imageUrl),
-                      onBackgroundImageError: (_, __) =>
-                          const Icon(Icons.person),
+                      backgroundColor: (widget.doctor.imageUrl.isNotEmpty) ? Colors.grey[100] : const Color(0xFF4A90E2),
+                      backgroundImage: (widget.doctor.imageUrl.isNotEmpty) ? NetworkImage(widget.doctor.imageUrl) : null,
+                      onBackgroundImageError: (_, __) {},
+                      child: (widget.doctor.imageUrl.isEmpty) ? const Icon(Icons.medical_services, color: Colors.white, size: 24) : null,
                     ),
                     const SizedBox(width: 16),
                     Column(

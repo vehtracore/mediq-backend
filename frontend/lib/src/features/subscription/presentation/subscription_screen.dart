@@ -97,11 +97,28 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
               features: [
                 "Unlimited AI Chats",
                 "Priority Doctor Access",
-                "Video Consultations",
-                "Advanced Health Analytics"
+                "Urinalysis AI",
+                "Advanced Health Analytics",
+                "Consultation Summaries"
               ],
               isCurrent: isPremium,
               isPremium: true,
+              theme: theme,
+            ),
+            const SizedBox(height: 24),
+            _buildPlanCard(
+              context,
+              title: "Family Plan",
+              price: "₦7,500/mo",
+              features: [
+                "4 Independent Premium Accounts",
+                "Private Medical Records for each",
+                "All MDQ+ Premium Features",
+                "Centralized Billing"
+              ],
+              isCurrent: false,
+              isPremium: true,
+              isFamily: true,
               theme: theme,
             ),
           ],
@@ -117,6 +134,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
     required List<String> features,
     bool isCurrent = false,
     bool isPremium = false,
+    bool isFamily = false,
     required ThemeData theme,
   }) {
     final isDark = theme.brightness == Brightness.dark;
@@ -127,9 +145,11 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
       decoration: BoxDecoration(
         color: theme.cardTheme.color, // ✅ Dynamic
         borderRadius: BorderRadius.circular(20),
-        border: isPremium && !isDark
-            ? Border.all(color: const Color(0xFF4A90E2), width: 2)
-            : null,
+        border: isFamily
+            ? Border.all(color: const Color(0xFFD4AF37), width: 2.5)
+            : (isPremium && !isDark
+                ? Border.all(color: const Color(0xFF4A90E2), width: 2)
+                : null),
         boxShadow: isDark
             ? []
             : [
@@ -142,6 +162,24 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (isFamily)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFD4AF37), Color(0xFFF5D76E)],
+                ),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Text(
+                '⭐ Best Value',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12),
+              ),
+            ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -149,9 +187,11 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                   style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      color: isPremium
-                          ? const Color(0xFF4A90E2)
-                          : theme.textTheme.bodyLarge?.color)),
+                      color: isFamily
+                          ? const Color(0xFFD4AF37)
+                          : (isPremium
+                              ? const Color(0xFF4A90E2)
+                              : theme.textTheme.bodyLarge?.color))),
               if (isCurrent) const Icon(Icons.check_circle, color: Colors.grey),
             ],
           ),
