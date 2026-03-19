@@ -23,7 +23,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   DateTime? _selectedDate;
-  bool _agreedToTerms = false;
+  bool _agreedToPrivacy = false;
+  bool _agreedToTC = false;
   bool _obscurePassword = true;  // ✅ State for password visibility
   final _formKey = GlobalKey<FormState>();
 
@@ -91,10 +92,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   Future<void> _handleSubmit() async {
     if (!_formKey.currentState!.validate()) return;
-    if (!_isLogin && (_selectedDate == null || !_agreedToTerms)) {
+    if (!_isLogin && (_selectedDate == null || !_agreedToPrivacy || !_agreedToTC)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("Please complete fields and accept terms."),
+          content: Text("Please complete all fields and accept the legal terms."),
         ),
       );
       return;
@@ -126,18 +127,24 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final theme = Theme.of(context);
 
     ref.listen<AsyncValue<void>>(authControllerProvider,
-        (previous, next) {
-      if (next.hasError) {
-        String errorMsg = next.error.toString();
-        // The Repository now throws clean Exceptions like "Exception: Email already registered"
-        // We just need to remove the "Exception: " prefix
-        if (errorMsg.startsWith("Exception: ")) {
-          errorMsg = errorMsg.replaceFirst("Exception: ", "");
-        }
-
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(errorMsg),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+      
+      // ✅ FIX: Only navigate when transitioning FROM loading state (after actual login/signup)
+      final wasLoading = previous?.isLoading ?? false;
+      if (wasLoading && !next.isLoading && !next.hasError) {
+        // Navigate immediately - call helper method
+        _navigateAfterAuth();
+      }
+    });
+
+    return Scaffold(
             backgroundColor: Colors.red,
           ),
         );
@@ -253,27 +260,25 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     validator: (v) => (v != null && v.length >= 6) ? null : "Min 6 chars",
                   ),
                 if (!_isLogin) ...[
-                  const SizedBox(height: 24),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.withOpacity(0.05),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.blue.withOpacity(0.2)),
+                  const SizedBox(height: 16),
+                  _buildLegalCheckbox(
+                    title: "I agree to the ",
+                    linkText: "Privacy Policy",
+                    value: _agreedToPrivacy,
+                    onChanged: (v) => setState(() => _agreedToPrivacy = v!),
+                    onTapLink: () => _showLegalSheet(
+                      "Privacy Policy",
+                      "MDQ+ Privacy Policy\n\nYour data is encrypted and securely stored. We comply with medical data protection standards. Your data will not be sold to third parties.",
                     ),
-                    child: Row(
-                      children: [
-                        Checkbox(
-                          value: _agreedToTerms,
-                          onChanged: (v) => setState(() => _agreedToTerms = v!),
-                        ),
-                        Expanded(
-                          child: Text(
-                            "I agree to the Terms of Service and MDQ+ Safety Disclaimer.",
-                            style: theme.textTheme.bodySmall,
-                          ),
-                        ),
-                      ],
+                  ),
+                  _buildLegalCheckbox(
+                    title: "I agree to the ",
+                    linkText: "Terms & Conditions",
+                    value: _agreedToTC,
+                    onChanged: (v) => setState(() => _agreedToTC = v!),
+                    onTapLink: () => _showLegalSheet(
+                      "Telemedicine Informed Consent",
+                      "Telemedicine Informed Consent\n\n1. I understand MDQ+ uses AI for preliminary analysis, which is NOT a substitute for professional medical advice.\n2. I understand that MDQ+ is NOT for medical emergencies. In an emergency, I will contact local emergency services immediately.\n3. I consent to telemedicine consultations with licensed practitioners.",
                     ),
                   ),
                 ],
@@ -352,6 +357,80 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  Widget _buildLegalCheckbox({
+    required String title,
+    required String linkText,
+    required bool value,
+    required ValueChanged<bool?> onChanged,
+    required VoidCallback onTapLink,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.blue.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.blue.withOpacity(0.2)),
+      ),
+      child: Row(
+        children: [
+          Checkbox(value: value, onChanged: onChanged),
+          Expanded(
+            child: GestureDetector(
+              onTap: onTapLink,
+              child: RichText(
+                text: TextSpan(
+                  style: Theme.of(context).textTheme.bodySmall,
+                  children: [
+                    TextSpan(text: title),
+                    TextSpan(
+                      text: linkText,
+                      style: const TextStyle(
+                        color: Colors.blue,
+                        fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showLegalSheet(String title, String content) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(24.0).copyWith(
+          bottom: MediaQuery.of(ctx).padding.bottom + 24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            Text(content, style: Theme.of(context).textTheme.bodyMedium),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("I Understand"),
+              ),
+            ),
+          ],
         ),
       ),
     );

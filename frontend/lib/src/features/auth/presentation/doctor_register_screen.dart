@@ -18,6 +18,8 @@ class DoctorRegisterScreen extends ConsumerStatefulWidget {
 class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
+  bool _agreedToPrivacy = false;
+  bool _agreedToTC = false;
 
   final _fullNameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
@@ -63,6 +65,16 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
 
   Future<void> _handleSubmit() async {
     if (!_formKey.currentState!.validate()) return;
+
+    if (!_agreedToPrivacy || !_agreedToTC) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Please accept the legal terms to apply."),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
 
     if (_licenseImage == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -219,6 +231,27 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
                       : null,
                 ),
               ),
+              const SizedBox(height: 24),
+              _buildLegalCheckbox(
+                title: "I agree to the ",
+                linkText: "Privacy Policy",
+                value: _agreedToPrivacy,
+                onChanged: (v) => setState(() => _agreedToPrivacy = v!),
+                onTapLink: () => _showLegalSheet(
+                  "Privacy Policy",
+                  "MDQ+ Privacy Policy\n\nYour data and patient data are encrypted and securely stored. We comply with medical data protection standards. Data will not be sold to third parties.",
+                ),
+              ),
+              _buildLegalCheckbox(
+                title: "I agree to the ",
+                linkText: "Terms & Conditions",
+                value: _agreedToTC,
+                onChanged: (v) => setState(() => _agreedToTC = v!),
+                onTapLink: () => _showLegalSheet(
+                  "Provider Service Agreement",
+                  "Provider Service Agreement\n\n1. I confirm I am a licensed medical professional in good standing.\n2. I understand I am solely responsible for the medical advice I provide on MDQ+.\n3. I agree to maintain patient confidentiality and adhere to all telemedicine regulations.\n4. I indemnify MDQ+ against any claims arising from my medical practice on this platform.",
+                ),
+              ),
               const SizedBox(height: 32),
 
               SizedBox(
@@ -271,6 +304,82 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
         
         return null;
       },
+    );
+  }
+
+  Widget _buildLegalCheckbox({
+    required String title,
+    required String linkText,
+    required bool value,
+    required ValueChanged<bool?> onChanged,
+    required VoidCallback onTapLink,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.blue.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.blue.withOpacity(0.2)),
+      ),
+      child: Row(
+        children: [
+          Checkbox(value: value, onChanged: onChanged),
+          Expanded(
+            child: GestureDetector(
+              onTap: onTapLink,
+              child: RichText(
+                text: TextSpan(
+                  style: Theme.of(context).textTheme.bodySmall,
+                  children: [
+                    TextSpan(text: title),
+                    TextSpan(
+                      text: linkText,
+                      style: const TextStyle(
+                        color: Colors.blue,
+                        fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showLegalSheet(String title, String content) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(24.0).copyWith(
+          bottom: MediaQuery.of(ctx).padding.bottom + 24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            Text(content, style: Theme.of(context).textTheme.bodyMedium),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("I Understand"),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
