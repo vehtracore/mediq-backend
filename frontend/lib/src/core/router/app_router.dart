@@ -113,6 +113,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           return ChatScreen(
             appointmentId: extra['appointmentId'], // This is now safe
             title: extra['title'] ?? 'Chat',
+            isCompleted: extra['isCompleted'] ?? false,
           );
         },
       ),

@@ -250,7 +250,8 @@ class _AppointmentCard extends ConsumerWidget {
                       onPressed: () => context.push('/chat', extra: {
                             'title': appointment.doctorName,
                             'isAi': false,
-                            'appointmentId': appointment.id
+                            'appointmentId': appointment.id,
+                            'isCompleted': appointment.status == 'completed'
                           }),
                       icon: const Icon(Icons.chat_bubble_outline, size: 16),
                       label: const Text("Chat"),

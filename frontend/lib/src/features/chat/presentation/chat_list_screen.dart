@@ -160,6 +160,7 @@ class _DoctorChatTile extends StatelessWidget {
                   'title': appointment.doctorName,
                   'isAi': false,
                   'appointmentId': appointment.id,
+                  'isCompleted': appointment.status == 'completed',
                 });
           } else {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

@@ -288,7 +288,8 @@ class _AppointmentCard extends ConsumerWidget {
                 child: OutlinedButton.icon(
                   onPressed: () => context.push('/chat', extra: {
                     'title': appointment.patientName,
-                    'appointmentId': appointment.id
+                    'appointmentId': appointment.id,
+                    'isCompleted': appointment.status == 'completed'
                   }),
                   icon: const Icon(Icons.chat_bubble_outline, size: 16),
                   label: const Text("Chat"),

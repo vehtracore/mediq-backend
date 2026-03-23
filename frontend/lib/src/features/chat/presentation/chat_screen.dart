@@ -10,11 +10,13 @@ import 'package:mediq_app/src/features/chat/presentation/full_screen_image_viewe
 class ChatScreen extends ConsumerStatefulWidget {
   final int appointmentId;
   final String title;
+  final bool isCompleted;
 
   const ChatScreen({
     super.key,
     required this.appointmentId,
     required this.title,
+    this.isCompleted = false,
   });
 
   @override
@@ -297,10 +299,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     },
                   ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            color: theme.cardTheme.color, // ✅ Dynamic Input Area
-            child: SafeArea(
+          widget.isCompleted
+              ? Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                  color: theme.cardTheme.color,
+                  width: double.infinity,
+                  child: const SafeArea(
+                    child: Text(
+                      "This consultation has ended.",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey),
+                    ),
+                  ),
+                )
+              : Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  color: theme.cardTheme.color, // ✅ Dynamic Input Area
+                  child: SafeArea(
               child: Row(
                 children: [
                   IconButton(
