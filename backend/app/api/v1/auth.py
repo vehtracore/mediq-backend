@@ -7,7 +7,7 @@ from datetime import date
 from app.core.database import get_db
 from app.models.user import User
 from app.models.doctor import Doctor
-from app.schemas.user import UserCreate, UserResponse, LoginRequest, Token, UserUpdate
+from app.schemas.user import UserCreate, UserResponse, LoginRequest, Token, UserUpdate, RefreshRequest
 from app.schemas.doctor import DoctorResponse, DoctorRegister
 from app.core import security
 from app.api import deps
@@ -208,10 +208,47 @@ def login(request: Request, login_data: LoginRequest, db: Session = Depends(get_
         if not doctor or doctor.status != "active":
             raise HTTPException(400, detail="Doctor account is pending approval")
 
-    return {"access_token": security.create_access_token(data={"sub": user.email}), "token_type": "bearer"}
+    access_token = security.create_access_token(data={"sub": user.email})
+    refresh_token = security.create_refresh_token(data={"sub": user.email})
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
 @router.get("/me", response_model=UserResponse)
 def read_users_me(current_user: User = Depends(deps.get_current_user)): return current_user
+
+@router.post("/refresh", response_model=Token)
+def refresh_token(body: RefreshRequest, db: Session = Depends(get_db)):
+    """Exchange a valid refresh token for a new access + refresh token pair."""
+    from jose import jwt, JWTError
+
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid refresh token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        payload = jwt.decode(
+            body.refresh_token,
+            security.SECRET_KEY,
+            algorithms=[security.ALGORITHM],
+        )
+        if payload.get("type") != "refresh":
+            raise credentials_exception
+
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        raise credentials_exception
+
+    # Issue a brand-new token pair
+    new_access = security.create_access_token(data={"sub": user.email})
+    new_refresh = security.create_refresh_token(data={"sub": user.email})
+    return {"access_token": new_access, "refresh_token": new_refresh, "token_type": "bearer"}
 
 # ... (End of standard endpoints) ...
 
@@ -332,8 +369,3 @@ def approve_doctor(
     
     return {"message": f"Doctor {doctor.full_name} approved"}
 
-
-
-@router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.email == user.email).first()

@@ -99,7 +99,8 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
         db.refresh(user)
         logger.info(f"[GOOGLE AUTH] New user created: {user.email}")
 
-    # --- Issue JWT and redirect to frontend ---
+    # --- Issue JWT pair and redirect to frontend ---
     access_token = security.create_access_token(data={"sub": user.email})
-    redirect_url = f"{FRONTEND_CALLBACK_URL}?token={access_token}"
+    refresh_token = security.create_refresh_token(data={"sub": user.email})
+    redirect_url = f"{FRONTEND_CALLBACK_URL}?token={access_token}&refresh_token={refresh_token}"
     return RedirectResponse(redirect_url)

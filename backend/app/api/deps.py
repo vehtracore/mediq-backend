@@ -25,6 +25,12 @@ def get_current_user(
         
         payload = jwt.decode(token, security.SECRET_KEY, algorithms=[security.ALGORITHM])
         
+        # Reject refresh tokens used as access tokens
+        token_type = payload.get("type")
+        if token_type != "access":
+            print(f"❌ [DEBUG] Token type '{token_type}' is not 'access'. Rejected.")
+            raise credentials_exception
+        
         email: str = payload.get("sub")
         if email is None:
             print("❌ [DEBUG] No 'sub' (email) in token.")
