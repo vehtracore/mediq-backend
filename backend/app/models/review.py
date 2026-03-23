@@ -8,11 +8,11 @@ class Review(Base):
     __tablename__ = "reviews"
     id = Column(Integer, primary_key=True, index=True)
     appointment_id = Column(Integer, ForeignKey("appointments.id"), unique=True)
-    doctor_id = Column(Integer, ForeignKey("doctors.id"))
-    patient_id = Column(Integer, ForeignKey("users.id"))
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), index=True)
+    patient_id = Column(Integer, ForeignKey("users.id"), index=True)
     rating = Column(Integer)
     comment = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     doctor = relationship("Doctor")
     patient = relationship("User")

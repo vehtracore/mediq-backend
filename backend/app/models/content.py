@@ -11,4 +11,4 @@ class HealthTip(Base):
     read_time = Column(String) # e.g., "5 min read"
     image_url = Column(String, nullable=True)
     content = Column(Text) # Full article text
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)

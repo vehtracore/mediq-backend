@@ -15,13 +15,13 @@ class User(Base):
     dob = Column(Date, nullable=True)
     location = Column(String, nullable=True)
     image_url = Column(String, nullable=True) # ✅ NEW COLUMN
-    is_verified = Column(Boolean, default=False) # ✅ NEW: Email Verification
+    is_verified = Column(Boolean, default=False, index=True) # ✅ NEW: Email Verification
     verification_token = Column(String, nullable=True) # ✅ NEW: Verification Token
     auth_provider = Column(String, nullable=True, default=None)  # "google" | None (password)
     
     # --- ROLE & STATUS ---
-    role = Column(String, default="patient")
-    is_active = Column(Boolean, default=True)
+    role = Column(String, default="patient", index=True)
+    is_active = Column(Boolean, default=True, index=True)
     is_banned = Column(Boolean, default=False)
     
     # --- SUBSCRIPTION & LIMITS ---

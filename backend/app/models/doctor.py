@@ -7,7 +7,7 @@ class Doctor(Base):
     __tablename__ = "doctors"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
     
     full_name = Column(String, index=True)
     specialty = Column(String, index=True)
@@ -21,8 +21,8 @@ class Doctor(Base):
     
     is_available = Column(Boolean, default=False)
     license_number = Column(String, unique=True, index=True)
-    status = Column(String, default="pending") # ✅ NEW: "pending", "active", "rejected"
-    is_verified = Column(Boolean, default=False)
+    status = Column(String, default="pending", index=True) # ✅ NEW: "pending", "active", "rejected"
+    is_verified = Column(Boolean, default=False, index=True)
     documents_url = Column(String, nullable=True) 
 
     user = relationship("User")

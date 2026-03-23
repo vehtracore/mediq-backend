@@ -12,7 +12,7 @@ class LabResult(Base):
     __tablename__ = "lab_results"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     
     # --- IMAGE PROOF ---
     image_url = Column(String, nullable=True)  # Cloudinary URL of the scanned strip
@@ -25,7 +25,7 @@ class LabResult(Base):
     is_verified = Column(Boolean, default=False)  # User confirmation of accuracy
     
     # --- TIMESTAMPS ---
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     
     # --- RELATIONSHIPS ---
     user = relationship("User", backref="lab_results")

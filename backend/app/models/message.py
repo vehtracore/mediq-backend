@@ -7,10 +7,10 @@ class Message(Base):
     __tablename__ = "messages"
 
     id = Column(Integer, primary_key=True, index=True)
-    appointment_id = Column(Integer, ForeignKey("appointments.id"), nullable=False)
-    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    appointment_id = Column(Integer, ForeignKey("appointments.id"), nullable=False, index=True)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     content = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     is_read = Column(Boolean, default=False)
 
     # Relationships
