@@ -9,6 +9,7 @@ class HealthTip {
   final String category;
   final String readTime;
   final String? imageUrl;
+  final String? externalLink;
   final String content;
 
   HealthTip({
@@ -17,6 +18,7 @@ class HealthTip {
     required this.category,
     required this.readTime,
     this.imageUrl,
+    this.externalLink,
     required this.content,
   });
 
@@ -27,6 +29,7 @@ class HealthTip {
       category: json['category'],
       readTime: json['read_time'],
       imageUrl: json['image_url'],
+      externalLink: json['external_link'],
       content: json['content'],
     );
   }
@@ -58,6 +61,7 @@ class ContentRepository {
     required String readTime,
     required String content,
     String? imageUrl,
+    String? externalLink,
   }) async {
     try {
       await _dio.post(
@@ -68,6 +72,7 @@ class ContentRepository {
           "read_time": readTime,
           "content": content,
           "image_url": imageUrl,
+          "external_link": externalLink,
         },
       );
     } catch (e) {
@@ -82,6 +87,7 @@ class ContentRepository {
     String? readTime,
     String? content,
     String? imageUrl,
+    String? externalLink,
   }) async {
     try {
       await _dio.put(
@@ -92,6 +98,7 @@ class ContentRepository {
           if (readTime != null) "read_time": readTime,
           if (content != null) "content": content,
           if (imageUrl != null) "image_url": imageUrl,
+          if (externalLink != null) "external_link": externalLink,
         },
       );
     } catch (e) {
