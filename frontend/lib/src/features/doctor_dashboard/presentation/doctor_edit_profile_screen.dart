@@ -37,7 +37,12 @@ class _DoctorEditProfileScreenState
 
   Future<void> _pickImage() async {
     final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    final pickedFile = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 90,
+      maxWidth: 1920,
+      maxHeight: 1920,
+    );
 
     if (pickedFile != null) {
       final bytes = await pickedFile.readAsBytes();

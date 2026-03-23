@@ -253,7 +253,12 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
 
   Future<void> _pickAndAnalyzeImage(ImageSource source) async {
     final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: source);
+    final pickedFile = await picker.pickImage(
+      source: source,
+      imageQuality: 90,
+      maxWidth: 1920,
+      maxHeight: 1920,
+    );
     if (pickedFile != null) {
       await ref.read(labControllerProvider.notifier).analyzeImage(pickedFile);
       _checkResult();

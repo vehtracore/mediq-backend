@@ -53,7 +53,9 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
     final picker = ImagePicker();
     final XFile? pickedFile = await picker.pickImage(
       source: ImageSource.gallery,
-      imageQuality: 80, 
+      imageQuality: 90,
+      maxWidth: 1920,
+      maxHeight: 1920,
     );
 
     if (pickedFile != null) {

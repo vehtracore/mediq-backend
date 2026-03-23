@@ -35,7 +35,12 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
 
   Future<void> _pickImage() async {
     final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    final pickedFile = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 90,
+      maxWidth: 1920,
+      maxHeight: 1920,
+    );
     
     if (pickedFile != null) {
       // ✅ Read bytes immediately. This removes the need for 'dart:io' File objects in UI.
