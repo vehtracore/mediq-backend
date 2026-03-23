@@ -8,6 +8,7 @@ final storageServiceProvider = Provider<StorageService>((ref) {
 class StorageService {
   final _storage = const FlutterSecureStorage();
   static const _tokenKey = 'auth_token';
+  static const _refreshTokenKey = 'refresh_token';
 
   // Options to ensure data is encrypted on Android
   AndroidOptions _getAndroidOptions() =>
@@ -27,5 +28,24 @@ class StorageService {
 
   Future<void> deleteToken() async {
     await _storage.delete(key: _tokenKey, aOptions: _getAndroidOptions());
+    await _storage.delete(key: _refreshTokenKey, aOptions: _getAndroidOptions());
+  }
+
+  // --- REFRESH TOKEN ---
+
+  Future<void> saveRefreshToken(String token) async {
+    await _storage.write(
+      key: _refreshTokenKey,
+      value: token,
+      aOptions: _getAndroidOptions(),
+    );
+  }
+
+  Future<String?> getRefreshToken() async {
+    return await _storage.read(key: _refreshTokenKey, aOptions: _getAndroidOptions());
+  }
+
+  Future<void> deleteRefreshToken() async {
+    await _storage.delete(key: _refreshTokenKey, aOptions: _getAndroidOptions());
   }
 }

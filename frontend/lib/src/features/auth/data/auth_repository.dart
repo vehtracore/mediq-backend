@@ -23,6 +23,7 @@ class AuthRepository {
       });
 
       final token = response.data['access_token'];
+      final refreshToken = response.data['refresh_token'];
       if (token != null) {
         final storage = FlutterSecureStorage();
         await storage.write(
@@ -30,6 +31,13 @@ class AuthRepository {
           value: token,
           aOptions: AndroidOptions(encryptedSharedPreferences: true),
         );
+        if (refreshToken != null) {
+          await storage.write(
+            key: 'refresh_token',
+            value: refreshToken,
+            aOptions: AndroidOptions(encryptedSharedPreferences: true),
+          );
+        }
       }
     } on DioException catch (e) {
       final msg = e.response?.data['detail'] ?? "Login failed. Please check your connection.";
@@ -60,6 +68,7 @@ class AuthRepository {
   Future<void> logout() async {
     final storage = FlutterSecureStorage();
     await storage.delete(key: 'auth_token', aOptions: AndroidOptions(encryptedSharedPreferences: true));
+    await storage.delete(key: 'refresh_token', aOptions: AndroidOptions(encryptedSharedPreferences: true));
   }
 
   // --- USER DATA ---
