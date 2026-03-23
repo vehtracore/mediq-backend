@@ -1,15 +1,37 @@
+import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'src/core/router/app_router.dart';
 import 'src/core/theme/app_theme.dart';
 import 'src/features/auth/presentation/user_controller.dart';
 import 'src/features/auth/data/user_model.dart';
+import 'src/shared/presentation/widgets/global_error_widget.dart';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 // import 'package:web/web.dart' as web; // For cleaning URL (Optional)
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // --- 🔴 Error Boundaries ---
+  // 1. Catch synchronous UI rendering errors (Grey Screen of Death)
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    // Only return the custom widget in release mode or if we want it in debug too.
+    // We already handle kDebugMode inside GlobalErrorWidget to show the stack trace.
+    return GlobalErrorWidget(details: details);
+  };
+
+  // 2. Catch asynchronous Dart exceptions
+  PlatformDispatcher.instance.onError = (error, stack) {
+    if (kDebugMode) {
+      debugPrint('🚨 [PlatformDispatcher] Asynchronous Error Caught: $error');
+      debugPrint('🚨 StackTrace: $stack');
+    }
+    // TODO: Send to Crashlytics or Sentry here in production
+    return true; // Return true to prevent the app from crashing entirely
+  };
+  // ---------------------------
 
   // --- 🔴 Google Auth: Capture Token from URL (Web) ---
   final uri = Uri.base; // Get current URL
