@@ -156,7 +156,11 @@ class _DoctorChatTile extends StatelessWidget {
         onTap: () {
           if (isUnlocked) {
             context.push('/chat',
-                extra: {'title': appointment.doctorName, 'isAi': false});
+                extra: {
+                  'title': appointment.doctorName,
+                  'isAi': false,
+                  'appointmentId': appointment.id,
+                });
           } else {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                 content: Text("Chat opens 10 minutes before appointment."),
