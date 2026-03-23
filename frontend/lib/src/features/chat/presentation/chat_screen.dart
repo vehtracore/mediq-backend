@@ -25,14 +25,77 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final TextEditingController _msgController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   WebSocketChannel? _channel;
+  
+  // State
   List<dynamic> _messages = [];
   bool _isLoading = true;
   int? _myUserId;
+  
+  // Pagination State
+  String? _nextCursor;
+  bool _hasMore = true;
+  bool _isLoadingMore = false;
 
   @override
   void initState() {
     super.initState();
     _initializeChat();
+    
+    // Add Scroll Listener for Pagination
+    _scrollController.addListener(() {
+      if (_scrollController.position.pixels >= 
+          _scrollController.position.maxScrollExtent - 200) {
+        _fetchMoreMessages();
+      }
+    });
+  }
+
+  Future<void> _fetchMoreMessages() async {
+    if (_isLoadingMore || !_hasMore) return;
+    
+    setState(() {
+      _isLoadingMore = true;
+    });
+
+    try {
+      final dio = ref.read(dioProvider);
+      final queryParam = _nextCursor != null ? "?cursor=$_nextCursor" : "";
+      final response = await dio.get('/api/v1/p2p/history/${widget.appointmentId}$queryParam');
+      
+      List<dynamic> olderMessages = [];
+      String? next;
+      bool hasMoreData = false;
+      
+      // Handle both legacy (flat array) and new paginated object formats
+      if (response.data is List) {
+        olderMessages = response.data;
+        hasMoreData = false; // Legacy backend doesn't support pagination, so no more after initial
+      } else if (response.data is Map) {
+        olderMessages = response.data['messages'] ?? [];
+        next = response.data['next_cursor'];
+        hasMoreData = response.data['has_more'] ?? false;
+      }
+
+      if (mounted) {
+        setState(() {
+          // Since reverse: true, older messages are appended to the end.
+          // The backend returns order_by(created_at.asc()), which means older first.
+          // We need newest first (0 = newest). So we reverse the older messages before appending.
+          _messages.addAll(olderMessages.reversed.toList());
+          _nextCursor = next;
+          _hasMore = hasMoreData;
+          _isLoadingMore = false;
+        });
+      }
+    } catch (e) {
+      print("Fetch More Error: $e");
+      if (mounted) {
+        setState(() {
+          _isLoadingMore = false;
+          _hasMore = false; // Stop trying if error occurs
+        });
+      }
+    }
   }
 
   Future<void> _initializeChat() async {
@@ -42,16 +105,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     final dio = ref.read(dioProvider);
 
-    // Load History
+    // Initial Load History
     try {
-      final response =
-          await dio.get('/api/v1/p2p/history/${widget.appointmentId}');
+      final response = await dio.get('/api/v1/p2p/history/${widget.appointmentId}');
       if (mounted) {
         setState(() {
-          _messages = List.from(response.data);
+          // We are parsing the initial fetch.
+          List<dynamic> initialMessages = [];
+          if (response.data is List) {
+             initialMessages = response.data;
+             _hasMore = false; // Legacy backend gives all at once
+          } else if (response.data is Map) {
+             initialMessages = response.data['messages'] ?? [];
+             _nextCursor = response.data['next_cursor'];
+             _hasMore = response.data['has_more'] ?? false;
+          }
+          
+          // Reversing the initial messages so index 0 is newest (bottom of screen)
+          _messages = initialMessages.reversed.toList();
           _isLoading = false;
         });
-        _scrollToBottom();
       }
     } catch (e) {
       print("History Error: $e");
@@ -74,9 +147,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         final newMessage = jsonDecode(data);
         if (mounted) {
           setState(() {
-            _messages.add(newMessage);
+            // New message comes in -> Goes to index 0 (bottom)
+            _messages.insert(0, newMessage);
           });
-          _scrollToBottom();
         }
       }, onError: (error) => print("WS Error: $error"));
     } catch (e) {
@@ -105,18 +178,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (url != null) {
       _sendMessage(content: url);
     }
-  }
-
-  void _scrollToBottom() {
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
   }
 
   @override
@@ -152,9 +213,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ? const Center(child: CircularProgressIndicator())
                 : ListView.builder(
                     controller: _scrollController,
+                    reverse: true, // ✅ Native chat layout (index 0 is bottom)
                     padding: const EdgeInsets.all(16),
-                    itemCount: _messages.length,
+                    itemCount: _messages.length + (_isLoadingMore ? 1 : 0),
                     itemBuilder: (context, index) {
+                      // Show loader at the end of the list (top of screen due to reverse)
+                      if (index == _messages.length) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 16.0),
+                          child: Center(child: CircularProgressIndicator()),
+                        );
+                      }
+                      
                       final msg = _messages[index];
                       final senderId =
                           int.tryParse(msg['sender_id'].toString());
