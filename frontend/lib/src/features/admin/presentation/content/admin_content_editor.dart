@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../content/data/content_repository.dart';
-import '../../chat/data/image_upload_service.dart';
+import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
 
 class AdminContentEditorScreen extends ConsumerStatefulWidget {
   final HealthTip? healthTip; // If null, we are creating. If exists, editing.
