@@ -88,12 +88,13 @@ class _DoctorAvailabilityScreenState
   @override
   Widget build(BuildContext context) {
     final doctorAsync = ref.watch(myDoctorProfileProvider);
+    final theme = Theme.of(context);
 
     return Scaffold(
+      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text("Manage Availability"),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        title: Text("Manage Availability", style: theme.textTheme.titleLarge),
+        backgroundColor: theme.appBarTheme.backgroundColor,
         elevation: 0,
       ),
       body: doctorAsync.when(
@@ -114,9 +115,13 @@ class _DoctorAvailabilityScreenState
                       vertical: 12,
                     ),
                     decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey.shade300),
+                      border: Border.all(
+                        color: theme.brightness == Brightness.dark
+                            ? Colors.grey.shade800
+                            : Colors.grey.shade300,
+                      ),
                       borderRadius: BorderRadius.circular(12),
-                      color: Colors.white,
+                      color: theme.cardColor,
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -128,7 +133,7 @@ class _DoctorAvailabilityScreenState
                               "Selected Date",
                               style: TextStyle(
                                 fontSize: 12,
-                                color: Colors.grey[600],
+                                color: Colors.grey[500],
                               ),
                             ),
                             const SizedBox(height: 4),
@@ -136,7 +141,7 @@ class _DoctorAvailabilityScreenState
                               DateFormat(
                                 'EEEE, MMM d, yyyy',
                               ).format(_selectedDate),
-                              style: const TextStyle(
+                              style: theme.textTheme.bodyMedium?.copyWith(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -169,9 +174,9 @@ class _DoctorAvailabilityScreenState
                     ).format(DateTime(2023, 1, 1, hour));
 
                     return ActionChip(
-                      label: Text(timeLabel),
-                      backgroundColor: Colors.white,
-                      surfaceTintColor: Colors.white,
+                      label: Text(timeLabel, style: theme.textTheme.bodyMedium),
+                      backgroundColor: theme.cardColor,
+                      surfaceTintColor: Colors.transparent,
                       elevation: 1,
                       onPressed: _isCreating
                           ? null
