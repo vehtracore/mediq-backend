@@ -7,7 +7,7 @@ from datetime import date
 from app.core.database import get_db
 from app.models.user import User
 from app.models.doctor import Doctor
-from app.schemas.user import UserCreate, UserResponse, LoginRequest, Token, UserUpdate, RefreshRequest
+from app.schemas.user import UserCreate, UserResponse, LoginRequest, Token, UserUpdate, RefreshRequest, DeviceTokenUpdate
 from app.schemas.doctor import DoctorResponse, DoctorRegister
 from app.core import security
 from app.api import deps
@@ -368,4 +368,17 @@ def approve_doctor(
     )
     
     return {"message": f"Doctor {doctor.full_name} approved"}
+
+# --- 📲 FCM Device Token Registration ---
+
+@router.patch("/me/device-token")
+def update_device_token(
+    body: DeviceTokenUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """Store the client's FCM device token for push notifications."""
+    current_user.fcm_token = body.fcm_token
+    db.commit()
+    return {"message": "Device token updated"}
 

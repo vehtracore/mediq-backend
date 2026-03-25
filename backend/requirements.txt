@@ -64,3 +64,4 @@ resend==2.4.0
 authlib
 itsdangerous
 slowapi
+firebase-admin

@@ -45,3 +45,6 @@ class User(Base):
     settings_theme = Column(String, default="light")  # 'light' or 'dark'
     settings_notifications = Column(Boolean, default=True)
     settings_email_updates = Column(Boolean, default=False)
+
+    # --- 📲 PUSH NOTIFICATIONS ---
+    fcm_token = Column(String, nullable=True)
