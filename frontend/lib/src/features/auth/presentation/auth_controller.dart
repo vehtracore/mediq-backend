@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
+import 'package:mediq_app/src/core/services/notification_service.dart';
 
 final authControllerProvider = StateNotifierProvider<AuthController, AsyncValue<void>>((ref) {
   return AuthController(
@@ -23,7 +24,20 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
   Future<void> login(String email, String password) async {
     state = const AsyncLoading();
     state = await AsyncValue.guard(() => _authRepository.login(email, password));
+    
+    if (!state.hasError) {
+      _syncDeviceToken();
+    }
+    
     _ref.invalidate(userProvider);
+  }
+
+  Future<void> _syncDeviceToken() async {
+    final notificationService = _ref.read(notificationServiceProvider);
+    final token = await notificationService.getToken();
+    if (token != null) {
+      await _authRepository.updateDeviceToken(token);
+    }
   }
 
   Future<void> signUp(String email, String password, String firstName, String lastName, DateTime dob) async {
@@ -39,6 +53,11 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
 
     // 2. Auto Login
     state = await AsyncValue.guard(() => _authRepository.login(email, password));
+    
+    if (!state.hasError) {
+      _syncDeviceToken();
+    }
+    
     _ref.invalidate(userProvider);
   }
 

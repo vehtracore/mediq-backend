@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
@@ -119,6 +120,16 @@ class AuthRepository {
       await _dio.put('/api/v1/auth/me', data: data);
     } catch (e) {
       throw Exception("Update failed: $e");
+    }
+  }
+
+  Future<void> updateDeviceToken(String fcmToken) async {
+    try {
+      await _dio.patch('/api/v1/auth/me/device-token', data: {
+        'fcm_token': fcmToken,
+      });
+    } catch (e) {
+      debugPrint("Failed to sync FCM token: $e");
     }
   }
 

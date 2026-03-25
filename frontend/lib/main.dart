@@ -8,11 +8,24 @@ import 'src/features/auth/presentation/user_controller.dart';
 import 'src/features/auth/data/user_model.dart';
 import 'src/shared/presentation/widgets/global_error_widget.dart';
 
+import 'package:firebase_core/firebase_core.dart';
+import 'package:mediq_app/src/core/services/notification_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 // import 'package:web/web.dart' as web; // For cleaning URL (Optional)
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // --- 🔥 Firebase Initialization ---
+  try {
+    await Firebase.initializeApp();
+    // In a real app with Riverpod, we would read the provider via a container or let the first screen handle it.
+    // However, the prompt asks to init in main or auth controller. 
+    // We will initialize NotificationService here for foreground listeners:
+    await NotificationService().init();
+  } catch (e) {
+    debugPrint("Firebase init failed: $e");
+  }
 
   // --- 🔴 Error Boundaries ---
   // 1. Catch synchronous UI rendering errors (Grey Screen of Death)
