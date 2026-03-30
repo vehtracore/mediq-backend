@@ -8,6 +8,10 @@ from datetime import datetime
 from app.core.database import engine, get_db
 from sqlalchemy.orm import sessionmaker, Session
 from app.models.message import Message
+from app.models.appointment import Appointment
+from app.models.doctor import Doctor
+from app.models.user import User
+from app.core.notifications import send_push_notification
 
 # Create local session maker
 WsSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -18,19 +22,29 @@ router = APIRouter()
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, List[WebSocket]] = {}
+        # Track which user IDs are connected per appointment
+        self.connected_users: Dict[str, set] = {}
 
-    async def connect(self, websocket: WebSocket, appointment_id: str):
+    async def connect(self, websocket: WebSocket, appointment_id: str, user_id: int):
         await websocket.accept()
         if appointment_id not in self.active_connections:
             self.active_connections[appointment_id] = []
+            self.connected_users[appointment_id] = set()
         self.active_connections[appointment_id].append(websocket)
+        self.connected_users[appointment_id].add(user_id)
 
-    def disconnect(self, websocket: WebSocket, appointment_id: str):
+    def disconnect(self, websocket: WebSocket, appointment_id: str, user_id: int):
         if appointment_id in self.active_connections:
             if websocket in self.active_connections[appointment_id]:
                 self.active_connections[appointment_id].remove(websocket)
+            self.connected_users[appointment_id].discard(user_id)
             if not self.active_connections[appointment_id]:
                 del self.active_connections[appointment_id]
+                del self.connected_users[appointment_id]
+
+    def is_user_connected(self, appointment_id: str, user_id: int) -> bool:
+        """Check if a specific user is connected to the given appointment chat."""
+        return user_id in self.connected_users.get(appointment_id, set())
 
     async def broadcast(self, message: dict, appointment_id: str):
         if appointment_id in self.active_connections:
@@ -38,7 +52,7 @@ class ConnectionManager:
                 try:
                     await connection.send_text(json.dumps(message))
                 except Exception:
-                    self.disconnect(connection, appointment_id)
+                    self.disconnect(connection, appointment_id, 0)
 
 manager = ConnectionManager()
 
@@ -123,6 +137,69 @@ def save_message_sync(appointment_id: int, user_id: int, content: str):
     finally:
         db.close()
 
+
+# --- HELPER: Look up recipient and send FCM push ---
+def send_chat_push_sync(appointment_id: int, sender_id: int, message_text: str):
+    """
+    Determine the recipient of a chat message and fire an FCM push.
+    Runs in a threadpool so it doesn't block the WebSocket loop.
+    """
+    db = WsSession()
+    try:
+        appointment = (
+            db.query(Appointment)
+            .filter(Appointment.id == appointment_id)
+            .first()
+        )
+        if not appointment:
+            return
+
+        # Determine the recipient's User ID
+        # If the sender is the patient → recipient is the doctor (and vice versa)
+        if sender_id == appointment.patient_id:
+            # Sender is the patient; look up the doctor's User record
+            doctor = (
+                db.query(Doctor)
+                .filter(Doctor.id == appointment.doctor_id)
+                .first()
+            )
+            if not doctor:
+                return
+            recipient_user_id = doctor.user_id
+            sender_label = "Patient"
+        else:
+            # Sender is the doctor; recipient is the patient
+            recipient_user_id = appointment.patient_id
+            sender_label = "Doctor"
+
+        # Fetch the recipient's User row to get FCM token + sender name for title
+        recipient = db.query(User).filter(User.id == recipient_user_id).first()
+        sender = db.query(User).filter(User.id == sender_id).first()
+
+        if not recipient or not recipient.fcm_token:
+            return
+
+        sender_name = f"{sender.first_name} {sender.last_name}" if sender else sender_label
+
+        # Truncate long messages for the notification body
+        body_preview = message_text[:200] + "…" if len(message_text) > 200 else message_text
+
+        send_push_notification(
+            token=recipient.fcm_token,
+            title=f"New message from {sender_name}",
+            body=body_preview,
+            data={
+                "type": "chat_message",
+                "appointment_id": str(appointment_id),
+                "sender_id": str(sender_id),
+            },
+        )
+    except Exception as e:
+        print(f"⚠️ FCM push error: {e}")
+    finally:
+        db.close()
+
+
 # --- WebSocket Endpoint (PRODUCTION) ---
 @router.websocket("/live/{appointment_id}/{user_id}")
 async def websocket_endpoint(
@@ -131,7 +208,7 @@ async def websocket_endpoint(
     user_id: int
 ):
     print(f"✅ WS Connecting: User {user_id}")
-    await manager.connect(websocket, appointment_id)
+    await manager.connect(websocket, appointment_id, user_id)
     
     try:
         while True:
@@ -150,6 +227,15 @@ async def websocket_endpoint(
                 # 3. Broadcast the SAVED message (with real ID)
                 await manager.broadcast(saved_msg, appointment_id)
 
+                # 4. Send FCM push to the OTHER user (only if they're offline)
+                #    This runs in a threadpool so it doesn't block the WS loop.
+                await run_in_threadpool(
+                    send_chat_push_sync,
+                    int(appointment_id),
+                    user_id,
+                    data,
+                )
+
     except WebSocketDisconnect:
-        manager.disconnect(websocket, appointment_id)
-        print(f"🔌 Disconnected: User {user_id}")
+        manager.disconnect(websocket, appointment_id, user_id)
+        print(f"🔌 Disconnected: User {user_id}")
