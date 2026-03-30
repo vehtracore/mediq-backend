@@ -1,13 +1,16 @@
 """
 Firebase Cloud Messaging (FCM) push notification utility.
 
-Initialises the Firebase Admin SDK from a service-account JSON whose
-path is read from the FIREBASE_CREDENTIALS environment variable.
+Initialises the Firebase Admin SDK from a service-account JSON.
+The FIREBASE_CREDENTIALS env var can be either:
+  - A raw JSON string (e.g. on Render / cloud hosts)
+  - A file path to a service-account JSON file (local dev)
 Exposes a single helper `send_push_notification` used by the rest of
 the backend to deliver push messages to individual devices.
 """
 
 import os
+import json
 import logging
 
 import firebase_admin
@@ -20,13 +23,23 @@ logger = logging.getLogger("uvicorn.error")
 # ---------------------------------------------------------------------------
 _FIREBASE_APP = None
 
-_cred_path = os.getenv("FIREBASE_CREDENTIALS")
+_cred_raw = os.getenv("FIREBASE_CREDENTIALS")
 
-if _cred_path:
+if _cred_raw:
     try:
-        _cred = credentials.Certificate(_cred_path)
+        # Try parsing as a JSON string first (Render / cloud deploys)
+        cred_dict = json.loads(_cred_raw)
+        _cred = credentials.Certificate(cred_dict)
         _FIREBASE_APP = firebase_admin.initialize_app(_cred)
-        logger.info(f"[FCM] Firebase Admin SDK initialised (creds: {_cred_path})")
+        logger.info("[FCM] Firebase Admin SDK initialised (from JSON env var)")
+    except (json.JSONDecodeError, ValueError):
+        # Fall back to treating it as a file path (local development)
+        try:
+            _cred = credentials.Certificate(_cred_raw)
+            _FIREBASE_APP = firebase_admin.initialize_app(_cred)
+            logger.info(f"[FCM] Firebase Admin SDK initialised (from file: {_cred_raw})")
+        except Exception as exc:
+            logger.error(f"[FCM] Failed to initialise Firebase Admin SDK: {exc}")
     except Exception as exc:
         logger.error(f"[FCM] Failed to initialise Firebase Admin SDK: {exc}")
 else:
