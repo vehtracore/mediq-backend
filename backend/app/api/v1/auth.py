@@ -184,15 +184,21 @@ async def register_doctor(
     db.commit()
     db.refresh(new_user)
 
-    # ✅ Email 1: Confirmation to the Doctor
+    # ✅ Generate the Verification Link
+    backend_url = os.getenv("BACKEND_URL", "https://your-render-url.onrender.com") # Update if needed
+    verification_link = f"{backend_url}/api/v1/auth/verify-email?token={new_user.verification_token}"
+
+    # ✅ Email 1: Confirmation + Verification Link
     background_tasks.add_task(
         send_email,
         email,
-        "mdqplus: Application Received!",
-        f"Hello Dr. {full_name},\n\n"
-        f"Thank you for applying to join mdqplus!\n\n"
-        f"Your application is now pending admin review. "
-        f"You will receive another email once your account is approved.\n\n"
+        "mdqplus: Application Received & Verify Email",
+        f"Hello Dr. {full_name},<br><br>"
+        f"Thank you for applying to join mdqplus!<br><br>"
+        f"<b>ACTION REQUIRED:</b> Please verify your email address by clicking the link below:<br>"
+        f"<a href='{verification_link}'>Verify My Email</a><br><br>"
+        f"Your application is currently pending admin review based on your submitted documents. "
+        f"You will receive another email once your account is approved.<br><br>"
         f"- The mdqplus Team"
     )
 
