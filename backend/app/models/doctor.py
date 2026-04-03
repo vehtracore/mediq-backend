@@ -21,6 +21,8 @@ class Doctor(Base):
     
     is_available = Column(Boolean, default=False)
     license_number = Column(String, unique=True, index=True)
+    mdcn_license_url = Column(String, nullable=True) # NEW
+    indemnity_cert_url = Column(String, nullable=True) # NEW
     status = Column(String, default="pending", index=True) # ✅ NEW: "pending", "active", "rejected"
     is_verified = Column(Boolean, default=False, index=True)
     documents_url = Column(String, nullable=True) 

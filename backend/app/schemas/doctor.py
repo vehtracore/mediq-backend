@@ -17,7 +17,9 @@ class DoctorBase(BaseModel):
 class DoctorResponse(DoctorBase):
     id: int
     user_id: int
-    license_number: str 
+    license_number: str
+    mdcn_license_url: Optional[str] = None
+    indemnity_cert_url: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 class DoctorRegister(BaseModel):

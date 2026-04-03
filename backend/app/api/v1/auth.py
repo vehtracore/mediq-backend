@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request, Form, File, UploadFile
 from fastapi.responses import HTMLResponse
 import uuid
 from pydantic import EmailStr
@@ -8,10 +8,11 @@ from app.core.database import get_db
 from app.models.user import User
 from app.models.doctor import Doctor
 from app.schemas.user import UserCreate, UserResponse, LoginRequest, Token, UserUpdate, RefreshRequest, DeviceTokenUpdate
-from app.schemas.doctor import DoctorResponse, DoctorRegister
+from app.schemas.doctor import DoctorResponse
 from app.core import security
 from app.api import deps
 from app.core.limiter import limiter
+from app.services.media_service import upload_image
 
 router = APIRouter()
 
@@ -128,16 +129,32 @@ def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session
     return new_user
 
 @router.post("/doctor/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register_doctor(doctor_in: DoctorRegister, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == doctor_in.email).first(): raise HTTPException(400, detail="Email registered")
-    if db.query(Doctor).filter(Doctor.license_number == doctor_in.license_number).first(): raise HTTPException(400, detail="License registered")
-    
-    hashed_pwd = security.get_password_hash(doctor_in.password)
-    names = doctor_in.full_name.split(" ")
+async def register_doctor(
+    background_tasks: BackgroundTasks,
+    email: str = Form(...),
+    password: str = Form(...),
+    full_name: str = Form(...),
+    specialty: str = Form(...),
+    license_number: str = Form(...),
+    mdcn_license: UploadFile = File(...),
+    indemnity_certificate: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(400, detail="Email registered")
+    if db.query(Doctor).filter(Doctor.license_number == license_number).first():
+        raise HTTPException(400, detail="License registered")
+
+    # Upload both documents to Cloudinary
+    mdcn_license_url = await upload_image(mdcn_license, folder="mdq_plus/doctor_licenses")
+    indemnity_cert_url = await upload_image(indemnity_certificate, folder="mdq_plus/indemnity_certs")
+
+    hashed_pwd = security.get_password_hash(password)
+    names = full_name.split(" ")
     
     # ✅ Doctor user is INACTIVE initially
     new_user = User(
-        email=doctor_in.email, 
+        email=email, 
         first_name=names[0], 
         last_name=names[-1] if len(names)>1 else "", 
         hashed_password=hashed_pwd, 
@@ -153,9 +170,11 @@ def register_doctor(doctor_in: DoctorRegister, background_tasks: BackgroundTasks
 
     new_doctor = Doctor(
         user_id=new_user.id, 
-        full_name=doctor_in.full_name, 
-        specialty=doctor_in.specialty, 
-        license_number=doctor_in.license_number, 
+        full_name=full_name, 
+        specialty=specialty, 
+        license_number=license_number,
+        mdcn_license_url=mdcn_license_url,
+        indemnity_cert_url=indemnity_cert_url,
         is_verified=False, 
         is_available=False, 
         hourly_rate=0.0,
@@ -168,9 +187,9 @@ def register_doctor(doctor_in: DoctorRegister, background_tasks: BackgroundTasks
     # ✅ Email 1: Confirmation to the Doctor
     background_tasks.add_task(
         send_email,
-        doctor_in.email,
+        email,
         "mdqplus: Application Received!",
-        f"Hello Dr. {doctor_in.full_name},\n\n"
+        f"Hello Dr. {full_name},\n\n"
         f"Thank you for applying to join mdqplus!\n\n"
         f"Your application is now pending admin review. "
         f"You will receive another email once your account is approved.\n\n"
@@ -183,7 +202,7 @@ def register_doctor(doctor_in: DoctorRegister, background_tasks: BackgroundTasks
         send_email,
         admin_email,
         "mdqplus: New Doctor Application",
-        f"Dr. {doctor_in.full_name} has applied.\n\nEmail: {doctor_in.email}\nLicense: {doctor_in.license_number}\n\nPlease review in the Admin Dashboard."
+        f"Dr. {full_name} has applied.\n\nEmail: {email}\nLicense: {license_number}\n\nPlease review in the Admin Dashboard."
     )
 
     return new_user

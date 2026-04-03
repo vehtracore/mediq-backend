@@ -16,3 +16,40 @@ subprojects {
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }
+
+subprojects {
+    // --- Namespace safety net (fixes image_gallery_saver) ---
+    project.plugins.withId("com.android.library") {
+        project.android {
+            if (namespace == null) {
+                namespace project.group
+            }
+        }
+    }
+
+    // --- Force Java + Kotlin to 17 AFTER each plugin's build.gradle runs ---
+    // flutter_image_compress_common hardcodes Java 11 & Kotlin 11 in its
+    // own android{} block. We must override at the extension level (not
+    // task level, since AGP's variant API re-applies extension values).
+    // Guard: skip :app (already evaluated via evaluationDependsOn on line 13;
+    // it already has Java 17 in its own build.gradle).
+    if (!project.state.executed) {
+        project.afterEvaluate {
+            if (it.hasProperty('android')) {
+                it.android {
+                    compileOptions {
+                        sourceCompatibility JavaVersion.VERSION_17
+                        targetCompatibility JavaVersion.VERSION_17
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Force ALL Kotlin compilation to JVM 17 (fixes camera_android_camerax) ---
+    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions {
+            jvmTarget = "17"
+        }
+    }
+}

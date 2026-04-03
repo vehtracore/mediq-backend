@@ -139,7 +139,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       final cleanBaseUrl = baseUrl.endsWith('/')
           ? baseUrl.substring(0, baseUrl.length - 1)
           : baseUrl;
-      final wsBase = cleanBaseUrl.replaceFirst('http', 'ws');
+      String wsBase = cleanBaseUrl;
+      if (wsBase.startsWith('https://')) {
+        wsBase = wsBase.replaceFirst('https://', 'wss://');
+      } else if (wsBase.startsWith('http://')) {
+        wsBase = wsBase.replaceFirst('http://', 'ws://');
+      }
+      
       final wsUrl =
           '$wsBase/api/v1/p2p/live/${widget.appointmentId}/${user.id}';
 

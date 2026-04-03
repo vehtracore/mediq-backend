@@ -1,5 +1,8 @@
 plugins {
     id "com.android.application"
+    // START: FlutterFire Configuration
+    id 'com.google.gms.google-services'
+    // END: FlutterFire Configuration
     id "kotlin-android"
     id "dev.flutter.flutter-gradle-plugin"
 }
@@ -25,7 +28,7 @@ if (flutterVersionName == null) {
 android {
     namespace "com.example.mediq_app"
     compileSdk 36  // <--- REQUIRED by dependencies
-    ndkVersion "27.0.12077973" // Updated for AGP 8.9
+    ndkVersion "28.2.13676358" // <--- UPDATED to fix speech_to_text crash
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -61,5 +64,5 @@ flutter {
 }
 
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:2.0.20"
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:2.1.0"
 }
