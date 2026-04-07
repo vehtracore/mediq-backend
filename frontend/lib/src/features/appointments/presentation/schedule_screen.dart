@@ -251,6 +251,7 @@ class _AppointmentCard extends ConsumerWidget {
                             'title': appointment.doctorName,
                             'isAi': false,
                             'appointmentId': appointment.id,
+                            'doctorId': appointment.doctorId,
                             'isCompleted': appointment.status == 'completed'
                           }),
                       icon: const Icon(Icons.chat_bubble_outline, size: 16),

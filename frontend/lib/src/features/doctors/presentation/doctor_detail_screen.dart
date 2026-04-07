@@ -44,6 +44,31 @@ class DoctorDetailScreen extends StatelessWidget {
                                       style: GoogleFonts.lato(
                                           fontSize: 16,
                                           color: Colors.grey[600])),
+                                  if (doctor.licenseNumber != null && doctor.licenseNumber!.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blue.withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(Icons.verified, size: 14, color: Colors.blue),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            "MDCN: ${doctor.licenseNumber}",
+                                            style: const TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.blue),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
                                 ]),
                             Chip(
                                 label: Text("${doctor.rating} ★"),

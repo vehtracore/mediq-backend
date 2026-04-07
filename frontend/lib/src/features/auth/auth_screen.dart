@@ -261,8 +261,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     value: _agreedToPrivacy,
                     onChanged: (v) => setState(() => _agreedToPrivacy = v!),
                     onTapLink: () => _showLegalSheet(
-                      "Privacy Policy",
-                      "MDQ+ Privacy Policy\n\nYour data is encrypted and securely stored. We comply with medical data protection standards. Your data will not be sold to third parties.",
+                      "MDQ+ Privacy Policy & User Agreement",
+                      _buildPrivacyPolicy(),
                     ),
                   ),
                   _buildLegalCheckbox(
@@ -271,8 +271,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     value: _agreedToTC,
                     onChanged: (v) => setState(() => _agreedToTC = v!),
                     onTapLink: () => _showLegalSheet(
-                      "Telemedicine Informed Consent",
-                      "Telemedicine Informed Consent\n\n1. I understand MDQ+ uses AI for preliminary analysis, which is NOT a substitute for professional medical advice.\n2. I understand that MDQ+ is NOT for medical emergencies. In an emergency, I will contact local emergency services immediately.\n3. I consent to telemedicine consultations with licensed practitioners.",
+                      "MDQ+ Patient Terms and Conditions",
+                      _buildTermsAndConditions(),
                     ),
                   ),
                 ],
@@ -400,7 +400,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     );
   }
 
-  void _showLegalSheet(String title, String content) {
+  void _showLegalSheet(String title, Widget contentWidget) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -440,10 +440,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               Expanded(
                 child: SingleChildScrollView(
                   controller: scrollController,
-                  child: Text(
-                    content, 
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.5)
-                  ),
+                  child: contentWidget,
                 ),
               ),
               const SizedBox(height: 16),
@@ -459,6 +456,87 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildPrivacyPolicy() {
+    return RichText(
+      text: TextSpan(
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.5),
+        children: const [
+          TextSpan(text: "Introduction\n", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          TextSpan(text: "Welcome to MDQ+. This platform is owned and operated by Vehtr Technology Limited. We are committed to protecting your personal and medical information. This policy outlines how we collect, process, and protect your data.\n\n"),
+          TextSpan(text: "Nature of Service (The Technology Intermediary)\n", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          TextSpan(text: "MDQ+ is a technology infrastructure provider. We provide the digital \"pipe\" that connects you with independent, licensed medical practitioners.\n"),
+          TextSpan(text: "• Independent Providers: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "This policy does not apply to the independent clinical practices of the doctors on the platform.\n"),
+          TextSpan(text: "• Not a Medical Provider: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "Vehtr Technology Limited is a technology firm, not a healthcare facility, and does not employ the practitioners.\n\n"),
+          TextSpan(text: "Information We Collect\n", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          TextSpan(text: "• Personal Data: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "Name, gender, date of birth, and contact details.\n"),
+          TextSpan(text: "• Medical Data: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "Symptom descriptions, urinalysis photos, and consultation history.\n"),
+          TextSpan(text: "• Technical Data: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "IP address, device type, and location data to facilitate local emergency connections.\n"),
+          TextSpan(text: "• Professional Data (for Doctors): ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "MDCN registration numbers and practicing licenses.\n\n"),
+          TextSpan(text: "AI & Machine Learning Disclaimer\n", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          TextSpan(text: "MDQ+ utilizes proprietary ML-inference and Gemini Pro API to provide symptom summaries.\n"),
+          TextSpan(text: "• Non-Diagnostic: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "All AI-generated outputs are \"Clinical Decision Support\" tools for informational purposes only.\n"),
+          TextSpan(text: "• Human-in-the-Loop: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "AI results do not constitute a final medical diagnosis or prescription and must be verified by a licensed human doctor.\n\n"),
+          TextSpan(text: "How We Use Your Data\n", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          TextSpan(text: "• Consultations: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "To facilitate encrypted video (Agora RTC) and chat sessions.\n"),
+          TextSpan(text: "• Payments: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "To process transactions through our integrated partners, Paystack and OPay.\n"),
+          TextSpan(text: "• Safety: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "To provide the \"Emergency\" quick-action feature based on your current location.\n\n"),
+          TextSpan(text: "Data Security & Sovereignty\n", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          TextSpan(text: "• Hardware-Level Siloing: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "We utilize Supabase Row Level Security (RLS) to ensure your data is only accessible to you and the doctor you are actively consulting.\n"),
+          TextSpan(text: "• Encryption: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "All video and chat data is encrypted during transmission.\n"),
+          TextSpan(text: "• Storage: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "Data is handled in compliance with the Nigeria Data Protection Act (NDPA).\n\n"),
+          TextSpan(text: "Your Rights & Age Restrictions\n", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          TextSpan(text: "• Age Limit: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "You must be 18 years or older to create an account.\n"),
+          TextSpan(text: "• Access & Withdrawal: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "You have the right to request a copy of your data or delete your account at any time.\n\n"),
+          TextSpan(text: "Contact Us\n", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          TextSpan(text: "For questions, please email: Mdqplus.info@gmail.com.\n\nLast Updated: April 4, 2026\nBy clicking \"Agree\" or using the MDQ+ app, you consent to the collection and use of your information as described in this policy."),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTermsAndConditions() {
+    return RichText(
+      text: TextSpan(
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.5),
+        children: const [
+          TextSpan(text: "Effective Date: March 14, 2026\n\n", style: TextStyle(fontStyle: FontStyle.italic)),
+          TextSpan(text: "Nature of the Platform\n", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          TextSpan(text: "• MDQ+ is a digital health platform owned and operated by Vehtr Technology Limited.\n"),
+          TextSpan(text: "• The platform functions strictly as a SaaS marketplace facilitating connections between independent, licensed medical practitioners and users.\n"),
+          TextSpan(text: "• Vehtr Technology Limited does not provide medical services; all clinical services are rendered by independent third-party professionals.\n\n"),
+          TextSpan(text: "AI Symptom Checker & ML Inference\n", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          TextSpan(text: "• The AI Symptom Checker is an informational tool utilizing proprietary ML-inference; it does not constitute a medical diagnosis or prescription.\n\n"),
+          TextSpan(text: "Emergency Use\n", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          TextSpan(text: "• MDQ+ is not for emergency medical use. In life-threatening situations, users must utilize the \"Emergency\" action feature to contact local authorities or visit a physical hospital immediately.\n\n"),
+          TextSpan(text: "Telemedicine Informed Consent\n", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          TextSpan(text: "• Limitation of Care: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "I understand that MDQ+ is a remote platform and that the doctor cannot perform a physical examination. I agree to seek immediate in-person emergency care if my symptoms worsen.\n"),
+          TextSpan(text: "• AI Acknowledgment: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "I understand that AI-generated summaries and urinalysis interpretations are for information only and must be verified by my consulting doctor.\n"),
+          TextSpan(text: "• Voluntary Participation: ", style: TextStyle(fontWeight: FontWeight.bold)),
+          TextSpan(text: "I am choosing to use this service voluntarily and understand I can withdraw or seek a physical second opinion at any time.\n\n"),
+          TextSpan(text: "By clicking \"Agree\", you acknowledge that you have read, understood, and agree to be bound by these Terms and Conditions."),
+        ],
       ),
     );
   }

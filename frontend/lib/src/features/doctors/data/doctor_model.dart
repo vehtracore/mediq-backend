@@ -10,12 +10,13 @@ class Doctor {
   final bool isAvailable;
   final String? bio;
   final bool isVerified;
-  final int yearsExperience; // <--- NEW
+  final int yearsExperience;
+  final String? licenseNumber;
 
   Doctor({
     required this.id, required this.fullName, required this.specialty, required this.imageUrl,
     required this.hourlyRate, required this.rating, required this.reviewCount, required this.isAvailable,
-    this.bio, required this.isVerified, required this.yearsExperience
+    this.bio, required this.isVerified, required this.yearsExperience, this.licenseNumber
   });
 
   factory Doctor.fromJson(Map<String, dynamic> json) {
@@ -30,7 +31,8 @@ class Doctor {
       isAvailable: json['is_available'] ?? false,
       bio: json['bio'],
       isVerified: json['is_verified'] ?? false,
-      yearsExperience: json['years_experience'] ?? 0, // <--- NEW
+      yearsExperience: json['years_experience'] ?? 0,
+      licenseNumber: json['license_number'],
     );
   }
 }

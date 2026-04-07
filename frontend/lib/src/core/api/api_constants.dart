@@ -3,7 +3,7 @@ import 'dart:io';
 
 class ApiConstants {
   // --- 🚀 LIVE PRODUCTION URL ---
-  static const String _liveUrl = "https://mediq-backend-m3ik.onrender.com";
+  static const String _liveUrl = "https://api.mdqplus.com";
 
   static String get baseUrl {
     if (kReleaseMode) {

@@ -112,6 +112,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           // 2. Otherwise, open the standard Doctor Chat
           return ChatScreen(
             appointmentId: extra['appointmentId'], // This is now safe
+            doctorId: extra['doctorId'],
             title: extra['title'] ?? 'Chat',
             isCompleted: extra['isCompleted'] ?? false,
           );

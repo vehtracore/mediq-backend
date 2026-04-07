@@ -27,12 +27,9 @@ FRONTEND_CALLBACK_URL = os.getenv(
 @router.get("/login", name="google_login")
 async def google_login(request: Request):
     """Redirect the user to Google's consent screen."""
-    redirect_uri = request.url_for("google_callback")
-    # Force HTTPS in production (proxy / Render strips the scheme)
-    if os.getenv("RENDER"):
-        redirect_uri = str(redirect_uri).replace("http://", "https://")
+    redirect_uri = "https://api.mdqplus.com/auth/google/callback"
     logger.info(f"[GOOGLE AUTH] Redirecting to Google. callback={redirect_uri}")
-    return await oauth.google.authorize_redirect(request, str(redirect_uri))
+    return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
 # ───────────────────────── 2. Handle Google Callback ─────────────────────

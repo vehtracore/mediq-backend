@@ -6,17 +6,20 @@ import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
 import 'package:mediq_app/src/features/chat/presentation/full_screen_image_viewer.dart';
+import 'package:mediq_app/src/features/doctors/data/doctor_repository.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   final int appointmentId;
   final String title;
   final bool isCompleted;
+  final int? doctorId;
 
   const ChatScreen({
     super.key,
     required this.appointmentId,
     required this.title,
     this.isCompleted = false,
+    this.doctorId,
   });
 
   @override
@@ -37,6 +40,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   String? _nextCursor;
   bool _hasMore = true;
   bool _isLoadingMore = false;
+
+  String? _mdcnNumber;
 
   @override
   void initState() {
@@ -104,6 +109,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final user = await ref.read(authRepositoryProvider).getCurrentUser();
     if (user == null) return;
     _myUserId = int.tryParse(user.id.toString());
+
+    if (widget.doctorId != null) {
+      try {
+        final doctor = await ref.read(doctorRepositoryProvider).getDoctorById(widget.doctorId!);
+        if (mounted && doctor.licenseNumber != null) {
+          setState(() { _mdcnNumber = doctor.licenseNumber; });
+        }
+      } catch (e) {
+        print("Doctor fetch error: $e");
+      }
+    }
 
     final dio = ref.read(dioProvider);
 
@@ -209,7 +225,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor, // ✅ Dynamic
       appBar: AppBar(
-        title: Text(widget.title, style: theme.textTheme.titleLarge),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(widget.title, style: theme.textTheme.titleLarge),
+            if (_mdcnNumber != null && _mdcnNumber!.isNotEmpty)
+              Text("MDCN: $_mdcnNumber", style: const TextStyle(fontSize: 12, color: Colors.blue, fontWeight: FontWeight.bold)),
+          ],
+        ),
         backgroundColor: theme.appBarTheme.backgroundColor,
         foregroundColor: theme.appBarTheme.foregroundColor,
         elevation: 1,

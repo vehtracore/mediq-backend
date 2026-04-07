@@ -160,6 +160,7 @@ class _DoctorChatTile extends StatelessWidget {
                   'title': appointment.doctorName,
                   'isAi': false,
                   'appointmentId': appointment.id,
+                  'doctorId': appointment.doctorId,
                   'isCompleted': appointment.status == 'completed',
                 });
           } else {

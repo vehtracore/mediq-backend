@@ -2,6 +2,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:http_parser/http_parser.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_model.dart';
@@ -144,9 +146,50 @@ class AuthRepository {
     }
   }
 
-  Future<void> registerDoctor(Map<String, dynamic> data) async {
+  Future<void> registerDoctor({
+    required String fullName,
+    required String email,
+    required String password,
+    required String specialty,
+    required String licenseNumber,
+    required XFile mdcnLicense,
+    required XFile indemnityCertificate,
+  }) async {
     try {
-      await _dio.post('/api/v1/auth/doctor/register', data: data);
+      final Map<String, dynamic> mapData = {
+        'full_name': fullName,
+        'email': email,
+        'password': password,
+        'specialty': specialty,
+        'license_number': licenseNumber,
+      };
+
+      if (kIsWeb) {
+        mapData['mdcn_license'] = MultipartFile.fromBytes(
+          await mdcnLicense.readAsBytes(),
+          filename: mdcnLicense.name.isEmpty ? 'license.jpg' : mdcnLicense.name,
+          contentType: MediaType('image', 'jpeg'),
+        );
+        mapData['indemnity_certificate'] = MultipartFile.fromBytes(
+          await indemnityCertificate.readAsBytes(),
+          filename: indemnityCertificate.name.isEmpty ? 'indemnity.jpg' : indemnityCertificate.name,
+          contentType: MediaType('image', 'jpeg'),
+        );
+      } else {
+        mapData['mdcn_license'] = await MultipartFile.fromFile(
+          mdcnLicense.path,
+          filename: mdcnLicense.name.isEmpty ? 'license.jpg' : mdcnLicense.name,
+          contentType: MediaType('image', 'jpeg'),
+        );
+        mapData['indemnity_certificate'] = await MultipartFile.fromFile(
+          indemnityCertificate.path,
+          filename: indemnityCertificate.name.isEmpty ? 'indemnity.jpg' : indemnityCertificate.name,
+          contentType: MediaType('image', 'jpeg'),
+        );
+      }
+
+      final formData = FormData.fromMap(mapData);
+      await _dio.post('/api/v1/auth/doctor/register', data: formData);
     } catch (e) {
       throw Exception("Doctor registration failed: $e");
     }
