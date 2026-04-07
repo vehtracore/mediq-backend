@@ -44,7 +44,11 @@ origins = os.getenv("ALLOWED_ORIGINS", "http://localhost,http://localhost:3000")
 # --- 🚀 RENDER CORS FIX (The Critical Part) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000", 
+        "https://mdqplus.com" # Add your actual frontend domain here too for production
+    ],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
