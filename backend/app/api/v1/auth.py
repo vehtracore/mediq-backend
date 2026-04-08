@@ -68,31 +68,68 @@ logger = logging.getLogger("uvicorn.error")
 def send_email(to_email: str, subject: str, body: str):
     """
     Send email using Resend HTTP API.
+    Logs are intentionally verbose so failures are visible in Render's log stream.
     """
-    logger.info(f"[EMAIL] Attempting to send email to: {to_email}")
-    
+    logger.info(f"[EMAIL] >>> START send_email | to={to_email} | subject='{subject}'")
+
+    api_key = os.getenv("RESEND_API_KEY")
+    from_email = os.getenv("RESEND_FROM_EMAIL", "MDQ+ <noreply@mdqplus.com>")
+
+    # ── Guard: API key must exist ─────────────────────────────────────────────
+    if not api_key:
+        logger.error(
+            "[EMAIL] FATAL: RESEND_API_KEY environment variable is NOT SET. "
+            "Go to Render → your service → Environment and add it."
+        )
+        return
+
+    logger.info(
+        f"[EMAIL] Config OK | key_prefix={api_key[:8]}... | from={from_email}"
+    )
+
     try:
-        api_key = os.getenv("RESEND_API_KEY")
-        # ✅ FIX: Use verified domain
-        from_email = os.getenv("RESEND_FROM_EMAIL", "mdqplus <noreply@mdqplus.com>")
-        
-        if not api_key:
-            logger.error("[EMAIL] NOT SENT: Missing RESEND_API_KEY")
-            return
-        
         resend.api_key = api_key
-        
-        result = resend.Emails.send({
+
+        payload = {
             "from": from_email,
             "to": [to_email],
             "subject": subject,
-            "html": body.replace("\n", "<br>") # Simple conversion for now
-        })
-        
-        logger.info(f"[EMAIL] SUCCESS! Sent to {to_email} (ID: {result.get('id', 'N/A')})")
+            "html": body if body.strip().startswith("<") else body.replace("\n", "<br>"),
+        }
+        logger.info(f"[EMAIL] Sending payload to Resend API: to={to_email}")
+
+        result = resend.Emails.send(payload)
+
+        # The SDK returns a dict-like object — extract the ID safely
+        email_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", "N/A")
+        logger.info(f"[EMAIL] SUCCESS | id={email_id} | to={to_email}")
 
     except Exception as e:
-        logger.error(f"[EMAIL] FAILED: {e}")
+        # ── Aggressive diagnostic logging ─────────────────────────────────────
+        # str(e) alone is often useless for Resend SDK errors.
+        # We extract every available attribute to surface the real cause.
+        error_type = type(e).__name__
+        error_str  = str(e)
+
+        # Resend SDK wraps API errors — try to pull structured fields
+        resend_name    = getattr(e, "name",       None)   # e.g. "validation_error"
+        resend_message = getattr(e, "message",    None)   # human-readable reason
+        resend_status  = getattr(e, "status_code", None)  # HTTP status from Resend
+        raw_repr       = repr(e)                           # full Python repr as fallback
+
+        logger.error(
+            "[EMAIL] ❌ FAILED TO SEND EMAIL\n"
+            f"  │ to            : {to_email}\n"
+            f"  │ subject       : {subject}\n"
+            f"  │ from          : {from_email}\n"
+            f"  │ error_type    : {error_type}\n"
+            f"  │ error_str     : {error_str}\n"
+            f"  │ resend.name   : {resend_name}\n"
+            f"  │ resend.message: {resend_message}\n"
+            f"  │ resend.status : {resend_status}\n"
+            f"  │ raw_repr      : {raw_repr}\n"
+            "  └─ Check Render logs for the line above to diagnose the Resend failure."
+        )
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):

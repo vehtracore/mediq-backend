@@ -50,12 +50,13 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
   Future<void> _verifyDoctor(int id) async {
     try {
       await ref.read(dioProvider).put('/api/v1/admin/doctors/$id/verify');
+      // ✅ FIX: Use invalidate() — consistent with _rejectDoctor
+      ref.invalidate(unverifiedDoctorsProvider);
+      ref.invalidate(adminStatsProvider);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text("Doctor Verified"), backgroundColor: Colors.green));
       }
-      ref.refresh(unverifiedDoctorsProvider);
-      ref.refresh(adminStatsProvider);
     } catch (e) {
       if (mounted)
         ScaffoldMessenger.of(context)
@@ -63,16 +64,29 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
     }
   }
 
-  Future<void> _rejectDoctor(int id) async {
+  Future<void> _rejectDoctor(int id, String reason) async {
     try {
-      await ref.read(dioProvider).delete('/api/v1/admin/doctors/$id/reject');
+      await ref.read(dioProvider).post(
+        '/api/v1/admin/doctors/$id/reject',
+        data: {'rejection_reason': reason},
+      );
+      // ✅ FIX: Use invalidate() — the correct method for autoDispose providers.
+      // ref.refresh() on an autoDispose provider can silently no-op if the
+      // provider was already disposed. invalidate() guarantees a cache bust
+      // and forces a fresh network fetch on the next ref.watch() cycle.
+      ref.invalidate(unverifiedDoctorsProvider);
+      ref.invalidate(adminStatsProvider); // Keep the Overview counter in sync
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text("Application Rejected"),
             backgroundColor: Colors.orange));
       }
-      ref.refresh(unverifiedDoctorsProvider);
-    } catch (e) {}
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Reject failed: $e"), backgroundColor: Colors.red));
+      }
+    }
   }
 
   Future<void> _suspendUser(String id) async {
@@ -287,11 +301,40 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                                   style: const TextStyle(color: Colors.grey)),
                             const Spacer(),
                             IconButton(
-                                icon:
-                                    const Icon(Icons.close, color: Colors.red),
+                                icon: const Icon(Icons.close, color: Colors.red),
                                 tooltip: "Reject",
-                                onPressed: () =>
-                                    _rejectDoctor(doctors[i]['id'])),
+                                onPressed: () {
+                                  final reasonCtrl = TextEditingController();
+                                  showDialog(
+                                    context: ctx,
+                                    builder: (context) => AlertDialog(
+                                      title: const Text("Reject Application"),
+                                      content: TextField(
+                                        controller: reasonCtrl,
+                                        decoration: const InputDecoration(
+                                          hintText: "Enter rejection reason",
+                                        ),
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(context),
+                                          child: const Text("Cancel"),
+                                        ),
+                                        ElevatedButton(
+                                          onPressed: () {
+                                            final reason = reasonCtrl.text.trim();
+                                            if (reason.isNotEmpty) {
+                                              Navigator.pop(context);
+                                              _rejectDoctor(doctors[i]['id'], reason);
+                                            }
+                                          },
+                                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                                          child: const Text("Confirm Reject"),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }),
                             Container(
                               decoration: BoxDecoration(
                                   color: Colors.green.withOpacity(0.1),
