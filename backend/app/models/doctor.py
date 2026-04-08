@@ -23,7 +23,8 @@ class Doctor(Base):
     license_number = Column(String, unique=True, index=True)
     mdcn_license_url = Column(String, nullable=True) # NEW
     indemnity_cert_url = Column(String, nullable=True) # NEW
-    status = Column(String, default="pending", index=True) # ✅ NEW: "pending", "active", "rejected"
+    status = Column(String, default="pending", index=True) # "pending", "active", "rejected"
+    rejection_reason = Column(String, nullable=True)  # Admin's reason for rejection
     is_verified = Column(Boolean, default=False, index=True)
     documents_url = Column(String, nullable=True) 
 

@@ -96,13 +96,100 @@ def verify_doctor(doctor_id: int, background_tasks: BackgroundTasks, db: Session
     
     return {"message": "Doctor verified and account activated."}
 
-@router.delete("/doctors/{doctor_id}/reject")
-def reject_doctor(doctor_id: int, db: Session = Depends(get_db), admin: User = Depends(get_current_admin)):
+
+# --- Pydantic Schema for Rejection ---
+class RejectDoctorRequest(BaseModel):
+    rejection_reason: str
+
+@router.post("/doctors/{doctor_id}/reject")
+def reject_doctor(
+    doctor_id: int,
+    payload: RejectDoctorRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """
+    Reject a doctor's MDCN verification application.
+    Sets status to 'rejected', stores the reason, and emails the doctor.
+    """
     doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
-    if not doctor: raise HTTPException(404, "Doctor not found")
-    if user_to_delete: db.delete(user_to_delete)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    user = db.query(User).filter(User.id == doctor.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Associated user account not found")
+
+    # --- 1. Update Doctor Record ---
+    doctor.is_verified = False
+    doctor.is_available = False
+    doctor.status = "rejected"
+    doctor.rejection_reason = payload.rejection_reason
+
+    # --- 2. Audit Log ---
+    audit = AuditLog(
+        admin_id=admin.id,
+        resource=f"Doctor:{doctor.id} ({doctor.full_name})",
+        reason=f"Rejected: {payload.rejection_reason}",
+    )
+    db.add(audit)
     db.commit()
-    return {"message": "Doctor application rejected and account removed."}
+
+    # --- 3. Send Rejection Email via Resend ---
+    rejection_email_html = f"""
+    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; color: #1a1a2e;">
+        <div style="text-align: center; padding-bottom: 16px; border-bottom: 2px solid #e94560;">
+            <h1 style="margin: 0; color: #1a1a2e; font-size: 22px;">MDQ<span style="color: #e94560;">+</span></h1>
+            <p style="margin: 4px 0 0; color: #6c757d; font-size: 13px;">Medical Professional Verification</p>
+        </div>
+
+        <div style="padding: 24px 0;">
+            <p>Dear <strong>Dr. {doctor.full_name}</strong>,</p>
+
+            <p>Thank you for your interest in joining the MDQ+ network. After careful review of your submitted
+            credentials, we regret to inform you that your application <strong>could not be approved</strong>
+            at this time.</p>
+
+            <div style="background-color: #fff3f3; border-left: 4px solid #e94560; padding: 16px; margin: 20px 0; border-radius: 4px;">
+                <p style="margin: 0 0 4px; font-weight: 600; color: #e94560;">Reason for Non-Approval:</p>
+                <p style="margin: 0; color: #333;">{payload.rejection_reason}</p>
+            </div>
+
+            <h3 style="color: #1a1a2e; margin-bottom: 8px;">Next Steps</h3>
+            <ol style="color: #333; line-height: 1.8;">
+                <li>Review the reason stated above carefully.</li>
+                <li>Log back into the <strong>MDQ+</strong> application.</li>
+                <li>Navigate to your <strong>Profile &rarr; Verification Documents</strong> section.</li>
+                <li>Upload the corrected or updated document(s) and re-submit your application.</li>
+            </ol>
+
+            <p style="color: #6c757d; font-size: 13px; margin-top: 24px;">
+                If you believe this decision was made in error, please contact our support team at
+                <a href="mailto:support@mdqplus.com" style="color: #0062cc;">support@mdqplus.com</a>.
+            </p>
+        </div>
+
+        <div style="border-top: 1px solid #dee2e6; padding-top: 16px; text-align: center; color: #6c757d; font-size: 12px;">
+            <p>&copy; {datetime.now().year} MDQ+ Health Technologies. All rights reserved.</p>
+            <p>This is an automated message. Please do not reply directly to this email.</p>
+        </div>
+    </div>
+    """
+
+    background_tasks.add_task(
+        send_email,
+        user.email,
+        "MDQ+: Update on Your Verification Application",
+        rejection_email_html,
+    )
+
+    return {
+        "message": f"Doctor {doctor.full_name}'s application has been rejected.",
+        "doctor_id": doctor.id,
+        "status": "rejected",
+        "rejection_reason": payload.rejection_reason,
+    }
 
 # --- 🛠️ TEMP: DATABASE MIGRATION HELPER ---
 from sqlalchemy import text
@@ -110,9 +197,10 @@ from sqlalchemy import text
 def fix_schema(db: Session = Depends(get_db)):
     """Run this ONCE to add the missing column"""
     try:
-        # PostgreSQL specific command
+        # PostgreSQL specific commands
         db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS image_url VARCHAR;"))
         db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token VARCHAR;"))
+        db.execute(text("ALTER TABLE doctors ADD COLUMN IF NOT EXISTS rejection_reason VARCHAR;"))
         # Backfill: existing users (created before verification) should be verified
         db.execute(text("UPDATE users SET is_verified = TRUE WHERE is_verified IS NULL OR is_verified = FALSE;"))
         db.commit()
