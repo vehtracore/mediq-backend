@@ -8,6 +8,7 @@ import '../../features/onboarding/onboarding_screens.dart';
 import '../../features/auth/auth_screen.dart';
 import '../../features/auth/presentation/doctor_register_screen.dart';
 import '../../features/auth/presentation/doctor_pending_screen.dart';
+import '../../features/auth/presentation/doctor_rejected_screen.dart';
 import '../../features/patient_dashboard/patient_home_screen.dart';
 import '../../features/doctor_dashboard/presentation/doctor_home_screen.dart';
 import '../../features/chat/presentation/chat_screen.dart';
@@ -65,6 +66,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
           path: '/doctor_pending',
           builder: (context, state) => const DoctorPendingScreen()),
+      GoRoute(
+          path: '/doctor_rejected',
+          builder: (context, state) => const DoctorRejectedScreen()),
       GoRoute(
           path: '/admin_dashboard',
           builder: (context, state) => const AdminDashboard()),

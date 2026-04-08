@@ -6,10 +6,64 @@ from app.core.database import get_db
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.appointment import Appointment
-from app.schemas.doctor import DoctorResponse, DoctorUpdate
+from app.schemas.doctor import DoctorResponse, DoctorUpdate, ReapplyRequest
 from app.api import deps
 
 router = APIRouter()
+
+@router.post("/me/reapply", response_model=DoctorResponse)
+def reapply_for_verification(
+    payload: ReapplyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    Allows a rejected doctor to submit corrected documents and re-apply.
+    Resets their status back to 'pending' for admin review.
+    """
+    if current_user.role != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can reapply")
+
+    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+
+    if doctor.status != "rejected":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot reapply: current status is '{doctor.status}'. Only rejected doctors may reapply."
+        )
+
+    # Apply any corrected fields the doctor provided
+    if payload.license_number:
+        # Ensure no other doctor is already using the new license number
+        existing = db.query(Doctor).filter(
+            Doctor.license_number == payload.license_number,
+            Doctor.id != doctor.id
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="That license number is already registered to another account")
+        doctor.license_number = payload.license_number
+
+    if payload.mdcn_license_url:
+        doctor.mdcn_license_url = payload.mdcn_license_url
+
+    if payload.indemnity_cert_url:
+        doctor.indemnity_cert_url = payload.indemnity_cert_url
+
+    # Reset back to pending for admin re-review
+    doctor.status = "pending"
+    doctor.is_verified = False
+    doctor.rejection_reason = None   # Clear the old rejection reason
+
+    try:
+        db.commit()
+        db.refresh(doctor)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error during reapply: {e}")
+
+    return doctor
 
 @router.get("/", response_model=List[DoctorResponse])
 def read_doctors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):

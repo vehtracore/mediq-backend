@@ -263,16 +263,28 @@ def login(request: Request, login_data: LoginRequest, db: Session = Depends(get_
     if not user.is_verified:
         raise HTTPException(403, detail="Please verify your email before logging in. Check your inbox for a verification link.")
         
-    # ✅ FIX: Doctor "Double-Lock"
-    # If the user is a doctor, we MUST check the Doctor table for 'active' status
+    # ✅ Doctor Status Gate
+    # 'active'   → normal login to /doctor_home
+    # 'rejected' → allowed through; the Flutter router guard enforces /doctor_rejected
+    # 'pending'  → blocked here (account not yet reviewed)
+    doctor_status: str | None = None
     if user.role == "doctor":
         doctor = db.query(Doctor).filter(Doctor.user_id == user.id).first()
-        if not doctor or doctor.status != "active":
+        if not doctor:
+            raise HTTPException(400, detail="Doctor profile not found")
+        doctor_status = doctor.status
+        if doctor_status == "pending":
             raise HTTPException(400, detail="Doctor account is pending approval")
+        # 'rejected' and 'active' are both allowed to receive a token
 
     access_token = security.create_access_token(data={"sub": user.email})
     refresh_token = security.create_refresh_token(data={"sub": user.email})
-    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "doctor_status": doctor_status,  # Flutter uses this to pick the right screen
+    }
 
 @router.get("/me", response_model=UserResponse)
 def read_users_me(current_user: User = Depends(deps.get_current_user)): return current_user

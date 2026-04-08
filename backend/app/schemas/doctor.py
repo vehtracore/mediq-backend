@@ -20,6 +20,8 @@ class DoctorResponse(DoctorBase):
     license_number: Optional[str] = None
     mdcn_license_url: Optional[str] = None
     indemnity_cert_url: Optional[str] = None
+    status: Optional[str] = "pending"           # 'pending' | 'active' | 'rejected'
+    rejection_reason: Optional[str] = None       # Set by admin on rejection
     model_config = ConfigDict(from_attributes=True)
 
 class DoctorRegister(BaseModel):
@@ -34,3 +36,9 @@ class DoctorUpdate(BaseModel):
     hourly_rate: Optional[float] = None
     years_experience: Optional[int] = None # <--- NEW
     image_url: Optional[str] = None
+
+class ReapplyRequest(BaseModel):
+    """Payload a rejected doctor submits when re-applying for verification."""
+    license_number: Optional[str] = None          # Corrected MDCN number
+    mdcn_license_url: Optional[str] = None        # New Cloudinary URL for license image
+    indemnity_cert_url: Optional[str] = None      # New Cloudinary URL for indemnity cert

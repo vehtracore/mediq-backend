@@ -12,11 +12,14 @@ class Doctor {
   final bool isVerified;
   final int yearsExperience;
   final String? licenseNumber;
+  final String status;          // 'pending' | 'active' | 'rejected'
+  final String? rejectionReason;
 
   Doctor({
     required this.id, required this.fullName, required this.specialty, required this.imageUrl,
     required this.hourlyRate, required this.rating, required this.reviewCount, required this.isAvailable,
-    this.bio, required this.isVerified, required this.yearsExperience, this.licenseNumber
+    this.bio, required this.isVerified, required this.yearsExperience, this.licenseNumber,
+    this.status = 'pending', this.rejectionReason,
   });
 
   factory Doctor.fromJson(Map<String, dynamic> json) {
@@ -33,6 +36,8 @@ class Doctor {
       isVerified: json['is_verified'] ?? false,
       yearsExperience: json['years_experience'] ?? 0,
       licenseNumber: json['license_number'],
+      status: json['status'] ?? 'pending',
+      rejectionReason: json['rejection_reason'],
     );
   }
 }

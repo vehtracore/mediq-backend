@@ -146,6 +146,29 @@ class AuthRepository {
     }
   }
 
+  /// Submits corrected documents for a rejected doctor.
+  /// Returns the updated Doctor profile (status will be 'pending').
+  Future<Doctor> reapply({
+    String? licenseNumber,
+    String? mdcnLicenseUrl,
+    String? indemnityCertUrl,
+  }) async {
+    try {
+      final Map<String, dynamic> data = {};
+      if (licenseNumber != null) data['license_number'] = licenseNumber;
+      if (mdcnLicenseUrl != null) data['mdcn_license_url'] = mdcnLicenseUrl;
+      if (indemnityCertUrl != null) data['indemnity_cert_url'] = indemnityCertUrl;
+
+      final response = await _dio.post('/api/v1/doctors/me/reapply', data: data);
+      return Doctor.fromJson(response.data);
+    } on DioException catch (e) {
+      final msg = e.response?.data['detail'] ?? "Reapply failed. Please try again.";
+      throw Exception(msg);
+    } catch (e) {
+      throw Exception("Reapply failed: $e");
+    }
+  }
+
   Future<void> registerDoctor({
     required String fullName,
     required String email,

@@ -29,17 +29,21 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
 
           // FIX: Added '?' to prevent crash if user is null
           if (user?.role == 'doctor') {
-            try {
-              final doctor =
-                  await ref.read(authRepositoryProvider).getMyDoctorProfile();
-              if (doctor.isVerified) {
-                context.go('/doctor_home');
-              } else {
+              try {
+                final doctor =
+                    await ref.read(authRepositoryProvider).getMyDoctorProfile();
+                // Route guard: pick the correct screen based on doctor status
+                switch (doctor.status) {
+                  case 'active':
+                    context.go('/doctor_home');
+                  case 'rejected':
+                    context.go('/doctor_rejected');  // quarantine screen
+                  default:
+                    context.go('/doctor_pending');   // 'pending' — awaiting review
+                }
+              } catch (e) {
                 context.go('/doctor_pending');
               }
-            } catch (e) {
-              context.go('/doctor_pending');
-            }
           } else if (user?.role == 'admin') {
             context.go('/admin_dashboard');
           } else {
