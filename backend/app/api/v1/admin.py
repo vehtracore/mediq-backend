@@ -144,6 +144,14 @@ def reject_doctor(
     doctor.status           = "rejected"
     doctor.rejection_reason = rejection_reason
 
+    # ── 1b. Unlock the User account so they can log in ───────────────────────
+    # is_active=False was set at registration to block login until admin review.
+    # A rejection IS a completed review — the doctor must be able to log in
+    # to reach the /doctor_rejected quarantine screen and reapply.
+    # doctor.status == 'rejected' is what the login gate uses to route them
+    # to quarantine instead of the main dashboard. is_active is NOT that gate.
+    user.is_active = True
+
     # ── 2. Audit Log ─────────────────────────────────────────────────────────
     audit = AuditLog(
         admin_id=admin.id,

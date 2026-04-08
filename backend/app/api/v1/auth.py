@@ -256,26 +256,34 @@ def login(request: Request, login_data: LoginRequest, db: Session = Depends(get_
     user = db.query(User).filter(User.email == login_data.email).first()
     if not user or not security.verify_password(login_data.password, user.hashed_password):
         raise HTTPException(401, detail="Incorrect email or password", headers={"WWW-Authenticate": "Bearer"})
-    if not user.is_active:
-        raise HTTPException(400, detail="Account is pending approval or inactive")
-    
-    # ✅ Email Verification Gate
-    if not user.is_verified:
-        raise HTTPException(403, detail="Please verify your email before logging in. Check your inbox for a verification link.")
-        
-    # ✅ Doctor Status Gate
-    # 'active'   → normal login to /doctor_home
-    # 'rejected' → allowed through; the Flutter router guard enforces /doctor_rejected
-    # 'pending'  → blocked here (account not yet reviewed)
+
+    # ── is_active gate ────────────────────────────────────────────────────────
+    # is_active=False means "pending admin first-review" for doctors.
+    # However, rejected doctors must be allowed to log in (they go to the
+    # quarantine screen). We do a quick status lookup FIRST so we can make an
+    # informed decision before raising the inactive exception.
     doctor_status: str | None = None
     if user.role == "doctor":
         doctor = db.query(Doctor).filter(Doctor.user_id == user.id).first()
         if not doctor:
             raise HTTPException(400, detail="Doctor profile not found")
         doctor_status = doctor.status
-        if doctor_status == "pending":
-            raise HTTPException(400, detail="Doctor account is pending approval")
-        # 'rejected' and 'active' are both allowed to receive a token
+
+    # Block if inactive, UNLESS this is a rejected doctor (they have a right
+    # to log in so they can reach /doctor_rejected and reapply).
+    if not user.is_active and doctor_status != "rejected":
+        raise HTTPException(400, detail="Account is pending approval or inactive")
+
+    # ── Email verification gate ───────────────────────────────────────────────
+    if not user.is_verified:
+        raise HTTPException(403, detail="Please verify your email before logging in. Check your inbox for a verification link.")
+
+    # ── Doctor status gate ────────────────────────────────────────────────────
+    # 'active'   → proceeds to /doctor_home
+    # 'rejected' → proceeds to /doctor_rejected  (quarantine, can reapply)
+    # 'pending'  → blocked here (admin hasn't reviewed yet)
+    if doctor_status == "pending":
+        raise HTTPException(400, detail="Doctor account is pending approval")
 
     access_token = security.create_access_token(data={"sub": user.email})
     refresh_token = security.create_refresh_token(data={"sub": user.email})
