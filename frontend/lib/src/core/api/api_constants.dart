@@ -1,5 +1,4 @@
 import 'package:flutter/foundation.dart';
-import 'dart:io';
 
 class ApiConstants {
   // --- 🚀 LIVE PRODUCTION URL ---
@@ -7,21 +6,20 @@ class ApiConstants {
 
   static String get baseUrl {
     if (kReleaseMode) {
-      // In Production (APK/Release), ALWAYS use the Live URL
       return _liveUrl;
     }
 
-    // In Debug Mode, you can still use the Live URL to test the real server
-    // Or uncomment the local logic if you want to go back to offline dev.
+    // In Debug Mode, still use the Live URL to test the real server.
+    // To switch to local dev, use kIsWeb from foundation.dart (NOT dart:io Platform).
     return _liveUrl;
 
-    /* // Localhost Logic (Saved for later if needed)
+    /* // Localhost Logic (Web-safe version)
+    // import 'package:flutter/foundation.dart' provides kIsWeb
+    // For Android emulator detection without dart:io, use a const flag or env var.
     if (kIsWeb) {
       return 'http://127.0.0.1:8001';
-    } else if (Platform.isAndroid) {
-      return 'http://10.0.2.2:8001';
     } else {
-      return 'http://127.0.0.1:8001';
+      return 'http://10.0.2.2:8001'; // Android emulator
     }
     */
   }

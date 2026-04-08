@@ -1,4 +1,5 @@
 import os
+import traceback
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,10 +16,39 @@ from app.api.v1 import google_auth
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="MDQplus API")
+# ✅ redirect_slashes=False prevents 307 redirects that strip CORS headers
+app = FastAPI(title="MDQplus API", redirect_slashes=False)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError("FATAL: SECRET_KEY environment variable is missing.")
+
+# --- Global Exception Handler: ensures CORS headers are present even on 500 errors ---
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    tb = traceback.format_exc()
+    print(f"🔥 [UNHANDLED ERROR] {request.method} {request.url.path}")
+    print(f"   Exception: {exc}")
+    print(f"   Traceback:\n{tb}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
+
+# ========================================================================
+# MIDDLEWARE ORDER MATTERS! Starlette processes middleware in LIFO order.
+# The LAST middleware added is the FIRST to process requests/responses.
+# So we add CORSMiddleware LAST to ensure it wraps everything.
+# ========================================================================
+
+# 1. Payload limiter (innermost — runs closest to the route handlers)
 @app.middleware("http")
 async def limit_payload_size(request: Request, call_next):
     content_length = request.headers.get("content-length")
@@ -29,19 +59,13 @@ async def limit_payload_size(request: Request, call_next):
         )
     return await call_next(request)
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-if not SECRET_KEY:
-    raise ValueError("FATAL: SECRET_KEY environment variable is missing.")
-
-# --- Session Middleware (required for Google OAuth state tracking) ---
+# 2. Session Middleware (required for Google OAuth state tracking)
 app.add_middleware(
     SessionMiddleware,
     secret_key=SECRET_KEY,
 )
 
-origins = os.getenv("ALLOWED_ORIGINS", "http://localhost,http://localhost:3000").split(",")
-
-# --- 🚀 RENDER CORS FIX (The Critical Part) ---
+# 3. CORS Middleware — MUST be added LAST so it runs FIRST (outermost wrapper)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -74,4 +98,4 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.get("/")
 async def health_check():
-    return {"status": "healthy", "service": "MDQ+ API"}
+    return {"status": "healthy", "service": "MDQ+ API"}
