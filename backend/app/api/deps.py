@@ -47,7 +47,14 @@ def get_current_user(
         raise credentials_exception
         
     # --- SUSPENSION / BAN CHECK ---
-    if not user.is_active or user.is_banned:
+    is_rejected_doctor = False
+    if user.role == "doctor":
+        from app.models.doctor import Doctor
+        doctor = db.query(Doctor).filter(Doctor.user_id == user.id).first()
+        if doctor and doctor.status == "rejected":
+            is_rejected_doctor = True
+
+    if user.is_banned or (not user.is_active and not is_rejected_doctor):
         print(f"🚫 [DEBUG] User {user.email} is suspended/banned.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
