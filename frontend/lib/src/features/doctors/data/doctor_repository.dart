@@ -11,7 +11,7 @@ class DoctorRepository {
   DoctorRepository(this._dio);
 
   Future<List<Doctor>> getDoctors() async {
-    final response = await _dio.get('/api/v1/doctors');
+    final response = await _dio.get('/api/v1/doctors/');
     return (response.data as List).map((json) => Doctor.fromJson(json)).toList();
   }
 

@@ -7,17 +7,17 @@ class DoctorBase(BaseModel):
     specialty: str
     bio: Optional[str] = None
     image_url: Optional[str] = None
-    hourly_rate: float
-    rating: float
-    review_count: int
-    years_experience: int # <--- NEW
-    is_available: bool
-    is_verified: bool
+    hourly_rate: Optional[float] = 0.0
+    rating: Optional[float] = 5.0
+    review_count: Optional[int] = 0
+    years_experience: Optional[int] = 1
+    is_available: Optional[bool] = False
+    is_verified: Optional[bool] = False
 
 class DoctorResponse(DoctorBase):
     id: int
     user_id: int
-    license_number: str
+    license_number: Optional[str] = None
     mdcn_license_url: Optional[str] = None
     indemnity_cert_url: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)

@@ -13,7 +13,23 @@ router = APIRouter()
 
 @router.get("/", response_model=List[DoctorResponse])
 def read_doctors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return db.query(Doctor).filter(Doctor.is_verified == True).offset(skip).limit(limit).all()
+    try:
+        doctors = db.query(Doctor).filter(Doctor.is_verified == True).offset(skip).limit(limit).all()
+        # Validate each doctor individually to find the bad record
+        results = []
+        for doc in doctors:
+            try:
+                results.append(DoctorResponse.model_validate(doc))
+            except Exception as ve:
+                print(f"🔥 [VALIDATION ERROR] Doctor ID={doc.id}, Name={doc.full_name}: {ve}")
+                # Still include it with lenient fields
+                results.append(DoctorResponse.model_validate(doc, strict=False))
+        return results
+    except Exception as e:
+        import traceback
+        print(f"🔥 [DOCTORS LIST ERROR] {e}")
+        print(traceback.format_exc())
+        raise
 
 @router.get("/stats")
 def get_doctor_stats(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
