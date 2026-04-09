@@ -76,10 +76,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           if (doctor.isVerified) {
             context.go('/doctor_home');
           } else {
-            context.go('/doctor_pending');
+            context.go('/');
           }
         } catch (e) {
-          if (mounted) context.go('/doctor_pending');
+          if (mounted) context.go('/');
         }
       } else {
         context.go('/patient_home');
@@ -226,12 +226,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     controller: _emailController,
                     decoration: const InputDecoration(labelText: "Email"),
                     validator: (v) {
-                       // ✅ Email Regex
-                       final emailRegex = RegExp(r"^[a-zA-Z0-9.]+@[a-zA-Z0-9]+\.[a-zA-Z]+");
-                       if (v == null || v.isEmpty || !emailRegex.hasMatch(v)) {
-                         return "Enter a valid email (e.g., name@domain.com)";
-                       }
-                       return null;
+                      if (v == null || v.isEmpty) return 'Please enter your email';
+                      final bool emailValid = RegExp(r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+").hasMatch(v ?? '');
+                      if (!emailValid) return 'Please enter a valid email address';
+                      return null;
                     },
                   ),
                 const SizedBox(height: 16),
@@ -251,7 +249,17 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         },
                       ),
                     ),
-                    validator: (v) => (v != null && v.length >= 6) ? null : "Min 6 chars",
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Please enter your password';
+                      }
+                      if (!_isLogin) {
+                        if (value.length < 6) return 'Password must be at least 6 characters';
+                        if (!RegExp(r'[0-9]').hasMatch(value)) return 'Password must contain at least one number';
+                        if (!RegExp(r'[!@#$%^&*(),.?":{}|<>]').hasMatch(value)) return 'Password must contain a special character';
+                      }
+                      return null;
+                    },
                   ),
                 if (!_isLogin) ...[
                   const SizedBox(height: 16),

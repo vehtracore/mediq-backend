@@ -25,6 +25,7 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   final _licenseNumberCtrl = TextEditingController();
+  bool _isPasswordObscured = true;
 
   XFile? _licenseImage;
   XFile? _indemnityImage;
@@ -368,19 +369,31 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
   }) {
     return TextFormField(
       controller: ctrl,
-      obscureText: isPassword,
+      obscureText: isPassword ? _isPasswordObscured : false,
       decoration: InputDecoration(
         labelText: label,
         prefixIcon: Icon(icon),
+        suffixIcon: isPassword
+            ? IconButton(
+                icon: Icon(_isPasswordObscured
+                    ? Icons.visibility_off
+                    : Icons.visibility),
+                onPressed: () {
+                  setState(() {
+                    _isPasswordObscured = !_isPasswordObscured;
+                  });
+                },
+              )
+            : null,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       ),
       validator: (v) {
-        if (v == null || v.isEmpty) return "Required";
-        
-        // 🔒 STRICT VALIDATION
         if (label == "Email") {
-          final emailRegex = RegExp(r"^[a-zA-Z0-9.]+@[a-zA-Z0-9]+\.[a-zA-Z]+");
-          if (!emailRegex.hasMatch(v)) return "Invalid Email";
+          if (v == null || v.isEmpty) return 'Please enter your email';
+          final bool emailValid = RegExp(r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+").hasMatch(v ?? '');
+          if (!emailValid) return 'Please enter a valid email address';
+        } else if (v == null || v.isEmpty) {
+          return "Required";
         }
         
         if (isPassword && v.length < 6) return "Min 6 chars";

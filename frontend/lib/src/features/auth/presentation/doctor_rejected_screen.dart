@@ -93,8 +93,8 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
         ),
       );
 
-      // Route to the pending screen — they're now back in the queue
-      context.go('/doctor_pending');
+      // Route to splash to allow primary guard to check status
+      context.go('/');
     } catch (e) {
       if (!mounted) return;
       setState(() {
