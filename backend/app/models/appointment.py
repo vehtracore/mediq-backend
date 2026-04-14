@@ -27,6 +27,9 @@ class Appointment(Base):
     amount = Column(Float, default=0.0)
     commission = Column(Float, default=0.0)
     payout = Column(Float, default=0.0)
+    # --- Continuity of Care: Physical Referral ---
+    referred_hospital = Column(String, nullable=True)   # e.g. "Lagos Island General Hospital A&E"
+    referral_note = Column(String, nullable=True)        # Standardised referral string
 
     patient = relationship("User")
     doctor = relationship("Doctor")

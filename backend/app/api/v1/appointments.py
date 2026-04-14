@@ -9,7 +9,7 @@ from app.models.appointment import Appointment, DoctorSlot
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.review import Review
-from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, GeneralBookRequest
+from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, GeneralBookRequest, ReferralRequest, ReferralResponse
 from app.api import deps
 
 router = APIRouter()
@@ -170,6 +170,62 @@ def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_us
     db.commit()
     db.refresh(appt)
     return map_appt(appt, doctor.full_name)
+
+
+# --- Continuity of Care: Physical Hospital Referral ---
+@router.post("/doctor/appointments/{appt_id}/refer", response_model=ReferralResponse)
+def refer_patient_to_hospital(
+    appt_id: int,
+    referral: ReferralRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    Allows an authenticated doctor to refer a patient to a physical hospital.
+    Generates a standardised referral note and persists it against the appointment.
+    """
+    # 1. Guard — must be a doctor
+    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+    if not doctor:
+        raise HTTPException(status_code=403, detail="Only doctors can issue referrals.")
+
+    # 2. Fetch appointment and verify ownership
+    appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found.")
+    if appt.doctor_id != doctor.id:
+        raise HTTPException(status_code=403, detail="You are not the doctor for this appointment.")
+
+    # 3. Resolve patient name
+    patient = appt.patient
+    patient_name = f"{patient.first_name} {patient.last_name}" if patient else "Unknown Patient"
+
+    # 4. Build standardised referral string
+    slot_time = appt.slot.start_time if appt.slot else appt.start_time
+    referral_note = (
+        f"REFERRAL — MDQ+ Platform\n"
+        f"Date: {datetime.utcnow().strftime('%d %b %Y, %H:%M')} UTC\n"
+        f"Referring Doctor: Dr. {doctor.full_name} ({doctor.specialty})\n"
+        f"Patient: {patient_name}\n"
+        f"Original Appointment: #{appt.id} on {slot_time.strftime('%d %b %Y') if slot_time else 'N/A'}\n"
+        f"Referred To: {referral.hospital_name}\n"
+        f"Clinical Note: {referral.note}"
+    )
+
+    # 5. Persist to appointment row
+    appt.status = "referred"
+    appt.referred_hospital = referral.hospital_name
+    appt.referral_note = referral_note
+    db.commit()
+    db.refresh(appt)
+
+    # 6. Return enriched response
+    base = map_appt(appt, doctor.full_name)
+    return ReferralResponse(
+        **base.model_dump(),
+        referred_hospital=appt.referred_hospital,
+        referral_note=appt.referral_note,
+    )
 
 @router.get("/doctor/appointments", response_model=List[AppointmentResponse])
 def get_doctor_confirmed_appointments(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):

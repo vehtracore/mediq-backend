@@ -1,12 +1,13 @@
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import jwt
 from passlib.context import CryptContext
 
 # Configuration
-SECRET_KEY = "supersecretkey"  # In production, move this to .env!
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 15          # Short-lived access token
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 15))          # Short-lived access token
 REFRESH_TOKEN_EXPIRE_DAYS = 7             # Long-lived refresh token
 
 # Password Hashing Context (Kept from previous step)

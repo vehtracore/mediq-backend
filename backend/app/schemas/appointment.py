@@ -32,3 +32,15 @@ class AppointmentResponse(BaseModel):
 
 class GeneralBookRequest(BaseModel):
     notes: str
+
+# --- Continuity of Care: Referral Schemas ---
+
+class ReferralRequest(BaseModel):
+    """Payload sent by the doctor to initiate a physical-hospital referral."""
+    hospital_name: str                    # e.g. "Lagos Island General Hospital A&E"
+    note: str                             # Brief clinical reason for referral
+
+class ReferralResponse(AppointmentResponse):
+    """Extends the standard appointment response with the generated referral note."""
+    referred_hospital: Optional[str] = None
+    referral_note: Optional[str] = None
