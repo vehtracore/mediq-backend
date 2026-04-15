@@ -133,6 +133,24 @@ class AppointmentRepository {
     }
   }
 
+  Future<void> referAppointment({
+    required int id,
+    required String hospitalName,
+    required String note,
+  }) async {
+    try {
+      await _dio.post(
+        '/api/v1/appointments/doctor/appointments/$id/refer',
+        data: {'hospital_name': hospitalName, 'note': note},
+      );
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'];
+      throw Exception(detail ?? 'Failed to submit referral');
+    } catch (e) {
+      throw Exception('Failed to submit referral: $e');
+    }
+  }
+
   // --- GENERAL QUEUE METHODS ---
 
   Future<Appointment> bookGeneralConsultation(String notes) async {
