@@ -65,3 +65,4 @@ authlib
 itsdangerous
 slowapi
 firebase-admin
+apscheduler==3.11.0

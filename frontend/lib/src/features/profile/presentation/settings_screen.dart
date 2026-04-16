@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mediq_app/src/features/auth/presentation/auth_controller.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import '../../../shared/presentation/widgets/delete_account_dialog.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -77,8 +78,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               (v) => _updateSetting('email', v), Icons.email_outlined),
           const SizedBox(height: 24),
           _buildSectionHeader("Account"),
-          _buildActionTile("Delete Account", Icons.delete_forever, () {},
-              color: Colors.red),
+          _buildActionTile("Delete Account", Icons.delete_forever, () {
+            showDialog(
+              context: context,
+              builder: (context) => const DeleteAccountDialog(),
+            );
+          }, color: Colors.red),
         ],
       ),
     );

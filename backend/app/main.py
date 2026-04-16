@@ -1,5 +1,6 @@
 import os
 import traceback
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,17 +8,67 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from app.core.limiter import limiter
-from app.core.database import engine, Base
+from app.core.database import engine, Base, SessionLocal
 
 # ✅ KEEP "app." prefix because your main.py is inside the app folder
 from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab
 from app.api.v1 import google_auth
+from app.api.v1.auth import scrub_expired_accounts
 
 Base.metadata.create_all(bind=engine)
 
+
+# ---------------------------------------------------------------------------
+# ⏰ APScheduler — NDPA 30-day PII scrubber runs daily at 02:00 UTC
+# ---------------------------------------------------------------------------
+
+def _run_scrubber_job():
+    """Wrapper executed by APScheduler. Opens its own DB session so the
+    scheduler thread never shares state with the request-handling threads."""
+    db = SessionLocal()
+    try:
+        scrub_expired_accounts(db)
+    except Exception as exc:  # pragma: no cover
+        # Exceptions inside scheduler jobs are swallowed by default —
+        # log them explicitly so they surface in Render's log stream.
+        import logging
+        logging.getLogger("uvicorn.error").exception(
+            f"[NDPA SCRUBBER] Unhandled error during scheduled run: {exc}"
+        )
+    finally:
+        db.close()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI lifespan: start scheduler on boot, stop it on shutdown."""
+    scheduler = BackgroundScheduler(timezone="UTC")
+    scheduler.add_job(
+        _run_scrubber_job,
+        trigger=CronTrigger(hour=2, minute=0, timezone="UTC"),  # 02:00 UTC daily
+        id="ndpa_pii_scrubber",
+        name="NDPA 30-day PII scrubber",
+        replace_existing=True,
+    )
+    scheduler.start()
+    import logging
+    logging.getLogger("uvicorn.error").info(
+        "[SCHEDULER] APScheduler started. NDPA scrubber scheduled at 02:00 UTC daily."
+    )
+
+    yield  # ← application runs here
+
+    scheduler.shutdown(wait=False)
+    logging.getLogger("uvicorn.error").info(
+        "[SCHEDULER] APScheduler shut down gracefully."
+    )
+
+
 # ✅ redirect_slashes=False prevents 307 redirects that strip CORS headers
-app = FastAPI(title="MDQplus API", redirect_slashes=False)
+app = FastAPI(title="MDQplus API", redirect_slashes=False, lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 

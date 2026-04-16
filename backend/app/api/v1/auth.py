@@ -464,3 +464,144 @@ def update_device_token(
     db.commit()
     return {"message": "Device token updated"}
 
+
+# --- ⚖️ Account Deactivation — NDPA 30-Day Legal Hold ---
+
+@router.delete("/me/deactivate", status_code=status.HTTP_200_OK)
+def deactivate_account(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    Initiates a 30-day legal hold deletion per the Nigerian Data Protection Act (NDPA).
+
+    Immediately:
+      - Marks the account inactive so the user cannot log in.
+      - Clears the FCM token so push notifications stop immediately.
+      - Stamps deletion_requested_at with the current UTC time.
+
+    After 30 days:
+      - A scheduled scrubber (see scrub_expired_accounts below) will permanently
+        anonymise all PII stored against this user record.
+    """
+    from datetime import timezone
+    now_utc = datetime.now(timezone.utc)
+
+    current_user.is_active = False
+    current_user.fcm_token = None
+    current_user.deletion_requested_at = now_utc
+
+    db.commit()
+
+    logger.info(
+        f"[GDPR/NDPA] Deletion requested by user id={current_user.id} "
+        f"email={current_user.email} at {now_utc.isoformat()}. "
+        f"PII will be scrubbed after {now_utc.date()} + 30 days."
+    )
+
+    return {
+        "message": (
+            "Account deactivated. Your personal data will be permanently "
+            "anonymized in 30 days per legal retention policies."
+        )
+    }
+
+
+# ---------------------------------------------------------------------------
+# 🧹 NDPA PII Scrubber — run this on a daily schedule
+# ---------------------------------------------------------------------------
+#
+# HOW TO SCHEDULE:
+#   Option A — Celery Beat (recommended for production on Render):
+#       @celery_app.task
+#       def run_scrubber():
+#           from app.core.database import SessionLocal
+#           db = SessionLocal()
+#           try:
+#               scrub_expired_accounts(db)
+#           finally:
+#               db.close()
+#       # In celery beat schedule: run_scrubber every 24 h.
+#
+#   Option B — APScheduler (simpler, no Redis needed):
+#       from apscheduler.schedulers.background import BackgroundScheduler
+#       scheduler = BackgroundScheduler()
+#       scheduler.add_job(run_scrubber, "interval", hours=24)
+#       scheduler.start()
+#       # Register startup/shutdown hooks in main.py.
+#
+# ---------------------------------------------------------------------------
+
+def scrub_expired_accounts(db: Session) -> int:
+    """
+    Anonymises PII for all users who:
+      - requested deletion (deletion_requested_at IS NOT NULL), AND
+      - have been inactive for at least 30 days.
+
+    NDPA-compliant scrambling:
+      - email        → irreversible hash so uniqueness constraint is preserved
+      - first/last   → "Deleted User"
+      - password     → random bcrypt hash (account becomes permanently inaccessible)
+      - location,    → None
+        image_url,
+        dob,
+        blood_type,
+        allergies,
+        chronic_conditions,
+        medications,
+        past_surgeries
+      - deletion_requested_at → None  (signals that scrub is complete)
+
+    Returns the number of accounts scrubbed.
+    """
+    import uuid
+    from datetime import timedelta, timezone
+    from app.core import security as sec
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+
+    # Fetch candidates inside the session — avoids loading all rows into memory
+    candidates = (
+        db.query(User)
+        .filter(
+            User.is_active == False,  # noqa: E712
+            User.deletion_requested_at != None,  # noqa: E711
+            User.deletion_requested_at <= cutoff,
+        )
+        .all()
+    )
+
+    scrubbed = 0
+    for user in candidates:
+        # Preserve a one-way reference so audit logs remain meaningful
+        anon_tag = uuid.uuid4().hex[:12]
+
+        user.email              = f"deleted_{anon_tag}@purged.invalid"
+        user.first_name         = "Deleted"
+        user.last_name          = "User"
+        user.hashed_password    = sec.get_password_hash(uuid.uuid4().hex)
+        user.dob                = None
+        user.location           = None
+        user.image_url          = None
+        user.blood_type         = None
+        user.allergies          = None
+        user.chronic_conditions = None
+        user.medications        = None
+        user.past_surgeries     = None
+        user.auth_provider      = None
+        user.verification_token = None
+        user.fcm_token          = None
+        user.deletion_requested_at = None   # Marks scrub as complete
+
+        scrubbed += 1
+        logger.info(
+            f"[NDPA SCRUBBER] PII anonymised for former user id={user.id} "
+            f"(tag={anon_tag})."
+        )
+
+    if scrubbed:
+        db.commit()
+
+    logger.info(f"[NDPA SCRUBBER] Run complete. Accounts scrubbed: {scrubbed}")
+    return scrubbed
+

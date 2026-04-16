@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime
+from sqlalchemy import func
 from app.core.database import Base
 from datetime import datetime
 
@@ -48,3 +49,8 @@ class User(Base):
 
     # --- 📲 PUSH NOTIFICATIONS ---
     fcm_token = Column(String, nullable=True)
+
+    # --- ⚖️ NDPA 30-DAY LEGAL HOLD ---
+    # Set when user requests deletion. A daily scrubber anonymises PII 30 days
+    # after this timestamp, satisfying Nigerian Data Protection Act retention rules.
+    deletion_requested_at = Column(DateTime(timezone=True), nullable=True, index=True)
