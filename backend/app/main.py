@@ -22,6 +22,38 @@ Base.metadata.create_all(bind=engine)
 
 
 # ---------------------------------------------------------------------------
+# 🔧 Startup schema patch — safely adds any columns that create_all misses
+#    (create_all only creates NEW tables; it never alters existing ones)
+# ---------------------------------------------------------------------------
+def _apply_schema_patches():
+    """
+    Idempotent DDL migrations. Each statement uses IF NOT EXISTS so running
+    multiple times is always safe. Add new patches here instead of touching
+    Alembic while the project is pre-migration-framework.
+    """
+    patches = [
+        # NDPA 30-day legal hold column (added 2026-04-16)
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS deletion_requested_at TIMESTAMPTZ NULL;
+        """,
+        # Index for the daily scrubber query (created separately so the
+        # patch block stays readable)
+        """
+        CREATE INDEX IF NOT EXISTS ix_users_deletion_requested_at
+        ON users (deletion_requested_at);
+        """,
+    ]
+    with engine.connect() as conn:
+        from sqlalchemy import text
+        for sql in patches:
+            conn.execute(text(sql))
+        conn.commit()
+
+_apply_schema_patches()
+
+
+# ---------------------------------------------------------------------------
 # ⏰ APScheduler — NDPA 30-day PII scrubber runs daily at 02:00 UTC
 # ---------------------------------------------------------------------------
 

@@ -3,7 +3,7 @@ from fastapi.responses import HTMLResponse
 import uuid
 from pydantic import EmailStr
 from sqlalchemy.orm import Session
-from datetime import date
+from datetime import date, datetime, timezone
 from app.core.database import get_db
 from app.models.user import User
 from app.models.doctor import Doctor
