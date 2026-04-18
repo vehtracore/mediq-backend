@@ -32,7 +32,7 @@ class AiChatController extends StateNotifier<AiChatState> {
 
   AiChatController(this._dio, this.subscriptionTier) : super(AiChatState());
 
-  Future<void> sendMessage(String text, {String? imageUrl}) async {
+  Future<void> sendMessage(String text, {String? imageUrl, String language = 'English'}) async {
     if (text.trim().isEmpty && imageUrl == null) return;
 
     final userMsg = {'role': 'user', 'message': text, 'image': imageUrl};
@@ -69,7 +69,8 @@ class AiChatController extends StateNotifier<AiChatState> {
           data: {
             "message": text, 
             "image_url": imageUrl,
-            "history": history // Send history (empty if free)
+            "history": history, // Send history (empty if free)
+            "language": language, // Send selected language
           });
 
       final aiMsg = {'role': 'ai', 'message': response.data['response']};

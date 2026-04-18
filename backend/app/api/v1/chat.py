@@ -15,7 +15,8 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     message: str
     image_url: Optional[str] = None
-    history: Optional[list] = None # <--- NEW FIELD for Memory
+    history: Optional[list] = None
+    language: Optional[str] = "English"  # <--- Language selection field
 
 
 class ChatResponse(BaseModel):
@@ -37,7 +38,7 @@ async def analyze_symptoms(
 
     # ... (Limiting logic omitted for brevity, assuming it's unchanged above) ...
 
-    # 4. Process Request (Now with image_url, context AND history)
+    # 4. Process Request (Now with image_url, context, history AND language)
     
     # Calculate Age
     user_age = "Unknown"
@@ -49,12 +50,15 @@ async def analyze_symptoms(
         "conditions": current_user.chronic_conditions if current_user.chronic_conditions else "None"
     }
 
-    # We pass the history and image_url to the service.
+    # Sanitise and pass language to the AI service
+    target_language = chat_request.language or "English"
+
     ai_response = await ai_service.get_medical_response(
         chat_request.message, 
         history=chat_request.history,
         image_url=chat_request.image_url,
-        user_context=user_context
+        user_context=user_context,
+        target_language=target_language
     )
 
     # 5. Increment Counters

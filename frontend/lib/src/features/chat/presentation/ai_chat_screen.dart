@@ -24,6 +24,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
+  // --- LANGUAGE STATE ---
+  String _selectedLanguage = 'English';
+
   // --- VOICE STATE ---
   late stt.SpeechToText _speech;
   bool _isListening = false;
@@ -160,7 +163,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     final messageText = text.isNotEmpty ? text : "Analyze this image";
 
     ref.read(aiChatControllerProvider.notifier)
-        .sendMessage(messageText, imageUrl: imageUrl);
+        .sendMessage(messageText, imageUrl: imageUrl, language: _selectedLanguage);
 
     _messageController.clear();
     setState(() => _stagedImageUrl = null);
@@ -307,6 +310,39 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         backgroundColor: theme.appBarTheme.backgroundColor,
         foregroundColor: theme.appBarTheme.foregroundColor,
         elevation: 1,
+        actions: [
+          PopupMenuButton<String>(
+            initialValue: _selectedLanguage,
+            onSelected: (String newValue) {
+              setState(() {
+                _selectedLanguage = newValue;
+              });
+            },
+            icon: const Icon(Icons.language),
+            itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+              const PopupMenuItem<String>(
+                value: 'English',
+                child: Text('English'),
+              ),
+              const PopupMenuItem<String>(
+                value: 'Nigerian Pidgin',
+                child: Text('Nigerian Pidgin'),
+              ),
+              const PopupMenuItem<String>(
+                value: 'Yoruba',
+                child: Text('Yoruba'),
+              ),
+              const PopupMenuItem<String>(
+                value: 'Hausa',
+                child: Text('Hausa'),
+              ),
+              const PopupMenuItem<String>(
+                value: 'Igbo',
+                child: Text('Igbo'),
+              ),
+            ],
+          ),
+        ],
       ),
       body: Column(
         children: [
