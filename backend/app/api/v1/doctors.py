@@ -168,8 +168,45 @@ async def update_payout_settings(
         payload.account_number,
     )
 
+    # ── Step 1: Resolve account name and verify it matches the doctor ─────────
+    resolved_name: str = await paystack_service.resolve_account(
+        bank_code=payload.bank_code,
+        account_number=payload.account_number,
+    )
+
+    # Forgiving name comparison: split both names into lowercase tokens and
+    # require at least ONE token to match. This tolerates:
+    #   • Name-ordering differences ("OKAFOR JAMES" vs "James Okafor")
+    #   • Middle-name omissions ("AMAKA C. OBI" vs "Amaka Obi")
+    #   • All-caps vs title-case differences from the bank
+    doctor_tokens = set(doctor.full_name.lower().split())
+    bank_tokens   = set(resolved_name.lower().split())
+    has_match     = bool(doctor_tokens & bank_tokens)  # set intersection
+
+    if not has_match:
+        logger.warning(
+            "[PAYOUT] ❌ Name mismatch — doctor='%s' | bank_account='%s'",
+            doctor.full_name,
+            resolved_name,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Bank account name '{resolved_name}' does not match your "
+                "registered profile name. Please use an account in your name."
+            ),
+        )
+
+    logger.info(
+        "[PAYOUT] ✅ Name verified — doctor='%s' | bank_account='%s'",
+        doctor.full_name,
+        resolved_name,
+    )
+
+    # ── Step 2: Create the Paystack subaccount ────────────────────────────────
     # This call raises HTTPException(400) or (503) on failure — let it propagate.
     subaccount_code: str = await paystack_service.create_doctor_subaccount(
+
         business_name=doctor.full_name,
         bank_code=payload.bank_code,
         account_number=payload.account_number,

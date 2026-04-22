@@ -12,14 +12,19 @@ class Doctor {
   final bool isVerified;
   final int yearsExperience;
   final String? licenseNumber;
-  final String status;          // 'pending' | 'active' | 'rejected'
+  final String status;
   final String? rejectionReason;
+  // Paystack payout fields (nullable until doctor completes payout setup)
+  final String? bankCode;
+  final String? accountNumber;
+  final String? paystackSubaccountCode;
 
   Doctor({
     required this.id, required this.fullName, required this.specialty, required this.imageUrl,
     required this.hourlyRate, required this.rating, required this.reviewCount, required this.isAvailable,
     this.bio, required this.isVerified, required this.yearsExperience, this.licenseNumber,
     this.status = 'pending', this.rejectionReason,
+    this.bankCode, this.accountNumber, this.paystackSubaccountCode,
   });
 
   factory Doctor.fromJson(Map<String, dynamic> json) {
@@ -38,6 +43,9 @@ class Doctor {
       licenseNumber: json['license_number'],
       status: json['status'] ?? 'pending',
       rejectionReason: json['rejection_reason'],
+      bankCode: json['bank_code'],
+      accountNumber: json['account_number'],
+      paystackSubaccountCode: json['paystack_subaccount_code'],
     );
   }
 }

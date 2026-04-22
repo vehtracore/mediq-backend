@@ -163,6 +163,86 @@ class PaystackService:
         )
         return subaccount_code
 
+    async def resolve_account(self, bank_code: str, account_number: str) -> str:
+        """
+        Resolve a Nigerian bank account number to the registered account name.
+
+        Uses Paystack's GET /bank/resolve endpoint (requires the secret key).
+        This is the correct way to verify that an account number belongs to
+        the person trying to link it before creating a subaccount.
+
+        Args:
+            bank_code:      Paystack bank code, e.g. "058" for GTBank.
+            account_number: 10-digit NUBAN account number.
+
+        Returns:
+            The ``account_name`` string exactly as Paystack returns it
+            (e.g. "ADEBAYO JOHN OLAWALE").
+
+        Raises:
+            HTTPException(400): Account not found or bank/number invalid.
+            HTTPException(503): Network-level failure.
+        """
+        endpoint = f"{PAYSTACK_BASE_URL}/bank/resolve"
+        params = {"account_number": account_number, "bank_code": bank_code}
+
+        logger.info(
+            "[PAYSTACK] Resolving account | bank='%s' | account='%s'",
+            bank_code,
+            account_number,
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(
+                    endpoint, params=params, headers=self._headers
+                )
+        except httpx.RequestError as exc:
+            logger.error(
+                "[PAYSTACK] ❌ Network error resolving account: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Could not reach Paystack to verify your account. Please try again.",
+            ) from exc
+
+        try:
+            resp_json: dict = response.json()
+        except Exception:
+            resp_json = {}
+
+        paystack_status: bool = resp_json.get("status", False)
+        paystack_message: str = resp_json.get("message", "Unknown error from Paystack")
+
+        if not response.is_success or not paystack_status:
+            logger.warning(
+                "[PAYSTACK] ❌ Account resolution failed | HTTP %s | message='%s'",
+                response.status_code,
+                paystack_message,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=paystack_message,  # e.g. "Could not resolve account name"
+            )
+
+        account_name: Optional[str] = resp_json.get("data", {}).get("account_name")
+        if not account_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Paystack returned no account name. Check your account details.",
+            )
+
+        logger.info(
+            "[PAYSTACK] ✅ Account resolved — bank='%s' | account='%s' | name='%s'",
+            bank_code,
+            account_number,
+            account_name,
+        )
+        return account_name
+
+
 
 # ── Module-level singleton ─────────────────────────────────────────────────────
 # Import this instance wherever you need Paystack interactions:

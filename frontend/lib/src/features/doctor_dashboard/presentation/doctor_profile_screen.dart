@@ -58,10 +58,8 @@ class DoctorProfileScreen extends ConsumerWidget {
                   "Manage Availability",
                   () => context.push('/doctor_availability')),
               const SizedBox(height: 12),
-              _buildOption(context, Icons.attach_money, "Payout Settings", () {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                    content: Text("Payout Integration Coming Soon")));
-              }),
+              _buildOption(context, Icons.attach_money, "Payout Settings",
+                  () => context.push('/payout_settings')),
               const SizedBox(height: 12),
               _buildOption(context, Icons.settings_outlined, "App Settings",
                   () => context.push('/settings')),
