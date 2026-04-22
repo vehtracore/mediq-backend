@@ -22,6 +22,10 @@ class DoctorResponse(DoctorBase):
     indemnity_cert_url: Optional[str] = None
     status: Optional[str] = "pending"           # 'pending' | 'active' | 'rejected'
     rejection_reason: Optional[str] = None       # Set by admin on rejection
+    # Banking / Paystack subaccount (nullable until doctor completes payout setup)
+    bank_code: Optional[str] = None
+    account_number: Optional[str] = None
+    paystack_subaccount_code: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 class DoctorRegister(BaseModel):
@@ -42,3 +46,9 @@ class ReapplyRequest(BaseModel):
     license_number: Optional[str] = None          # Corrected MDCN number
     mdcn_license_url: Optional[str] = None        # New Cloudinary URL for license image
     indemnity_cert_url: Optional[str] = None      # New Cloudinary URL for indemnity cert
+
+
+class PayoutSettingsRequest(BaseModel):
+    """Payload for PUT /api/v1/doctors/me/payout-settings."""
+    bank_code: str      # Paystack bank code, e.g. '058' for GTBank
+    account_number: str # 10-digit NUBAN

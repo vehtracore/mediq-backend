@@ -312,8 +312,11 @@ class QuickActionGrid extends ConsumerWidget {
                           .read(appointmentRepositoryProvider)
                           .bookGeneralConsultation("I need a doctor now.");
                       if (context.mounted)
-                        context.push('/payment',
-                            extra: {'appointment': appt, 'amount': priceVal});
+                        context.push('/payment', extra: {
+                          'transactionType': 'gp_consult',
+                          'baseAmount': priceVal,
+                          'title': 'General Consultation',
+                        });
                     } catch (e) {
                       if (context.mounted)
                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -382,23 +385,27 @@ class QuickActionGrid extends ConsumerWidget {
                                   blurRadius: 20,
                                   offset: const Offset(0, 5))
                             ]),
-                  child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                                color: color.withOpacity(0.1),
-                                shape: BoxShape.circle),
-                            child: Icon(item['icon'] as IconData,
-                                color: color, size: 28)),
-                        const SizedBox(height: 12),
-                        Text(item['label'] as String,
-                            textAlign: TextAlign.center,
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14))
-                      ])));
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                  color: color.withOpacity(0.1),
+                                  shape: BoxShape.circle),
+                              child: Icon(item['icon'] as IconData,
+                                  color: color, size: 28)),
+                          const SizedBox(height: 12),
+                          Text(item['label'] as String,
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14))
+                        ]),
+                  )));
         });
   }
 }

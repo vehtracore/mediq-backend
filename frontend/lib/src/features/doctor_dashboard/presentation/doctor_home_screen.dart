@@ -75,17 +75,21 @@ class _DoctorDashboardTab extends ConsumerWidget {
             data: (user) => Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text("Good Morning,",
-                                style: theme
-                                    .textTheme.bodyMedium), // ✅ Dynamic Text
-                            Text("Dr. ${user?.lastName ?? ''}",
-                                style: theme.textTheme.headlineSmall?.copyWith(
-                                    fontWeight:
-                                        FontWeight.bold)) // ✅ Dynamic Text
-                          ]),
+                      Expanded(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text("Good Morning,",
+                                  style: theme
+                                      .textTheme.bodyMedium), // ✅ Dynamic Text
+                              Text("Dr. ${user?.lastName ?? ''}",
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.headlineSmall?.copyWith(
+                                      fontWeight:
+                                          FontWeight.bold)) // ✅ Dynamic Text
+                            ]),
+                      ),
                       IconButton(
                           icon: CircleAvatar(
                               backgroundColor:

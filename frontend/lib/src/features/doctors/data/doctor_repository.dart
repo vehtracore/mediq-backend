@@ -37,4 +37,17 @@ class DoctorRepository {
   Future<void> createSlot({required int doctorId, required DateTime startTime}) async {
     await _dio.post('/api/v1/appointments/slots', data: {"doctor_id": doctorId, "start_time": startTime.toIso8601String()});
   }
+
+  /// Links a bank account to the doctor's Paystack subaccount.
+  /// Throws [DioException] on failure — the error message from Paystack is
+  /// forwarded verbatim inside [DioException.response.data['detail']].
+  Future<void> updatePayoutSettings({
+    required String bankCode,
+    required String accountNumber,
+  }) async {
+    await _dio.put('/api/v1/doctors/me/payout-settings', data: {
+      "bank_code": bankCode,
+      "account_number": accountNumber,
+    });
+  }
 }

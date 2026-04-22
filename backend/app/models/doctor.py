@@ -26,6 +26,14 @@ class Doctor(Base):
     status = Column(String, default="pending", index=True) # "pending", "active", "rejected"
     rejection_reason = Column(String, nullable=True)  # Admin's reason for rejection
     is_verified = Column(Boolean, default=False, index=True)
-    documents_url = Column(String, nullable=True) 
+    documents_url = Column(String, nullable=True)
+
+    # --- 💳 PAYSTACK SUBACCOUNT (added 2026-04-22) ---
+    # Stored after a doctor completes bank onboarding. Used to route commission
+    # splits automatically at the Paystack gateway level.
+    bank_code = Column(String, nullable=True)               # e.g. "058" (GTBank)
+    account_number = Column(String, nullable=True)           # 10-digit NUBAN
+    paystack_subaccount_code = Column(String, nullable=True) # e.g. "SUB_abc123"
 
     user = relationship("User")
+

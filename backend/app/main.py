@@ -16,6 +16,8 @@ from app.core.database import engine, Base, SessionLocal
 # ✅ KEEP "app." prefix because your main.py is inside the app folder
 from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab
 from app.api.v1 import google_auth
+from app.api.v1 import emergency
+from app.api.v1 import payments
 from app.api.v1.auth import scrub_expired_accounts
 
 Base.metadata.create_all(bind=engine)
@@ -42,6 +44,32 @@ def _apply_schema_patches():
         """
         CREATE INDEX IF NOT EXISTS ix_users_deletion_requested_at
         ON users (deletion_requested_at);
+        """,
+        # Emergency Protocol columns (added 2026-04-22)
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS kin_phone VARCHAR NULL;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS emergency_sms_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS emergency_voice_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+        """,
+        # Doctor banking / subaccount columns (added 2026-04-22)
+        """
+        ALTER TABLE doctors
+        ADD COLUMN IF NOT EXISTS bank_code VARCHAR NULL;
+        """,
+        """
+        ALTER TABLE doctors
+        ADD COLUMN IF NOT EXISTS account_number VARCHAR NULL;
+        """,
+        """
+        ALTER TABLE doctors
+        ADD COLUMN IF NOT EXISTS paystack_subaccount_code VARCHAR NULL;
         """,
     ]
     with engine.connect() as conn:
@@ -171,6 +199,8 @@ app.include_router(chat_socket.router, prefix="/api/v1/p2p", tags=["P2P Chat"])
 app.include_router(upload.router, prefix="/api/v1/upload", tags=["Upload"])
 app.include_router(lab.router, prefix="/api/v1/lab", tags=["Lab Scanner"])
 app.include_router(google_auth.router, prefix="/auth/google", tags=["Google OAuth"])
+app.include_router(emergency.router, prefix="/api/v1/emergency", tags=["Emergency"])
+app.include_router(payments.router, prefix="/api/v1/payments", tags=["Payments"])
 
 # --- STATIC FILES ---
 static_dir = "static"

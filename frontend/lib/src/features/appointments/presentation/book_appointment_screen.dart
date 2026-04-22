@@ -52,8 +52,9 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
               slotId: _selectedSlotId!, notes: _notesController.text.trim());
       if (!mounted) return;
       final Map<String, dynamic> paymentData = {
-        'appointment': appointment,
-        'amount': widget.doctor.hourlyRate
+        'transactionType': 'specialist_consult',
+        'baseAmount': widget.doctor.hourlyRate,
+        'title': 'Consultation: ${widget.doctor.fullName}',
       };
       await Future.delayed(const Duration(milliseconds: 50));
       if (mounted) context.push('/payment', extra: paymentData);

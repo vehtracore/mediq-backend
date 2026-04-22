@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../auth/data/auth_repository.dart';
 import '../../auth/presentation/user_controller.dart';
 
 class SubscriptionScreen extends ConsumerStatefulWidget {
@@ -14,49 +13,12 @@ class SubscriptionScreen extends ConsumerStatefulWidget {
 class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
   bool _isLoading = false;
 
-  Future<void> _handleSubscribe() async {
-    setState(() => _isLoading = true);
-    try {
-      await ref.read(authRepositoryProvider).upgradeToPremium();
-      ref.invalidate(userProvider);
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: Theme.of(context).cardColor,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          content: const Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.star_rounded, color: Colors.amber, size: 60),
-              SizedBox(height: 16),
-              Text("Welcome to Premium!",
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-              SizedBox(height: 8),
-              Text(
-                  "You now have unlimited AI chats and priority doctor access.",
-                  textAlign: TextAlign.center),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  context.pop();
-                },
-                child: const Text("Awesome!")),
-          ],
-        ),
-      );
-    } catch (e) {
-      if (mounted)
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text("Failed: $e")));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
+  void _handleSubscribe({required String planTitle, required double parsedPrice}) {
+    context.push('/payment', extra: {
+      'transactionType': 'subscription',
+      'baseAmount': parsedPrice,
+      'title': planTitle,
+    });
   }
 
   @override
@@ -221,7 +183,21 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                 ? OutlinedButton(
                     onPressed: null, child: const Text("Current Plan"))
                 : ElevatedButton(
-                    onPressed: _isLoading ? null : _handleSubscribe,
+                    onPressed: () {
+                      // Parse the numeric value from price string e.g. "₦2,500/mo" → 2500.0
+                      final parsedPrice = double.tryParse(
+                            price
+                                .replaceAll('₦', '')
+                                .replaceAll(',', '')
+                                .split('/').first
+                                .trim(),
+                          ) ??
+                          0.0;
+                      _handleSubscribe(
+                        planTitle: title,
+                        parsedPrice: parsedPrice,
+                      );
+                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor:
                           isPremium ? const Color(0xFF4A90E2) : Colors.grey,
@@ -229,9 +205,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
                     ),
-                    child: _isLoading
-                        ? const CircularProgressIndicator(color: Colors.white)
-                        : const Text("Upgrade Now"),
+                    child: const Text("Upgrade Now"),
                   ),
           ),
         ],

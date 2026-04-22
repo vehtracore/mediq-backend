@@ -26,6 +26,12 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
   Future<void> _determinePosition() async {
     // ... (Keep existing logic for location) ...
     // For brevity, just updating the UI part. Assuming location logic works.
+
+    // TODO: FIRE BACKGROUND EMERGENCY PROTOCOL
+    // 1. Await location coordinates.
+    // 2. Fire POST request to /api/v1/emergency/trigger with coordinates.
+    // 3. Backend will handle Next of Kin Push Notifications and Termii SMS silently.
+
     setState(() {
       _locationMessage = "Lagos, Nigeria"; // Mock for display
       _loading = false;
@@ -123,9 +129,9 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
               context,
               icon: Icons.support_agent,
               label: "Suicide Hotline",
-              subLabel: "Tap to call",
+              subLabel: "Tap to call 09080601000",
               color: Colors.purple,
-              onTap: () => _callNumber("988"),
+              onTap: () => _callNumber("09080601000"),
             ),
           ],
         ),

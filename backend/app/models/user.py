@@ -47,6 +47,13 @@ class User(Base):
     settings_notifications = Column(Boolean, default=True)
     settings_email_updates = Column(Boolean, default=False)
 
+    # --- 🚨 EMERGENCY PROTOCOL ---
+    # Next of Kin phone in international format e.g. '+2348012345678'
+    kin_phone = Column(String, nullable=True)
+    # Per-channel toggles — the user controls which alerts fire
+    emergency_sms_enabled = Column(Boolean, default=False)
+    emergency_voice_enabled = Column(Boolean, default=False)
+
     # --- 📲 PUSH NOTIFICATIONS ---
     fcm_token = Column(String, nullable=True)
 

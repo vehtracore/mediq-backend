@@ -36,6 +36,11 @@ class UserUpdate(BaseModel):
     settings_notifications: Optional[bool] = None
     settings_email_updates: Optional[bool] = None
 
+    # Emergency Protocol
+    kin_phone: Optional[str] = None
+    emergency_sms_enabled: Optional[bool] = None
+    emergency_voice_enabled: Optional[bool] = None
+
 # --- 🚀 UPDATED: User Response (Includes Medical & Settings) ---
 class UserResponse(UserBase):
     id: int
@@ -56,6 +61,11 @@ class UserResponse(UserBase):
     settings_theme: Optional[str] = "light"
     settings_notifications: Optional[bool] = True
     settings_email_updates: Optional[bool] = False
+
+    # Emergency Protocol
+    kin_phone: Optional[str] = None
+    emergency_sms_enabled: Optional[bool] = False
+    emergency_voice_enabled: Optional[bool] = False
 
     model_config = ConfigDict(from_attributes=True)
 

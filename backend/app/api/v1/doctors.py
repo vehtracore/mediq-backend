@@ -1,4 +1,6 @@
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
@@ -6,8 +8,11 @@ from app.core.database import get_db
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.appointment import Appointment
-from app.schemas.doctor import DoctorResponse, DoctorUpdate, ReapplyRequest
+from app.schemas.doctor import DoctorResponse, DoctorUpdate, ReapplyRequest, PayoutSettingsRequest
 from app.api import deps
+from app.services.paystack_service import paystack_service
+
+logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter()
 
@@ -124,6 +129,73 @@ def update_doctor_me(data: DoctorUpdate, db: Session = Depends(get_db), current_
 
     db.commit()
     db.refresh(doctor)
+    return doctor
+
+
+@router.put("/me/payout-settings", response_model=DoctorResponse)
+async def update_payout_settings(
+    payload: PayoutSettingsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    PUT /api/v1/doctors/me/payout-settings
+
+    Links a verified Nigerian bank account to the authenticated doctor's profile
+    by creating a Paystack split-payment subaccount. The platform retains 30 %
+    of every transaction; the remainder is routed directly to the doctor's bank.
+
+    On success the subaccount_code, bank_code, and account_number are persisted
+    against the Doctor record and returned in the response.
+
+    Raises:
+        403  — caller is not a doctor
+        404  — doctor profile row not found
+        400  — Paystack rejected the bank details (message forwarded verbatim)
+        503  — Paystack could not be reached (network error)
+    """
+    if current_user.role != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can configure payout settings.")
+
+    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor profile not found.")
+
+    logger.info(
+        "[PAYOUT] Creating subaccount for doctor_id=%s | bank=%s | account=%s",
+        doctor.id,
+        payload.bank_code,
+        payload.account_number,
+    )
+
+    # This call raises HTTPException(400) or (503) on failure — let it propagate.
+    subaccount_code: str = await paystack_service.create_doctor_subaccount(
+        business_name=doctor.full_name,
+        bank_code=payload.bank_code,
+        account_number=payload.account_number,
+        percentage_charge=30.0,
+    )
+
+    doctor.bank_code = payload.bank_code
+    doctor.account_number = payload.account_number
+    doctor.paystack_subaccount_code = subaccount_code
+
+    try:
+        db.commit()
+        db.refresh(doctor)
+    except Exception as exc:
+        db.rollback()
+        logger.error("[PAYOUT] DB commit failed after subaccount creation: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Subaccount was created on Paystack but could not be saved. Contact support.",
+        ) from exc
+
+    logger.info(
+        "[PAYOUT] ✅ Subaccount saved — doctor_id=%s | code=%s",
+        doctor.id,
+        subaccount_code,
+    )
     return doctor
 
 @router.get("/{doctor_id}", response_model=DoctorResponse)

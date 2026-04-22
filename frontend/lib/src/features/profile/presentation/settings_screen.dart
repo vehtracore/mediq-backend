@@ -17,6 +17,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late bool _notifications;
   late bool _emailUpdates;
 
+  String _nokPhone = '';
+  bool _pushEnabled = false;
+  bool _termSmsEnabled = false;
+  bool _termVoiceEnabled = false;
+
   @override
   void initState() {
     super.initState();
@@ -77,6 +82,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _buildSwitchTile("Email Updates", _emailUpdates,
               (v) => _updateSetting('email', v), Icons.email_outlined),
           const SizedBox(height: 24),
+          ExpansionTile(
+            title: const Text('Emergency Protocol', style: TextStyle(fontWeight: FontWeight.bold)),
+            leading: Icon(Icons.health_and_safety, color: theme.iconTheme.color),
+            childrenPadding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
+            children: [
+              _buildTextFieldCard(),
+              const SizedBox(height: 16),
+              _buildSwitchTile("In-App Push Notification (Free)", _pushEnabled,
+                  (v) => setState(() => _pushEnabled = v), Icons.notifications_active_outlined),
+              const SizedBox(height: 16),
+              _buildSwitchTile("SMS Alert", _termSmsEnabled,
+                  (v) => setState(() => _termSmsEnabled = v), Icons.sms_outlined),
+              const SizedBox(height: 16),
+              _buildSwitchTile("Automated Voice Call", _termVoiceEnabled,
+                  (v) => setState(() => _termVoiceEnabled = v), Icons.phone_in_talk_outlined),
+            ],
+          ),
+          const SizedBox(height: 24),
           _buildSectionHeader("Account"),
           _buildActionTile("Delete Account", Icons.delete_forever, () {
             showDialog(
@@ -95,6 +118,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       child: Text(title,
           style: const TextStyle(
               fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 14)),
+    );
+  }
+
+  Widget _buildTextFieldCard() {
+    final theme = Theme.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.cardTheme.color,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: theme.brightness == Brightness.dark
+            ? []
+            : [BoxShadow(color: Colors.grey.withOpacity(0.05), blurRadius: 4)],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: TextFormField(
+        initialValue: _nokPhone,
+        keyboardType: TextInputType.phone,
+        style: theme.textTheme.bodyLarge,
+        decoration: const InputDecoration(
+          labelText: "Next of Kin Phone Number",
+          border: InputBorder.none,
+          icon: Icon(Icons.contact_phone_outlined, color: Color(0xFF4A90E2)),
+        ),
+        onChanged: (val) {
+          setState(() {
+            _nokPhone = val;
+          });
+        },
+      ),
     );
   }
 

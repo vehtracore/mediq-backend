@@ -1,9 +1,11 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.exc import IntegrityError
 from typing import List
 from datetime import datetime
 from pydantic import BaseModel
+import logging
 from app.core.database import get_db
 from app.models.appointment import Appointment, DoctorSlot
 from app.models.doctor import Doctor
@@ -12,17 +14,23 @@ from app.models.review import Review
 from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, GeneralBookRequest, ReferralRequest, ReferralResponse
 from app.api import deps
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 # ... (Helper to Map Response) ...
 def map_appt(a, doc_name=None):
     d_name = doc_name if doc_name else (a.doctor.full_name if a.doctor else "Waiting...")
-    s_time = a.slot.start_time if a.slot else a.start_time
+    # BUG FIX #3: Guard slot access — slot may not be lazy-loaded in all contexts
+    try:
+        s_time = a.slot.start_time if a.slot else a.start_time
+    except Exception:
+        s_time = a.start_time
     # CHECK IF REVIEW EXISTS
     has_rev = True if a.review else False
     return AppointmentResponse(
-        id=a.id, doctor_name=d_name, status=a.status, 
-        payment_status=a.payment_status, start_time=s_time, 
+        id=a.id, doctor_name=d_name, status=a.status,
+        payment_status=a.payment_status, start_time=s_time,
         notes=a.notes, amount=a.amount, has_review=has_rev
     )
 
@@ -42,17 +50,84 @@ def get_doctor_slots(doctor_id: int, db: Session = Depends(get_db)):
     return db.query(DoctorSlot).filter(DoctorSlot.doctor_id == doctor_id, DoctorSlot.is_booked == False).order_by(DoctorSlot.start_time).all()
 
 @router.post("/book", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
-def book_appointment(appt_data: AppointmentCreate, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    slot = db.query(DoctorSlot).filter(DoctorSlot.id == appt_data.slot_id).first()
-    if not slot or slot.is_booked: raise HTTPException(400, "Slot unavailable")
+def book_appointment(
+    appt_data: AppointmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    # --- Step 1: Fetch slot with its doctor eagerly to avoid lazy-load AttributeError ---
+    slot = (
+        db.query(DoctorSlot)
+        .options(joinedload(DoctorSlot.doctor))
+        .filter(DoctorSlot.id == appt_data.slot_id)
+        .first()
+    )
+
+    # BUG FIX #1a: Explicit 404 for missing slot
+    if not slot:
+        raise HTTPException(status_code=404, detail="Slot not found.")
+
+    # BUG FIX #1b: Explicit 409 for already-booked slot
+    if slot.is_booked:
+        raise HTTPException(status_code=409, detail="This slot is already booked. Please choose another.")
+
+    # BUG FIX #1c: Guard against a slot whose doctor row is missing (FK orphan)
+    if not slot.doctor:
+        logger.error("Data integrity issue: slot %s has no associated doctor.", slot.id)
+        raise HTTPException(
+            status_code=400,
+            detail="This slot is misconfigured (no doctor assigned). Please contact support.",
+        )
+
+    # --- Step 2: Calculate financials ---
+    amount: float = slot.doctor.hourly_rate or 0.0
+    commission: float = round(amount * 0.30, 2)
+    payout: float = round(amount - commission, 2)
+
+    # --- Step 3: Mark slot as booked and create appointment ---
     slot.is_booked = True
-    amount = slot.doctor.hourly_rate
-    commission = amount * 0.30
-    payout = amount - commission
-    new_appt = Appointment(patient_id=current_user.id, doctor_id=slot.doctor_id, slot_id=slot.id, status="pending", payment_status="unpaid", notes=appt_data.notes, amount=amount, commission=commission, payout=payout)
+    new_appt = Appointment(
+        patient_id=current_user.id,
+        doctor_id=slot.doctor_id,
+        slot_id=slot.id,
+        status="pending",
+        payment_status="unpaid",
+        notes=appt_data.notes,
+        amount=amount,
+        commission=commission,
+        payout=payout,
+    )
     db.add(new_appt)
-    db.commit()
-    db.refresh(new_appt)
+
+    # BUG FIX #2: Catch IntegrityError from the UNIQUE constraint on slot_id
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        logger.warning("IntegrityError booking slot %s: %s", appt_data.slot_id, exc.orig)
+        raise HTTPException(
+            status_code=400,
+            detail="This slot was just booked by another user. Please choose a different time.",
+        ) from exc
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Unexpected error while booking appointment for user %s", current_user.id)
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected server error occurred. Please try again later.",
+        ) from exc
+
+    # BUG FIX #3: Re-fetch with relationships eager-loaded so map_appt never triggers a lazy-load
+    new_appt = (
+        db.query(Appointment)
+        .options(
+            joinedload(Appointment.doctor),
+            joinedload(Appointment.slot),
+            joinedload(Appointment.review),
+        )
+        .filter(Appointment.id == new_appt.id)
+        .first()
+    )
     return map_appt(new_appt)
 
 @router.post("/book-general", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)

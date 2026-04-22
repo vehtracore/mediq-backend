@@ -16,7 +16,6 @@ import '../../features/doctors/presentation/doctor_search_screen.dart';
 import '../../features/doctors/presentation/doctor_detail_screen.dart';
 import '../../features/doctors/data/doctor_model.dart';
 import '../../features/appointments/presentation/book_appointment_screen.dart';
-import '../../features/appointments/data/appointment_model.dart';
 
 // --- IMPORTS ---
 import '../../features/auth/data/auth_repository.dart' hide User;
@@ -36,6 +35,7 @@ import '../../features/subscription/presentation/subscription_screen.dart';
 import 'package:mediq_app/src/features/chat/presentation/video_call_screen.dart';
 import '../../features/profile/presentation/medical_history_screen.dart';
 import '../../features/lab/presentation/lab_scanner_screen.dart';
+import '../../features/profile/presentation/payout_settings_screen.dart';
 
 // Global key so Dio interceptor can navigate imperatively
 final rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -165,16 +165,21 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/payment',
         builder: (context, state) {
-          final data = state.extra as Map;
+          final data = state.extra as Map<String, dynamic>;
           return PaymentScreen(
-            appointment: data['appointment'] as Appointment,
-            amount: (data['amount'] as num).toDouble(),
+            transactionType: data['transactionType'] as String,
+            baseAmount: (data['baseAmount'] as num).toDouble(),
+            title: data['title'] as String,
           );
         },
       ),
       GoRoute(
         path: '/lab_scanner',
         builder: (context, state) => const LabScannerScreen(),
+      ),
+      GoRoute(
+        path: '/payout_settings',
+        builder: (context, state) => const PayoutSettingsScreen(),
       ),
     ],
   );

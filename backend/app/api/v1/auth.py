@@ -364,6 +364,11 @@ def update_user_me(
     if user_update.settings_notifications is not None: current_user.settings_notifications = user_update.settings_notifications
     if user_update.settings_email_updates is not None: current_user.settings_email_updates = user_update.settings_email_updates
 
+    # 4. Update Emergency Protocol
+    if user_update.kin_phone is not None: current_user.kin_phone = user_update.kin_phone
+    if user_update.emergency_sms_enabled is not None: current_user.emergency_sms_enabled = user_update.emergency_sms_enabled
+    if user_update.emergency_voice_enabled is not None: current_user.emergency_voice_enabled = user_update.emergency_voice_enabled
+
     db.commit()
     db.refresh(current_user)
     return current_user
