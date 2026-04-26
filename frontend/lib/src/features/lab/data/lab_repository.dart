@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mediq_app/src/core/api/api_constants.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'lab_result_model.dart';
 import 'package:http_parser/http_parser.dart';

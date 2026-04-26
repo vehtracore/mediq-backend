@@ -58,9 +58,10 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
             content: Text("Doctor Verified"), backgroundColor: Colors.green));
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text("$e")));
+      }
     }
   }
 
@@ -394,8 +395,9 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                     u.email.toLowerCase().contains(_searchQuery);
               }).toList();
 
-              if (filtered.isEmpty)
+              if (filtered.isEmpty) {
                 return const Center(child: Text("No users found."));
+              }
 
               return ListView.builder(
                 itemCount: filtered.length,
@@ -423,7 +425,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                       leading: CircleAvatar(
                         backgroundColor:
                             user.role == 'doctor' ? Colors.blue : Colors.green,
-                        child: Icon(Icons.person, color: Colors.white),
+                        child: const Icon(Icons.person, color: Colors.white),
                       ),
                       title: Text(fullName, style: theme.textTheme.bodyLarge),
                       subtitle: Text(

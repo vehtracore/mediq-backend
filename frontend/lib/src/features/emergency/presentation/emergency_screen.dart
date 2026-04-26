@@ -13,8 +13,8 @@ class EmergencyScreen extends StatefulWidget {
 
 class _EmergencyScreenState extends State<EmergencyScreen> {
   String _locationMessage = "Detecting location...";
-  String _localEmergencyNumber = "112";
-  String _localEmergencyLabel = "Local Emergency";
+  final String _localEmergencyNumber = "112";
+  final String _localEmergencyLabel = "Local Emergency";
   bool _loading = true;
 
   @override

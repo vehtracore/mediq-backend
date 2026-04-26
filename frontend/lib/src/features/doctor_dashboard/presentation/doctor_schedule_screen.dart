@@ -159,8 +159,8 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
           return AlertDialog(
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16)),
-            title: Row(
-              children: const [
+            title: const Row(
+              children: [
                 Icon(Icons.local_hospital_outlined,
                     color: Color(0xFFE53935), size: 22),
                 SizedBox(width: 8),
@@ -397,9 +397,9 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
               ),
               PopupMenuButton<String>(
                 onSelected: (value) {
-                  if (value == 'notes')
+                  if (value == 'notes') {
                     _showNotesDialog(context);
-                  else if (value == 'complete')
+                  } else if (value == 'complete')
                     _confirmCompletion(context, ref);
                   else if (value == 'cancel')
                     _confirmCancellation(context, ref);

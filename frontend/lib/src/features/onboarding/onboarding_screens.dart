@@ -7,13 +7,13 @@ class _VehtrWatermark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Positioned(
+    return const Positioned(
       left: 0,
       right: 0,
       bottom: 0,
       child: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.only(bottom: 16.0),
+          padding: EdgeInsets.only(bottom: 16.0),
           child: Center(
             child: Text(
               'Powered by Vehtr',

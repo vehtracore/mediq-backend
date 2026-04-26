@@ -218,7 +218,7 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
                           decoration: BoxDecoration(
                             color: _cardColor,
                             borderRadius: BorderRadius.circular(16),
-                            border: Border(
+                            border: const Border(
                               left: BorderSide(color: _accentRed, width: 4),
                             ),
                           ),
@@ -256,19 +256,19 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
                         const SizedBox(height: 32),
 
                         // ── What happens next ──────────────────────────────────
-                        _SectionHeader(label: 'What to do next'),
+                        const _SectionHeader(label: 'What to do next'),
                         const SizedBox(height: 12),
-                        _StepTile(
+                        const _StepTile(
                           number: '1',
                           text:
                               'Review the rejection reason carefully and identify what needs correcting.',
                         ),
-                        _StepTile(
+                        const _StepTile(
                           number: '2',
                           text:
                               'If your MDCN license number was incorrect, update it in the form below.',
                         ),
-                        _StepTile(
+                        const _StepTile(
                           number: '3',
                           text:
                               'Click "Resubmit Application" to send your corrected information to the MDQ+ admin team for review.',
@@ -276,7 +276,7 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
                         const SizedBox(height: 32),
 
                         // ── Correction form ────────────────────────────────────
-                        _SectionHeader(label: 'Correct Your Information'),
+                        const _SectionHeader(label: 'Correct Your Information'),
                         const SizedBox(height: 16),
                         Form(
                           key: _formKey,

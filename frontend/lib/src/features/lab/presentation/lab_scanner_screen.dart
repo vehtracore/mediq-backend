@@ -167,11 +167,11 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
               )
             ),
             const SizedBox(height: 20),
-            Row(
+            const Row(
               children: [
-                const Icon(Icons.check_circle, color: Colors.green, size: 28),
-                const SizedBox(width: 10),
-                const Text("Scan Successful", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                Icon(Icons.check_circle, color: Colors.green, size: 28),
+                SizedBox(width: 10),
+                Text("Scan Successful", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
               ],
             ),
             const SizedBox(height: 10),

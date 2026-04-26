@@ -69,7 +69,7 @@ class PdfService {
             pw.Text("Date: ${DateFormat('yyyy-MM-dd').format(DateTime.now())}"),
           ],
         ),
-        pw.Text("Medical Consultation Record", style: pw.TextStyle(fontSize: 16)),
+        pw.Text("Medical Consultation Record", style: const pw.TextStyle(fontSize: 16)),
         pw.Divider(thickness: 2),
       ],
     );

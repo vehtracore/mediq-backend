@@ -41,7 +41,7 @@ dependencies:
   path_provider: ^2.1.2
   open_file: ^3.3.2
   image_gallery_saver_plus: ^4.0.1
-
+  flutter_paystack_plus: ^2.5.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -190,15 +190,15 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                   // SHOW PAYWALL DIALOG
                   showDialog(
                     context: context,
-                    builder: (BuildContext dialogContext) => AlertDialog(
-                      title: const Row(
+                    builder: (BuildContext dialogContext) => const AlertDialog(
+                      title: Row(
                         children: [
                           Icon(Icons.star, color: Colors.amber),
                           SizedBox(width: 8),
                           Text("MDQ+ Premium Required", style: TextStyle(fontSize: 18)),
                         ],
                       ),
-                      content: const Text(
+                      content: Text(
                         "AI Urinalysis is exclusively available for MDQ+ Premium subscribers. Upgrade your plan to unlock this and other advanced medical analysis features."
                       ),
                     ),

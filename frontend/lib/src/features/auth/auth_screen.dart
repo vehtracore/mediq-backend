@@ -6,7 +6,6 @@ import 'package:url_launcher/url_launcher.dart'; // ✅ Added for Google Auth
 import 'presentation/auth_controller.dart';
 import 'presentation/user_controller.dart';
 import 'data/auth_repository.dart';
-import 'package:mediq_app/src/features/doctors/data/doctor_model.dart';
 
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});

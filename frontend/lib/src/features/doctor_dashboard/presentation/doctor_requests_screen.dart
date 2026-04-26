@@ -37,18 +37,18 @@ class DoctorRequestsScreen extends ConsumerWidget {
               ref.read(requestTabProvider.notifier).setTab(newSelection.first);
             },
             style: ButtonStyle(
-              backgroundColor: MaterialStateProperty.resolveWith<Color>((
-                Set<MaterialState> states,
+              backgroundColor: WidgetStateProperty.resolveWith<Color>((
+                Set<WidgetState> states,
               ) {
-                if (states.contains(MaterialState.selected)) {
+                if (states.contains(WidgetState.selected)) {
                   return const Color(0xFF4A90E2);
                 }
                 return isDark ? Colors.grey[800]! : Colors.white; // ✅ Dynamic
               }),
-              foregroundColor: MaterialStateProperty.resolveWith<Color>((
-                Set<MaterialState> states,
+              foregroundColor: WidgetStateProperty.resolveWith<Color>((
+                Set<WidgetState> states,
               ) {
-                if (states.contains(MaterialState.selected)) {
+                if (states.contains(WidgetState.selected)) {
                   return Colors.white;
                 }
                 return theme.textTheme.bodyLarge?.color ??

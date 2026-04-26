@@ -2,7 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter/foundation.dart'; // For Uint8List
+// For Uint8List
 
 final imageUploadServiceProvider = Provider((ref) => ImageUploadService(ref));
 

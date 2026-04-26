@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/doctor_dashboard/presentation/doctor_requests_screen.dart';

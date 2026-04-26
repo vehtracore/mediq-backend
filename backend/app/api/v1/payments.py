@@ -93,22 +93,24 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Malformed JSON payload")
 
-    data: dict = payload.get("data", {})
-    metadata: dict = data.get("metadata", {})
+    data: dict = payload.get("data") or {}
+    reference: str = data.get("reference", "")
+    metadata: dict = data.get("metadata") or {}
     raw_event: str = payload.get("event", "unknown")
 
-    # ── Graceful fallback: no metadata → acknowledge & ignore ─────────────────
-    if not metadata:
-        logger.warning(
-            "[WEBHOOK] Event '%s' carries no metadata — acknowledged without action.",
-            raw_event,
-        )
-        return {"status": "success", "detail": "event ignored – no metadata"}
+    # Determine transaction type directly from the reference string
+    transaction_type = ""
+    if "gp_consult" in reference:
+        transaction_type = "gp_consult"
+    elif "specialist" in reference:
+        transaction_type = "specialist_consult"
+    elif "sub" in reference:
+        transaction_type = "subscription"
 
-    transaction_type: str = metadata.get("transactionType", "")
     logger.info(
-        "[WEBHOOK] Received event='%s' | transactionType='%s'",
+        "[WEBHOOK] Received event='%s' | reference='%s' | transactionType='%s'",
         raw_event,
+        reference,
         transaction_type,
     )
 

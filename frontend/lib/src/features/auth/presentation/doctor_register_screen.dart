@@ -218,7 +218,7 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
-                value: _selectedSpecialty,
+                initialValue: _selectedSpecialty,
                 hint: const Text("Select Specialty"),
                 items: _specialties
                     .map((s) => DropdownMenuItem(value: s, child: Text(s)))

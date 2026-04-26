@@ -60,8 +60,9 @@ class ScheduleScreen extends ConsumerWidget {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (err, stack) => Center(child: Text('Error: $err')),
         data: (appointments) {
-          if (appointments.isEmpty)
+          if (appointments.isEmpty) {
             return const Center(child: Text("No appointments yet"));
+          }
           return ListView.separated(
             padding: const EdgeInsets.all(16),
             itemCount: appointments.length,
@@ -205,7 +206,7 @@ class _AppointmentCard extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(time,
-                          style: TextStyle(fontSize: 12, color: Colors.grey)),
+                          style: const TextStyle(fontSize: 12, color: Colors.grey)),
                       const SizedBox(height: 4),
                       Text(appointment.doctorName,
                           style: theme.textTheme.titleMedium

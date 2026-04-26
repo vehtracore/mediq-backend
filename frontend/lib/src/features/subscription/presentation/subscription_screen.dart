@@ -11,7 +11,7 @@ class SubscriptionScreen extends ConsumerStatefulWidget {
 }
 
 class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
-  bool _isLoading = false;
+  final bool _isLoading = false;
 
   void _handleSubscribe({required String planTitle, required double parsedPrice}) {
     context.push('/payment', extra: {
@@ -180,8 +180,8 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
             width: double.infinity,
             height: 50,
             child: isCurrent
-                ? OutlinedButton(
-                    onPressed: null, child: const Text("Current Plan"))
+                ? const OutlinedButton(
+                    onPressed: null, child: Text("Current Plan"))
                 : ElevatedButton(
                     onPressed: () {
                       // Parse the numeric value from price string e.g. "₦2,500/mo" → 2500.0

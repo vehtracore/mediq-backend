@@ -5,7 +5,6 @@ import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/lab/data/lab_result_model.dart';
 import 'package:mediq_app/src/features/chat/data/pdf_service.dart';
 import 'package:open_file/open_file.dart';
-import 'package:printing/printing.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 

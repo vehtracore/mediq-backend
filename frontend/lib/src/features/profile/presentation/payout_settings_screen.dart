@@ -67,10 +67,12 @@ class _PayoutSettingsScreenState extends ConsumerState<PayoutSettingsScreen> {
         ..sort((a, b) => a.name.compareTo(b.name));
       if (mounted) setState(() { _banks = banks; _banksLoading = false; });
     } on DioException catch (e) {
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _banksError = e.response?.data?['message'] as String? ?? 'Could not load banks.';
         _banksLoading = false;
       });
+      }
     } catch (_) {
       if (mounted) setState(() { _banksError = 'Unexpected error loading banks.'; _banksLoading = false; });
     }
@@ -354,10 +356,10 @@ class _LinkedAccountView extends StatelessWidget {
               borderRadius: BorderRadius.circular(16),
               boxShadow: [BoxShadow(color: Colors.green.withOpacity(0.25), blurRadius: 16, offset: const Offset(0, 6))],
             ),
-            child: Row(children: [
-              const Icon(Icons.verified_rounded, color: Colors.white, size: 36),
-              const SizedBox(width: 14),
-              const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child: const Row(children: [
+              Icon(Icons.verified_rounded, color: Colors.white, size: 36),
+              SizedBox(width: 14),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('Account Linked', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                 SizedBox(height: 4),
                 Text('Your payouts are set up and ready.', style: TextStyle(color: Colors.white70, fontSize: 13)),

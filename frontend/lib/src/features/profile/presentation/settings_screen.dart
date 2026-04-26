@@ -45,9 +45,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             settingsEmailUpdates: key == 'email' ? value : null,
           );
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text("Failed to save")));
+      }
     }
   }
 
@@ -168,7 +169,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         title: Text(title, style: theme.textTheme.bodyLarge),
         value: value,
         onChanged: onChanged,
-        activeColor: const Color(0xFF4A90E2),
+        activeThumbColor: const Color(0xFF4A90E2),
       ),
     );
   }

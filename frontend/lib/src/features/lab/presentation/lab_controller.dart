@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import '../data/lab_repository.dart';
 import '../data/lab_result_model.dart';

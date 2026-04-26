@@ -59,9 +59,10 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
       await Future.delayed(const Duration(milliseconds: 50));
       if (mounted) context.push('/payment', extra: paymentData);
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
+      }
     } finally {
       if (mounted) setState(() => _isBooking = false);
     }
@@ -86,8 +87,9 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
         error: (err, stack) => Center(child: Text("Error: $err")),
         data: (allSlots) {
           final availableSlots = allSlots.where((s) => !s.isBooked).toList();
-          if (availableSlots.isEmpty)
+          if (availableSlots.isEmpty) {
             return const Center(child: Text("No available slots found."));
+          }
 
           final availableDates = availableSlots
               .map((s) => DateTime(

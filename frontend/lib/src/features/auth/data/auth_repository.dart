@@ -28,17 +28,17 @@ class AuthRepository {
       final token = response.data['access_token'];
       final refreshToken = response.data['refresh_token'];
       if (token != null) {
-        final storage = FlutterSecureStorage();
+        const storage = FlutterSecureStorage();
         await storage.write(
           key: 'auth_token',
           value: token,
-          aOptions: AndroidOptions(encryptedSharedPreferences: true),
+          aOptions: const AndroidOptions(encryptedSharedPreferences: true),
         );
         if (refreshToken != null) {
           await storage.write(
             key: 'refresh_token',
             value: refreshToken,
-            aOptions: AndroidOptions(encryptedSharedPreferences: true),
+            aOptions: const AndroidOptions(encryptedSharedPreferences: true),
           );
         }
       }
@@ -69,9 +69,9 @@ class AuthRepository {
   }
 
   Future<void> logout() async {
-    final storage = FlutterSecureStorage();
-    await storage.delete(key: 'auth_token', aOptions: AndroidOptions(encryptedSharedPreferences: true));
-    await storage.delete(key: 'refresh_token', aOptions: AndroidOptions(encryptedSharedPreferences: true));
+    const storage = FlutterSecureStorage();
+    await storage.delete(key: 'auth_token', aOptions: const AndroidOptions(encryptedSharedPreferences: true));
+    await storage.delete(key: 'refresh_token', aOptions: const AndroidOptions(encryptedSharedPreferences: true));
   }
 
   // --- USER DATA ---

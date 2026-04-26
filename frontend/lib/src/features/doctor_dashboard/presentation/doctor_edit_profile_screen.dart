@@ -83,9 +83,10 @@ class _DoctorEditProfileScreenState
         context.pop();
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text("$e"), backgroundColor: Colors.red));
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }

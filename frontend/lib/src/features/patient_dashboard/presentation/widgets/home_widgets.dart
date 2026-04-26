@@ -311,17 +311,19 @@ class QuickActionGrid extends ConsumerWidget {
                       final appt = await ref
                           .read(appointmentRepositoryProvider)
                           .bookGeneralConsultation("I need a doctor now.");
-                      if (context.mounted)
+                      if (context.mounted) {
                         context.push('/payment', extra: {
                           'transactionType': 'gp_consult',
                           'baseAmount': priceVal,
                           'title': 'General Consultation',
                         });
+                      }
                     } catch (e) {
-                      if (context.mounted)
+                      if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                             content: Text("Error: $e"),
                             backgroundColor: Colors.red));
+                      }
                     }
                   }),
               const Divider(),

@@ -35,17 +35,15 @@ final dioProvider = Provider<Dio>((ref) {
               key: 'auth_token', aOptions: getAndroidOptions());
 
           // Fallback: Check 'token' just in case of legacy saving
-          if (token == null) {
-            token =
-                await storage.read(key: 'token', aOptions: getAndroidOptions());
-          }
+          token ??= await storage.read(key: 'token', aOptions: getAndroidOptions());
 
           // 2. Attach Token
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
           } else {
-            if (kDebugMode)
+            if (kDebugMode) {
               print('⚠️ [AUTH] -> No token found in secure storage.');
+            }
           }
 
           if (kDebugMode) {
