@@ -3,10 +3,13 @@ Payments Router
 ================
 Owns all Paystack-facing HTTP surface area for the MDQ+ platform.
 
-Currently exposes:
-  POST /api/v1/payments/webhook  — Paystack webhook receiver with HMAC SHA512
-                                   signature verification and metadata-driven
-                                   event routing.
+Exposes:
+  POST /api/v1/payments/webhook        — HMAC-verified Paystack webhook with
+                                         reference-based routing and a Dead
+                                         Letter Queue (DLQ) fallback.
+  GET  /api/v1/payments/verify/{ref}   — Manual transaction verification for
+                                         when the app loses connection before
+                                         the webhook fires.
 
 Security model
 --------------
@@ -14,6 +17,14 @@ Paystack signs every outbound webhook payload with the account's secret key
 using HMAC-SHA512. We recompute that digest from the raw request body (before
 any JSON decoding) and compare with a timing-safe equality check. Any request
 that fails this check is rejected with HTTP 400 before it touches the database.
+
+Reference format
+----------------
+New format embedded by the Flutter client:
+    MDQ-{transaction_type}-{appointment_id}-{user_id}-{epoch_ms}
+    e.g.  MDQ-gp_consult-123-456-1777195558454
+
+Old underscore-delimited references are handled gracefully (no IDs extracted).
 """
 
 import hashlib
@@ -23,10 +34,12 @@ import logging
 import os
 from datetime import datetime, timedelta
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.failed_webhook import FailedWebhook
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -39,7 +52,162 @@ if not PAYSTACK_SECRET_KEY:
         "The /webhook endpoint will reject every incoming request."
     )
 
+PAYSTACK_VERIFY_URL = "https://api.paystack.co/transaction/verify"
+
 router = APIRouter()
+
+
+# ─── Shared helpers ───────────────────────────────────────────────────────────
+
+def _parse_reference(reference: str) -> tuple[str, str | None, str | None]:
+    """
+    Parse an MDQ reference string and return:
+        (transaction_type, appointment_id_str, user_id_str)
+
+    New dash-delimited format:
+        MDQ-{type}-{appointment_id}-{user_id}-{timestamp}
+    Old underscore format (no embedded IDs):
+        MDQ_{type}_{timestamp}
+
+    Returns empty strings / None for fields that cannot be extracted.
+    """
+    ref_parts = reference.split("-")
+    # Expect at least 5 segments: MDQ | type | appt_id | user_id | timestamp
+    ref_appointment_id: str | None = ref_parts[2] if len(ref_parts) >= 5 else None
+    ref_user_id: str | None = ref_parts[3] if len(ref_parts) >= 5 else None
+
+    transaction_type = ""
+    if "gp_consult" in reference:
+        transaction_type = "gp_consult"
+    elif "specialist" in reference:
+        transaction_type = "specialist_consult"
+    elif "sub" in reference:
+        transaction_type = "subscription"
+
+    return transaction_type, ref_appointment_id, ref_user_id
+
+
+def _apply_db_update(
+    transaction_type: str,
+    ref_appointment_id: str | None,
+    ref_user_id: str | None,
+    reference: str,
+    db: Session,
+) -> dict:
+    """
+    Execute the database update for a confirmed Paystack transaction.
+
+    Returns a dict describing what was done (used for both the webhook
+    response and the verify endpoint response).
+
+    Raises ValueError with a descriptive message if the required IDs are
+    missing or the target record is not found — callers must handle this.
+    """
+    # ── Flow A: Subscription upgrade ──────────────────────────────────────────
+    if transaction_type == "subscription":
+        if not ref_user_id:
+            raise ValueError(
+                f"subscription: reference missing user_id segment (ref='{reference}')"
+            )
+
+        user: User | None = db.query(User).filter(User.id == int(ref_user_id)).first()
+        if not user:
+            raise ValueError(
+                f"subscription: user id={ref_user_id} not found"
+            )
+
+        user.plan = "premium"
+        user.subscription_expiry = datetime.utcnow() + timedelta(days=30)
+        db.commit()
+        db.refresh(user)
+
+        logger.info(
+            "[PAYMENTS] ✅ Subscription upgraded — user_id=%s (%s) | expiry=%s",
+            user.id,
+            user.email,
+            user.subscription_expiry,
+        )
+        return {
+            "action": "subscription_upgraded",
+            "user_id": user.id,
+            "expiry": str(user.subscription_expiry),
+        }
+
+    # ── Flow B: Appointment payment confirmation ───────────────────────────────
+    elif transaction_type in ("gp_consult", "specialist_consult"):
+        from app.models.appointment import Appointment  # local import → no circular dep
+
+        if not ref_appointment_id:
+            raise ValueError(
+                f"{transaction_type}: reference missing appointment_id segment "
+                f"(ref='{reference}')"
+            )
+
+        appt: Appointment | None = (
+            db.query(Appointment)
+            .filter(Appointment.id == int(ref_appointment_id))
+            .first()
+        )
+        if not appt:
+            raise ValueError(
+                f"{transaction_type}: appointment id={ref_appointment_id} not found"
+            )
+
+        appt.payment_status = "paid"
+        appt.status = "confirmed"
+        db.commit()
+        db.refresh(appt)
+
+        logger.info(
+            "[PAYMENTS] ✅ Appointment confirmed — appt_id=%s | type=%s | patient_id=%s",
+            appt.id,
+            transaction_type,
+            appt.patient_id,
+        )
+        return {
+            "action": "appointment_confirmed",
+            "appointment_id": appt.id,
+            "transaction_type": transaction_type,
+        }
+
+    # ── Unrecognised type ──────────────────────────────────────────────────────
+    else:
+        logger.warning(
+            "[PAYMENTS] Unrecognised transactionType='%s' — no action taken.",
+            transaction_type,
+        )
+        return {"action": "ignored", "reason": f"unrecognised type '{transaction_type}'"}
+
+
+def _write_dlq(
+    reference: str,
+    event_type: str,
+    payload: dict,
+    error_message: str,
+    db: Session,
+) -> None:
+    """Persist a failed event to the failed_webhooks Dead Letter Queue."""
+    try:
+        dlq_entry = FailedWebhook(
+            reference=reference,
+            event_type=event_type,
+            payload=json.dumps(payload),
+            error_message=error_message,
+        )
+        db.add(dlq_entry)
+        db.commit()
+        logger.error(
+            "[PAYMENTS] ⚠️  Event routed to DLQ — reference='%s' | error='%s'",
+            reference,
+            error_message,
+        )
+    except Exception as dlq_exc:
+        # DLQ write itself failed — last-resort log, don't raise
+        logger.critical(
+            "[PAYMENTS] 🚨 DLQ write FAILED — reference='%s' | dlq_error='%s'",
+            reference,
+            dlq_exc,
+        )
 
 
 # ─── Webhook ──────────────────────────────────────────────────────────────────
@@ -49,21 +217,15 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     """
     POST /api/v1/payments/webhook
 
-    Receives Paystack event notifications and routes them by
-    ``metadata.transactionType``:
+    1. Verifies the HMAC-SHA512 signature from Paystack.
+    2. Parses the reference string to extract transaction type + DB IDs.
+    3. Updates the database (subscription or appointment).
+    4. On any DB failure, writes to the failed_webhooks DLQ instead of
+       raising — so Paystack receives 200 and stops retrying a
+       structurally unprocessable event.
 
-    =========== ============================================================
-    Type        Action
-    =========== ============================================================
-    subscription  Upgrade ``User.plan`` → "premium" for 30 days.
-    gp_consult    Mark ``Appointment.payment_status`` = "paid" and
-                  ``status`` = "confirmed".
-    specialist_consult  Same as gp_consult.
-    *(other)*   Log a warning, return 200 so Paystack stops retrying.
-    =========== ============================================================
-
-    Always returns ``{"status": "success"}`` on 2xx so Paystack never
-    puts the endpoint into a retry loop for events we deliberately ignore.
+    Always returns HTTP 200 so Paystack never enters a retry loop for
+    events we deliberately ignore or route to the DLQ.
     """
 
     # ── 1. Read raw body BEFORE any parsing ───────────────────────────────────
@@ -97,27 +259,8 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     reference: str = data.get("reference", "")
     raw_event: str = payload.get("event", "unknown")
 
-    # ── Parse IDs embedded in the reference string ────────────────────────────
-    # New format: MDQ-{type}-{appointment_id}-{user_id}-{timestamp}
-    # e.g.  MDQ-gp_consult-123-456-1777195558454
-    # Old format (underscore-delimited, no IDs) is handled gracefully below.
-    ref_parts = reference.split("-")
-    # ref_parts[0] = 'MDQ'
-    # ref_parts[1] = type segment  (may contain underscores, e.g. 'gp_consult')
-    # ref_parts[2] = appointment_id
-    # ref_parts[3] = user_id
-    # ref_parts[4] = timestamp
-    ref_appointment_id: str | None = ref_parts[2] if len(ref_parts) >= 5 else None
-    ref_user_id: str | None = ref_parts[3] if len(ref_parts) >= 5 else None
-
-    # Determine transaction type from the reference string
-    transaction_type = ""
-    if "gp_consult" in reference:
-        transaction_type = "gp_consult"
-    elif "specialist" in reference:
-        transaction_type = "specialist_consult"
-    elif "sub" in reference:
-        transaction_type = "subscription"
+    # ── 6. Parse reference string ─────────────────────────────────────────────
+    transaction_type, ref_appointment_id, ref_user_id = _parse_reference(reference)
 
     logger.info(
         "[WEBHOOK] Received event='%s' | reference='%s' | transactionType='%s' "
@@ -129,71 +272,130 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
         ref_user_id,
     )
 
-    # ── Flow A: Subscription upgrade ──────────────────────────────────────────
-    if transaction_type == "subscription":
-        user_id = ref_user_id
-        if not user_id:
-            logger.error("[WEBHOOK] subscription: reference missing user_id segment (ref='%s').", reference)
-            return {"status": "success", "detail": "missing user_id in reference"}
+    # ── 7. Database update — wrapped in DLQ fallback ──────────────────────────
+    try:
+        result = _apply_db_update(
+            transaction_type=transaction_type,
+            ref_appointment_id=ref_appointment_id,
+            ref_user_id=ref_user_id,
+            reference=reference,
+            db=db,
+        )
+    except Exception as exc:
+        db.rollback()  # ensure the session is clean before the DLQ write
+        _write_dlq(
+            reference=reference,
+            event_type=raw_event,
+            payload=payload,
+            error_message=str(exc),
+            db=db,
+        )
+        return {
+            "status": "success",
+            "detail": "event routed to DLQ — see failed_webhooks table",
+        }
 
-        user: User | None = db.query(User).filter(User.id == int(user_id)).first()
-        if not user:
-            logger.error("[WEBHOOK] subscription: user id=%s not found.", user_id)
-            return {"status": "success", "detail": "user not found"}
+    return {"status": "success", **result}
 
-        user.plan = "premium"
-        user.subscription_expiry = datetime.utcnow() + timedelta(days=30)
-        db.commit()
-        db.refresh(user)
 
-        logger.info(
-            "[WEBHOOK] ✅ Subscription upgraded — user_id=%s (%s) | expiry=%s",
-            user.id,
-            user.email,
-            user.subscription_expiry,
+# ─── Manual Verification Endpoint ────────────────────────────────────────────
+
+@router.get("/verify/{reference}")
+async def verify_transaction(reference: str, db: Session = Depends(get_db)):
+    """
+    GET /api/v1/payments/verify/{reference}
+
+    Called by the Flutter app when it suspects a successful payment was
+    not reflected in the UI (e.g. the app was backgrounded before the
+    webhook fired).
+
+    Flow:
+      1. Queries Paystack's /transaction/verify/{reference} endpoint.
+      2. If Paystack reports status == "success", runs the exact same
+         reference-parsing + DB-update logic as the webhook.
+      3. Returns the final status so the app can refresh its UI.
+    """
+
+    if not PAYSTACK_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Payment verification is unavailable — secret key not configured.",
         )
 
-    # ── Flow B: Appointment payment confirmation ───────────────────────────────
-    elif transaction_type in ("gp_consult", "specialist_consult"):
-        from app.models.appointment import Appointment  # local import → no circular dep
-
-        appointment_id = ref_appointment_id
-        if not appointment_id:
-            logger.error(
-                "[WEBHOOK] %s: reference missing appointment_id segment (ref='%s').",
-                transaction_type,
-                reference,
+    # ── 1. Query Paystack ─────────────────────────────────────────────────────
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{PAYSTACK_VERIFY_URL}/{reference}",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"},
             )
-            return {"status": "success", "detail": "missing appointment_id in reference"}
-
-        appt: Appointment | None = (
-            db.query(Appointment).filter(Appointment.id == int(appointment_id)).first()
-        )
-        if not appt:
-            logger.error(
-                "[WEBHOOK] %s: appointment id=%s not found.",
-                transaction_type,
-                appointment_id,
-            )
-            return {"status": "success", "detail": "appointment not found"}
-
-        appt.payment_status = "paid"
-        appt.status = "confirmed"
-        db.commit()
-        db.refresh(appt)
-
-        logger.info(
-            "[WEBHOOK] ✅ Appointment confirmed — appt_id=%s | type=%s | patient_id=%s",
-            appt.id,
-            transaction_type,
-            appt.patient_id,
+        paystack_data: dict = resp.json()
+    except httpx.RequestError as exc:
+        logger.error("[VERIFY] HTTP error reaching Paystack: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not reach Paystack verification endpoint.",
         )
 
-    # ── Graceful fallback: unrecognised transactionType ───────────────────────
-    else:
+    # ── 2. Inspect Paystack's verdict ─────────────────────────────────────────
+    if not paystack_data.get("status"):
         logger.warning(
-            "[WEBHOOK] Unrecognised transactionType='%s' — no action taken.",
-            transaction_type,
+            "[VERIFY] Paystack returned an error for reference='%s': %s",
+            reference,
+            paystack_data.get("message"),
+        )
+        raise HTTPException(
+            status_code=402,
+            detail=paystack_data.get("message", "Transaction not found on Paystack."),
         )
 
-    return {"status": "success"}
+    tx_data: dict = paystack_data.get("data") or {}
+    paystack_status: str = tx_data.get("status", "")
+
+    if paystack_status != "success":
+        logger.info(
+            "[VERIFY] Transaction reference='%s' is NOT successful (status='%s').",
+            reference,
+            paystack_status,
+        )
+        return {
+            "verified": False,
+            "paystack_status": paystack_status,
+            "detail": "Transaction is not yet successful.",
+        }
+
+    # ── 3. Parse reference and update database ────────────────────────────────
+    transaction_type, ref_appointment_id, ref_user_id = _parse_reference(reference)
+
+    logger.info(
+        "[VERIFY] ✅ Paystack confirmed success — reference='%s' | type='%s' "
+        "| appointment_id='%s' | user_id='%s'",
+        reference,
+        transaction_type,
+        ref_appointment_id,
+        ref_user_id,
+    )
+
+    try:
+        result = _apply_db_update(
+            transaction_type=transaction_type,
+            ref_appointment_id=ref_appointment_id,
+            ref_user_id=ref_user_id,
+            reference=reference,
+            db=db,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "[VERIFY] DB update failed for reference='%s': %s", reference, exc
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Payment verified by Paystack, but DB update failed: {exc}",
+        )
+
+    return {
+        "verified": True,
+        "paystack_status": paystack_status,
+        **result,
+    }

@@ -71,6 +71,21 @@ def _apply_schema_patches():
         ALTER TABLE doctors
         ADD COLUMN IF NOT EXISTS paystack_subaccount_code VARCHAR NULL;
         """,
+        # Dead Letter Queue — failed webhook events (added 2026-05-01)
+        """
+        CREATE TABLE IF NOT EXISTS failed_webhooks (
+            id            SERIAL PRIMARY KEY,
+            reference     TEXT        NOT NULL,
+            event_type    TEXT        NOT NULL,
+            payload       TEXT        NOT NULL,
+            error_message TEXT        NOT NULL,
+            created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_failed_webhooks_reference
+        ON failed_webhooks (reference);
+        """,
     ]
     with engine.connect() as conn:
         from sqlalchemy import text
