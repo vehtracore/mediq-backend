@@ -35,12 +35,13 @@ import os
 from datetime import datetime, timedelta
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.failed_webhook import FailedWebhook
 from app.models.user import User
+from app.services.email_service import send_transactional_email
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,7 @@ def _apply_db_update(
     ref_user_id: str | None,
     reference: str,
     db: Session,
+    background_tasks: BackgroundTasks | None = None,
 ) -> dict:
     """
     Execute the database update for a confirmed Paystack transaction.
@@ -127,6 +129,25 @@ def _apply_db_update(
             user.email,
             user.subscription_expiry,
         )
+
+        # ── Queue subscription confirmation email ──────────────────────────
+        if background_tasks and user.email:
+            body = (
+                f"Hi {user.first_name or 'there'},\n\n"
+                "Your MDQ+ Premium subscription is now active! 🎉\n\n"
+                f"Your plan has been upgraded and will remain active until "
+                f"{user.subscription_expiry.strftime('%d %B %Y')}.\n\n"
+                "Enjoy unlimited AI chats, priority doctor access, and all "
+                "premium features.\n\n"
+                "— The MDQ+ Team"
+            )
+            background_tasks.add_task(
+                send_transactional_email,
+                to_email=user.email,
+                subject="MDQ+ Premium Activated 🎉",
+                body=body,
+            )
+
         return {
             "action": "subscription_upgraded",
             "user_id": user.id,
@@ -164,6 +185,39 @@ def _apply_db_update(
             transaction_type,
             appt.patient_id,
         )
+
+        # ── Queue appointment confirmation email ───────────────────────────
+        # Look up the patient's email from the User table using patient_id.
+        if background_tasks and appt.patient_id:
+            patient: User | None = (
+                db.query(User).filter(User.id == appt.patient_id).first()
+            )
+            if patient and patient.email:
+                type_label = (
+                    "GP Consultation"
+                    if transaction_type == "gp_consult"
+                    else "Specialist Consultation"
+                )
+                body = (
+                    f"Hi {patient.first_name or 'there'},\n\n"
+                    f"Your {type_label} payment has been confirmed! ✅\n\n"
+                    "Your doctor will be in touch shortly. You can join "
+                    "your appointment via the MDQ+ app at the scheduled "
+                    "time.\n\n"
+                    "Appointment reference: "
+                    f"{reference}\n"
+                    f"Appointment ID: #{appt.id}\n\n"
+                    "If you have any questions, reply to this email or "
+                    "contact support in the app.\n\n"
+                    "— The MDQ+ Team"
+                )
+                background_tasks.add_task(
+                    send_transactional_email,
+                    to_email=patient.email,
+                    subject="MDQ+ Appointment Confirmed ✅",
+                    body=body,
+                )
+
         return {
             "action": "appointment_confirmed",
             "appointment_id": appt.id,
@@ -213,7 +267,11 @@ def _write_dlq(
 # ─── Webhook ──────────────────────────────────────────────────────────────────
 
 @router.post("/webhook", status_code=200)
-async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
+async def paystack_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     """
     POST /api/v1/payments/webhook
 
@@ -280,6 +338,7 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
             ref_user_id=ref_user_id,
             reference=reference,
             db=db,
+            background_tasks=background_tasks,
         )
     except Exception as exc:
         db.rollback()  # ensure the session is clean before the DLQ write
@@ -301,7 +360,11 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
 # ─── Manual Verification Endpoint ────────────────────────────────────────────
 
 @router.get("/verify/{reference}")
-async def verify_transaction(reference: str, db: Session = Depends(get_db)):
+async def verify_transaction(
+    reference: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     """
     GET /api/v1/payments/verify/{reference}
 
@@ -383,6 +446,7 @@ async def verify_transaction(reference: str, db: Session = Depends(get_db)):
             ref_user_id=ref_user_id,
             reference=reference,
             db=db,
+            background_tasks=background_tasks,
         )
     except Exception as exc:
         db.rollback()
