@@ -55,6 +55,8 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
         'transactionType': 'specialist_consult',
         'baseAmount': widget.doctor.hourlyRate,
         'title': 'Consultation: ${widget.doctor.fullName}',
+        'appointmentId': appointment.id,
+        'userId': appointment.patientId,
       };
       await Future.delayed(const Duration(milliseconds: 50));
       if (mounted) context.push('/payment', extra: paymentData);

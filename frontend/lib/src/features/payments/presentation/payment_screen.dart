@@ -9,11 +9,18 @@ class PaymentScreen extends ConsumerStatefulWidget {
   final double baseAmount;
   final String title;
 
+  /// Optional IDs embedded in the reference so the backend webhook can
+  /// identify the record even when flutter_paystack strips the metadata.
+  final int? appointmentId;
+  final int? userId;
+
   const PaymentScreen({
     super.key,
     required this.transactionType,
     required this.baseAmount,
     required this.title,
+    this.appointmentId,
+    this.userId,
   });
 
   @override
@@ -38,7 +45,12 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
     final email = user?.email ?? 'customer@mediqplus.app';
 
     // Build a unique reference so we can reconcile on the backend.
-    final reference = 'MDQ_${widget.transactionType}_${DateTime.now().millisecondsSinceEpoch}';
+    // Format: MDQ-{type}-{appointmentId}-{userId}-{timestamp}
+    // The IDs are embedded here because flutter_paystack strips custom metadata.
+    final appointmentId = widget.appointmentId ?? 0;
+    final userId = widget.userId ?? 0;
+    final reference =
+        'MDQ-${widget.transactionType}-$appointmentId-$userId-${DateTime.now().millisecondsSinceEpoch}';
 
     // Show a non-blocking "Connecting…" snackbar while the sheet opens.
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

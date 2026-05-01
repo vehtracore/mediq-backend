@@ -168,6 +168,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
             transactionType: data['transactionType'] as String,
             baseAmount: (data['baseAmount'] as num).toDouble(),
             title: data['title'] as String,
+            appointmentId: data['appointmentId'] as int?,
+            userId: data['userId'] as int?,
           );
         },
       ),

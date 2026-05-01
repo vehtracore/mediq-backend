@@ -316,6 +316,8 @@ class QuickActionGrid extends ConsumerWidget {
                           'transactionType': 'gp_consult',
                           'baseAmount': priceVal,
                           'title': 'General Consultation',
+                          'appointmentId': appt.id,
+                          'userId': user?.id,
                         });
                       }
                     } catch (e) {

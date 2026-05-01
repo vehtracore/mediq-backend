@@ -14,10 +14,12 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
   final bool _isLoading = false;
 
   void _handleSubscribe({required String planTitle, required double parsedPrice}) {
+    final user = ref.read(userProvider).value;
     context.push('/payment', extra: {
       'transactionType': 'subscription',
       'baseAmount': parsedPrice,
       'title': planTitle,
+      'userId': user?.id,
     });
   }
 

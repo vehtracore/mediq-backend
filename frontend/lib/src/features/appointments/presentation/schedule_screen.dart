@@ -286,8 +286,11 @@ class _AppointmentCard extends ConsumerWidget {
                   const SizedBox(width: 8),
                   ElevatedButton(
                       onPressed: () => context.push('/payment', extra: {
-                            'appointment': appointment,
-                            'amount': appointment.amount
+                            'transactionType': 'specialist_consult', // Works for both GP and Specialist backend logic
+                            'baseAmount': appointment.amount,
+                            'title': 'Consultation Payment',
+                            'appointmentId': appointment.id,
+                            'userId': appointment.patientId,
                           }),
                       style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.green,

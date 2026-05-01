@@ -95,10 +95,22 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
 
     data: dict = payload.get("data") or {}
     reference: str = data.get("reference", "")
-    metadata: dict = data.get("metadata") or {}
     raw_event: str = payload.get("event", "unknown")
 
-    # Determine transaction type directly from the reference string
+    # ── Parse IDs embedded in the reference string ────────────────────────────
+    # New format: MDQ-{type}-{appointment_id}-{user_id}-{timestamp}
+    # e.g.  MDQ-gp_consult-123-456-1777195558454
+    # Old format (underscore-delimited, no IDs) is handled gracefully below.
+    ref_parts = reference.split("-")
+    # ref_parts[0] = 'MDQ'
+    # ref_parts[1] = type segment  (may contain underscores, e.g. 'gp_consult')
+    # ref_parts[2] = appointment_id
+    # ref_parts[3] = user_id
+    # ref_parts[4] = timestamp
+    ref_appointment_id: str | None = ref_parts[2] if len(ref_parts) >= 5 else None
+    ref_user_id: str | None = ref_parts[3] if len(ref_parts) >= 5 else None
+
+    # Determine transaction type from the reference string
     transaction_type = ""
     if "gp_consult" in reference:
         transaction_type = "gp_consult"
@@ -108,18 +120,21 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
         transaction_type = "subscription"
 
     logger.info(
-        "[WEBHOOK] Received event='%s' | reference='%s' | transactionType='%s'",
+        "[WEBHOOK] Received event='%s' | reference='%s' | transactionType='%s' "
+        "| appointment_id='%s' | user_id='%s'",
         raw_event,
         reference,
         transaction_type,
+        ref_appointment_id,
+        ref_user_id,
     )
 
     # ── Flow A: Subscription upgrade ──────────────────────────────────────────
     if transaction_type == "subscription":
-        user_id = metadata.get("user_id")
+        user_id = ref_user_id
         if not user_id:
-            logger.error("[WEBHOOK] subscription: metadata missing 'user_id'.")
-            return {"status": "success", "detail": "missing user_id in metadata"}
+            logger.error("[WEBHOOK] subscription: reference missing user_id segment (ref='%s').", reference)
+            return {"status": "success", "detail": "missing user_id in reference"}
 
         user: User | None = db.query(User).filter(User.id == int(user_id)).first()
         if not user:
@@ -142,12 +157,14 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     elif transaction_type in ("gp_consult", "specialist_consult"):
         from app.models.appointment import Appointment  # local import → no circular dep
 
-        appointment_id = metadata.get("appointment_id")
+        appointment_id = ref_appointment_id
         if not appointment_id:
             logger.error(
-                "[WEBHOOK] %s: metadata missing 'appointment_id'.", transaction_type
+                "[WEBHOOK] %s: reference missing appointment_id segment (ref='%s').",
+                transaction_type,
+                reference,
             )
-            return {"status": "success", "detail": "missing appointment_id in metadata"}
+            return {"status": "success", "detail": "missing appointment_id in reference"}
 
         appt: Appointment | None = (
             db.query(Appointment).filter(Appointment.id == int(appointment_id)).first()
