@@ -132,20 +132,29 @@ def _apply_db_update(
 
         # ── Queue subscription confirmation email ──────────────────────────
         if background_tasks and user.email:
-            body = (
-                f"Hi {user.first_name or 'there'},\n\n"
-                "Your MDQ+ Premium subscription is now active! 🎉\n\n"
-                f"Your plan has been upgraded and will remain active until "
-                f"{user.subscription_expiry.strftime('%d %B %Y')}.\n\n"
-                "Enjoy unlimited AI chats, priority doctor access, and all "
-                "premium features.\n\n"
-                "— The MDQ+ Team"
-            )
+            expiry_str = user.subscription_expiry.strftime('%d %B %Y')
+            html_body = f"""
+            <div style="font-family:sans-serif;max-width:520px;margin:auto;">
+              <h2 style="color:#4A90E2;">MDQ+ Premium Activated 🎉</h2>
+              <p>Hi {user.first_name or 'there'},</p>
+              <p>Your <strong>MDQ+ Premium</strong> subscription is now active!</p>
+              <p>Your plan has been upgraded and will remain active until
+              <strong>{expiry_str}</strong>.</p>
+              <p>You now have access to:</p>
+              <ul>
+                <li>Unlimited AI health chats</li>
+                <li>Priority doctor access</li>
+                <li>Urinalysis AI &amp; advanced analytics</li>
+                <li>Consultation summaries</li>
+              </ul>
+              <p style="color:#888;font-size:13px;">— The MDQ+ Team</p>
+            </div>
+            """
             background_tasks.add_task(
                 send_transactional_email,
                 to_email=user.email,
                 subject="MDQ+ Premium Activated 🎉",
-                body=body,
+                html_body=html_body,
             )
 
         return {
@@ -198,24 +207,39 @@ def _apply_db_update(
                     if transaction_type == "gp_consult"
                     else "Specialist Consultation"
                 )
-                body = (
-                    f"Hi {patient.first_name or 'there'},\n\n"
-                    f"Your {type_label} payment has been confirmed! ✅\n\n"
-                    "Your doctor will be in touch shortly. You can join "
-                    "your appointment via the MDQ+ app at the scheduled "
-                    "time.\n\n"
-                    "Appointment reference: "
-                    f"{reference}\n"
-                    f"Appointment ID: #{appt.id}\n\n"
-                    "If you have any questions, reply to this email or "
-                    "contact support in the app.\n\n"
-                    "— The MDQ+ Team"
-                )
+                html_body = f"""
+                <div style="font-family:sans-serif;max-width:520px;margin:auto;">
+                  <h2 style="color:#4A90E2;">Appointment Confirmed ✅</h2>
+                  <p>Hi {patient.first_name or 'there'},</p>
+                  <p>Your <strong>{type_label}</strong> payment has been
+                  confirmed and your appointment is now booked.</p>
+                  <table style="border-collapse:collapse;width:100%;margin:16px 0;">
+                    <tr style="background:#f5f5f5;">
+                      <td style="padding:8px 12px;font-weight:bold;">Appointment ID</td>
+                      <td style="padding:8px 12px;">#{appt.id}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:8px 12px;font-weight:bold;">Reference</td>
+                      <td style="padding:8px 12px;font-size:12px;color:#555;">{reference}</td>
+                    </tr>
+                    <tr style="background:#f5f5f5;">
+                      <td style="padding:8px 12px;font-weight:bold;">Type</td>
+                      <td style="padding:8px 12px;">{type_label}</td>
+                    </tr>
+                  </table>
+                  <p>Your doctor will be in touch shortly. Open the
+                  <strong>MDQ+ app</strong> to join your session at the
+                  scheduled time.</p>
+                  <p>Questions? Reply to this email or contact support in
+                  the app.</p>
+                  <p style="color:#888;font-size:13px;">— The MDQ+ Team</p>
+                </div>
+                """
                 background_tasks.add_task(
                     send_transactional_email,
                     to_email=patient.email,
                     subject="MDQ+ Appointment Confirmed ✅",
-                    body=body,
+                    html_body=html_body,
                 )
 
         return {

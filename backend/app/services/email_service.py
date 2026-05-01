@@ -1,88 +1,94 @@
 """
-Email Service
-=============
-Asynchronous transactional email sender for the MDQ+ platform.
+Email Service — Resend
+======================
+Asynchronous transactional email sender for the MDQ+ platform,
+powered by the Resend API (https://resend.com).
 
-Credentials are loaded from environment variables:
-    SMTP_HOST        — SMTP server hostname  (default: smtp.gmail.com)
-    SMTP_PORT        — SMTP server port       (default: 587, STARTTLS)
-    SMTP_USER        — Login username / sender address
-    SMTP_PASSWORD    — Login password / app-password
+Configuration (environment variable):
+    RESEND_API_KEY   — Resend API key (starts with "re_…")
+    EMAIL_FROM       — Sender address verified in your Resend dashboard
+                       (default: "MDQ+ Health <noreply@mdqplus.app>")
 
-If any credential is missing, the function logs a warning and returns
+If RESEND_API_KEY is absent, the function logs a warning and returns
 immediately so the calling code is never blocked or crashed.
 
-The synchronous smtplib call is offloaded to a thread pool via
-``asyncio.to_thread`` so the FastAPI event loop is never blocked.
+The synchronous resend.Emails.send() call is offloaded to a thread
+pool via asyncio.to_thread so the FastAPI event loop is never blocked.
 """
 
 import asyncio
 import logging
 import os
-import smtplib
-from email.message import EmailMessage
+
+import resend
 
 logger = logging.getLogger(__name__)
 
-# ── SMTP configuration ────────────────────────────────────────────────────────
-_SMTP_HOST: str = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-_SMTP_PORT: int = int(os.environ.get("SMTP_PORT", "587"))
-_SMTP_USER: str = os.environ.get("SMTP_USER", "")
-_SMTP_PASSWORD: str = os.environ.get("SMTP_PASSWORD", "")
+# ── Resend configuration ──────────────────────────────────────────────────────
+_RESEND_API_KEY: str = os.environ.get("RESEND_API_KEY", "")
+_EMAIL_FROM: str = os.environ.get("EMAIL_FROM", "MDQ+ Health <noreply@mdqplus.app>")
 
-# Display name shown in the From header
-_FROM_NAME: str = "MDQ+ Health"
+if _RESEND_API_KEY:
+    resend.api_key = _RESEND_API_KEY
+else:
+    logger.warning(
+        "[EMAIL] ⚠️  RESEND_API_KEY is not set — "
+        "all transactional emails will be silently skipped."
+    )
 
 
-def _smtp_send(to_email: str, subject: str, body: str) -> None:
+def _resend_send(to_email: str, subject: str, html_body: str) -> None:
     """
-    Synchronous SMTP send — runs inside a worker thread.
+    Synchronous Resend API call — runs inside a worker thread.
 
-    Uses STARTTLS on port 587 (industry-standard secure relay).
-    Raises on any SMTP / network error so the caller can log it.
+    Raises on any API / network error so the async caller can log it.
     """
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = f"{_FROM_NAME} <{_SMTP_USER}>"
-    msg["To"] = to_email
-    msg.set_content(body)
-
-    with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT, timeout=20) as server:
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(_SMTP_USER, _SMTP_PASSWORD)
-        server.send_message(msg)
+    params: resend.Emails.SendParams = {
+        "from": _EMAIL_FROM,
+        "to": [to_email],
+        "subject": subject,
+        "html": html_body,
+    }
+    resend.Emails.send(params)
 
 
-async def send_transactional_email(to_email: str, subject: str, body: str) -> None:
+async def send_transactional_email(
+    to_email: str,
+    subject: str,
+    html_body: str,
+) -> None:
     """
-    Queue an email on a worker thread so the event loop is never blocked.
+    Queue an email via Resend on a worker thread so the event loop is
+    never blocked.
 
     Safe to call from FastAPI BackgroundTasks — any exception is caught
     and logged; the error will never propagate to the HTTP response.
 
     Args:
-        to_email: Recipient address (e.g. "patient@example.com").
-        subject:  Email subject line.
-        body:     Plain-text email body.
+        to_email:  Recipient address (e.g. "patient@example.com").
+        subject:   Email subject line.
+        html_body: HTML content of the email body.
     """
-    if not _SMTP_USER or not _SMTP_PASSWORD:
+    if not _RESEND_API_KEY:
         logger.warning(
-            "[EMAIL] ⚠️  SMTP_USER / SMTP_PASSWORD not configured — "
-            "email to '%s' skipped.",
+            "[EMAIL] ⚠️  Skipping email — RESEND_API_KEY not configured "
+            "(to='%s' | subject='%s').",
             to_email,
+            subject,
         )
         return
 
     try:
-        # Offload the blocking smtplib call to a thread-pool worker.
-        await asyncio.to_thread(_smtp_send, to_email, subject, body)
-        logger.info("[EMAIL] ✅ Email sent — to='%s' | subject='%s'", to_email, subject)
+        await asyncio.to_thread(_resend_send, to_email, subject, html_body)
+        logger.info(
+            "[EMAIL] ✅ Email sent via Resend — to='%s' | subject='%s'",
+            to_email,
+            subject,
+        )
     except Exception as exc:
         # Never crash the server over a failed notification.
         logger.error(
-            "[EMAIL] ❌ Failed to send email — to='%s' | subject='%s' | error='%s'",
+            "[EMAIL] ❌ Resend delivery failed — to='%s' | subject='%s' | error='%s'",
             to_email,
             subject,
             exc,
