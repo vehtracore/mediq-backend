@@ -6,6 +6,7 @@ from typing import List
 from datetime import datetime
 from pydantic import BaseModel
 import logging
+import time
 from app.core.database import get_db
 from app.models.appointment import Appointment, DoctorSlot
 from app.models.doctor import Doctor
@@ -31,7 +32,8 @@ def map_appt(a, doc_name=None):
     return AppointmentResponse(
         id=a.id, doctor_name=d_name, status=a.status,
         payment_status=a.payment_status, start_time=s_time,
-        notes=a.notes, amount=a.amount, has_review=has_rev
+        notes=a.notes, amount=a.amount, has_review=has_rev,
+        paystack_reference=getattr(a, "paystack_reference", None),
     )
 
 # ... (Slots & Booking - Standard) ...
@@ -128,6 +130,17 @@ def book_appointment(
         .filter(Appointment.id == new_appt.id)
         .first()
     )
+
+    # ── Generate and persist the Paystack reference ────────────────────────
+    # Done after first commit so we have the real appointment.id to embed.
+    # Format: MDQ-{type}-{appointment_id}-{user_id}-{epoch_ms}
+    epoch_ms = int(time.time() * 1000)
+    new_appt.paystack_reference = (
+        f"MDQ-specialist_consult-{new_appt.id}-{current_user.id}-{epoch_ms}"
+    )
+    db.commit()
+    db.refresh(new_appt)
+
     return map_appt(new_appt)
 
 @router.post("/book-general", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
@@ -135,10 +148,24 @@ def book_general_consultation(req: GeneralBookRequest, db: Session = Depends(get
     doctor_payout = 1750.0
     patient_price = 2500.0 if current_user.plan == "premium" else 4000.0
     platform_commission = patient_price - doctor_payout
-    new_appointment = Appointment(patient_id=current_user.id, doctor_id=None, slot_id=None, start_time=datetime.utcnow(), status="pending", payment_status="unpaid", notes=req.notes, amount=patient_price, commission=platform_commission, payout=doctor_payout)
+    new_appointment = Appointment(
+        patient_id=current_user.id, doctor_id=None, slot_id=None,
+        start_time=datetime.utcnow(), status="pending", payment_status="unpaid",
+        notes=req.notes, amount=patient_price,
+        commission=platform_commission, payout=doctor_payout,
+    )
     db.add(new_appointment)
     db.commit()
     db.refresh(new_appointment)
+
+    # ── Generate and persist the Paystack reference ────────────────────────
+    epoch_ms = int(time.time() * 1000)
+    new_appointment.paystack_reference = (
+        f"MDQ-gp_consult-{new_appointment.id}-{current_user.id}-{epoch_ms}"
+    )
+    db.commit()
+    db.refresh(new_appointment)
+
     return map_appt(new_appointment, "General Practitioner")
 
 @router.get("/my", response_model=List[AppointmentResponse])

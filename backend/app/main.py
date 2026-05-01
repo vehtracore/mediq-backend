@@ -8,8 +8,9 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from app.core.limiter import limiter
 from app.core.database import engine, Base, SessionLocal
 
@@ -19,6 +20,7 @@ from app.api.v1 import google_auth
 from app.api.v1 import emergency
 from app.api.v1 import payments
 from app.api.v1.auth import scrub_expired_accounts
+from app.services.watchdog_service import sweep_pending_transactions
 
 Base.metadata.create_all(bind=engine)
 
@@ -86,6 +88,16 @@ def _apply_schema_patches():
         CREATE INDEX IF NOT EXISTS ix_failed_webhooks_reference
         ON failed_webhooks (reference);
         """,
+        # Paystack reference on appointments for watchdog sweeps (added 2026-05-02)
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS paystack_reference VARCHAR NULL;
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_appointments_paystack_reference
+        ON appointments (paystack_reference)
+        WHERE paystack_reference IS NOT NULL;
+        """,
     ]
     with engine.connect() as conn:
         from sqlalchemy import text
@@ -97,49 +109,64 @@ _apply_schema_patches()
 
 
 # ---------------------------------------------------------------------------
-# ⏰ APScheduler — NDPA 30-day PII scrubber runs daily at 02:00 UTC
+# ⏰ APScheduler jobs
 # ---------------------------------------------------------------------------
 
-def _run_scrubber_job():
-    """Wrapper executed by APScheduler. Opens its own DB session so the
-    scheduler thread never shares state with the request-handling threads."""
+import logging as _logging
+_sched_log = _logging.getLogger("uvicorn.error")
+
+
+async def _run_scrubber_job_async():
+    """Async wrapper for the sync scrubber so it runs on the AsyncIOScheduler
+    without blocking the event loop."""
+    import asyncio
     db = SessionLocal()
     try:
-        scrub_expired_accounts(db)
-    except Exception as exc:  # pragma: no cover
-        # Exceptions inside scheduler jobs are swallowed by default —
-        # log them explicitly so they surface in Render's log stream.
-        import logging
-        logging.getLogger("uvicorn.error").exception(
-            f"[NDPA SCRUBBER] Unhandled error during scheduled run: {exc}"
-        )
+        await asyncio.to_thread(scrub_expired_accounts, db)
+    except Exception as exc:
+        _sched_log.exception("[NDPA SCRUBBER] Unhandled error: %s", exc)
     finally:
         db.close()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """FastAPI lifespan: start scheduler on boot, stop it on shutdown."""
-    scheduler = BackgroundScheduler(timezone="UTC")
+    """FastAPI lifespan: start AsyncIOScheduler on boot, stop on shutdown.
+
+    Jobs registered:
+      • ndpa_pii_scrubber       — daily 02:00 UTC  (NDPA 30-day PII scrub)
+      • payment_watchdog        — every 5 minutes  (sweep stale transactions)
+    """
+    scheduler = AsyncIOScheduler(timezone="UTC")
+
+    # Job 1: NDPA PII scrubber — daily at 02:00 UTC
     scheduler.add_job(
-        _run_scrubber_job,
-        trigger=CronTrigger(hour=2, minute=0, timezone="UTC"),  # 02:00 UTC daily
+        _run_scrubber_job_async,
+        trigger=CronTrigger(hour=2, minute=0, timezone="UTC"),
         id="ndpa_pii_scrubber",
         name="NDPA 30-day PII scrubber",
         replace_existing=True,
     )
+
+    # Job 2: Payment watchdog — every 5 minutes
+    scheduler.add_job(
+        sweep_pending_transactions,
+        trigger=IntervalTrigger(minutes=5),
+        id="payment_watchdog",
+        name="Payment watchdog (sweep pending transactions)",
+        replace_existing=True,
+    )
+
     scheduler.start()
-    import logging
-    logging.getLogger("uvicorn.error").info(
-        "[SCHEDULER] APScheduler started. NDPA scrubber scheduled at 02:00 UTC daily."
+    _sched_log.info(
+        "[SCHEDULER] AsyncIOScheduler started. "
+        "NDPA scrubber @ 02:00 UTC daily | Payment watchdog every 5 min."
     )
 
     yield  # ← application runs here
 
     scheduler.shutdown(wait=False)
-    logging.getLogger("uvicorn.error").info(
-        "[SCHEDULER] APScheduler shut down gracefully."
-    )
+    _sched_log.info("[SCHEDULER] AsyncIOScheduler shut down gracefully.")
 
 
 # ✅ redirect_slashes=False prevents 307 redirects that strip CORS headers
