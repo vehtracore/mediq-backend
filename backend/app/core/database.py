@@ -1,9 +1,13 @@
+import logging
 import os
 import sys
+from urllib.parse import urlparse, urlunparse
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 # 1. Load Secrets
 load_dotenv()
@@ -12,12 +16,21 @@ load_dotenv()
 # CHANGE: We removed the "sqlite" fallback. Now it is None if .env is missing.
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 
-# DEBUG PRINT: This will tell us exactly what the script is seeing
-print(f"CONNECTING TO: {SQLALCHEMY_DATABASE_URL}")
-
 if not SQLALCHEMY_DATABASE_URL:
-    print("❌ ERROR: Could not find DATABASE_URL in .env file.")
-    sys.exit(1) # Crash intentionally so we know something is wrong
+    logger.critical("DATABASE_URL is not set — cannot start. Check your .env / environment config.")
+    sys.exit(1)  # Crash intentionally so we know something is wrong
+
+# Log a redacted URL so we can confirm which host we're connecting to
+# without exposing the password in plaintext.
+try:
+    _parsed = urlparse(SQLALCHEMY_DATABASE_URL)
+    _safe_url = urlunparse(_parsed._replace(netloc=(
+        f"{_parsed.username}:***@{_parsed.hostname}"
+        + (f":{_parsed.port}" if _parsed.port else "")
+    )))
+except Exception:
+    _safe_url = "<unparseable URL>"
+logger.info("[DB] Connecting to: %s", _safe_url)
 
 # --- FIX: Handle Supabase/Render URL format compatibility ---
 if SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
