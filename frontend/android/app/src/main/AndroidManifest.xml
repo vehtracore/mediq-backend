@@ -40,6 +40,12 @@
             android:value="2" />
     </application>
     <queries>
+        <!-- Required by url_launcher to open the native phone dialer (Android 11+) -->
+        <intent>
+            <action android:name="android.intent.action.DIAL"/>
+            <data android:scheme="tel"/>
+        </intent>
+        <!-- Required by text-processing plugins -->
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

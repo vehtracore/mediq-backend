@@ -101,13 +101,49 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
       _sendEmergencyAlert(lat: position.latitude, lon: position.longitude);
 
     } on TimeoutException {
-      if (mounted) setState(() {
-        _locationMessage = "GPS timed out. Check signal and retry.";
-        _loading = false;
-      });
+      // ── GPS Fallback Tier ────────────────────────────────────────────────
+      // bestForNavigation timed out (common indoors). Silently retry with
+      // LocationAccuracy.high — no strict time limit so the OS can use
+      // Wi-Fi / cell towers to get an approximate fix.
+      debugPrint('[GPS] bestForNavigation timed out — falling back to high accuracy');
+      try {
+        final fallbackPosition = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+        );
+        _latitude  = fallbackPosition.latitude;
+        _longitude = fallbackPosition.longitude;
+
+        String addressLabel =
+            '${fallbackPosition.latitude.toStringAsFixed(4)}, '
+            '${fallbackPosition.longitude.toStringAsFixed(4)}';
+        try {
+          final placemarks = await placemarkFromCoordinates(
+            fallbackPosition.latitude, fallbackPosition.longitude,
+          );
+          if (placemarks.isNotEmpty) {
+            final p = placemarks.first;
+            final parts = [p.subLocality, p.locality, p.administrativeArea]
+                .where((s) => s != null && s.isNotEmpty)
+                .toList();
+            if (parts.isNotEmpty) addressLabel = parts.join(', ');
+          }
+        } catch (_) {}
+
+        if (mounted) setState(() {
+          _locationMessage = '$addressLabel (approx.)';
+          _loading = false;
+        });
+        _sendEmergencyAlert(
+            lat: fallbackPosition.latitude, lon: fallbackPosition.longitude);
+      } catch (fallbackError) {
+        if (mounted) setState(() {
+          _locationMessage = 'Location unavailable. Emergency buttons still work.';
+          _loading = false;
+        });
+      }
     } catch (e) {
       if (mounted) setState(() {
-        _locationMessage = "Could not get location: ${e.toString()}";
+        _locationMessage = 'Could not get location: ${e.toString()}';
         _loading = false;
       });
     }
@@ -125,10 +161,23 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     }
   }
 
-  void _callNumber(String number) async {
-    final Uri launchUri = Uri(scheme: 'tel', path: number);
-    if (await canLaunchUrl(launchUri)) {
-      await launchUrl(launchUri);
+  /// Opens the native phone dialer. Uses LaunchMode.externalApplication so
+  /// Android routes to the dialer activity rather than trying an in-app handler.
+  Future<void> _callNumber(String number) async {
+    final Uri dialUri = Uri(scheme: 'tel', path: number);
+    if (await canLaunchUrl(dialUri)) {
+      await launchUrl(dialUri, mode: LaunchMode.externalApplication);
+    } else {
+      debugPrint('[DIALER] ❌ Could not launch $dialUri — check AndroidManifest <queries> block');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not open dialer for $number. Please dial manually.'),
+            backgroundColor: Colors.red[700],
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
 
@@ -148,11 +197,13 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
           onPressed: () => context.pop(),
         ),
       ),
-      body: Padding(
+      // SingleChildScrollView prevents RenderFlex overflow on small screens
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ── Location card ─────────────────────────────────────────────
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -168,58 +219,67 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text("Your Current Location",
-                            style: TextStyle(
-                                color: Colors.red,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold)),
+                        const Text(
+                          'Your Current Location',
+                          style: TextStyle(
+                              color: Colors.red,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold),
+                        ),
                         const SizedBox(height: 4),
                         _loading
                             ? const SizedBox(
-                                height: 10,
-                                width: 10,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2))
-                            : Text(_locationMessage,
-                                style: theme.textTheme.bodyLarge?.copyWith(
-                                    fontWeight: FontWeight.bold)), // ✅ Dynamic
+                                height: 14,
+                                width: 14,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.red))
+                            : Text(
+                                _locationMessage,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.bold),
+                              ),
                       ],
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 32),
-            Text("Immediate Assistance",
-                style: theme.textTheme.titleLarge
-                    ?.copyWith(fontWeight: FontWeight.bold)), // ✅ Dynamic
-            const SizedBox(height: 16),
+
+            const SizedBox(height: 28),
+            Text(
+              'Immediate Assistance',
+              style: theme.textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 14),
             _buildEmergencyCard(
               context,
               icon: Icons.local_police,
               label: _localEmergencyLabel,
-              subLabel: "Tap to call $_localEmergencyNumber",
+              subLabel: 'Tap to call $_localEmergencyNumber',
               color: Colors.blue[800]!,
               onTap: () => _callNumber(_localEmergencyNumber),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             _buildEmergencyCard(
               context,
               icon: Icons.medical_services,
-              label: "Ambulance",
-              subLabel: "Tap to call 112",
+              label: 'Ambulance',
+              subLabel: 'Tap to call 112',
               color: Colors.red,
-              onTap: () => _callNumber("112"),
+              onTap: () => _callNumber('112'),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             _buildEmergencyCard(
               context,
               icon: Icons.support_agent,
-              label: "Suicide Hotline",
-              subLabel: "Tap to call 09080601000",
+              label: 'Suicide Hotline',
+              subLabel: 'Tap to call 09080601000',
               color: Colors.purple,
-              onTap: () => _callNumber("09080601000"),
+              onTap: () => _callNumber('09080601000'),
             ),
+            // Bottom breathing room so last card isn't clipped
+            const SizedBox(height: 24),
           ],
         ),
       ),
