@@ -10,6 +10,7 @@ class Appointment {
   final double amount;
   final String? notes;
   final bool hasReview;
+  final String? paystackReference; // <--- NEW FIELD
 
   Appointment({
     required this.id,
@@ -23,6 +24,7 @@ class Appointment {
     required this.amount,
     this.notes,
     this.hasReview = false,
+    this.paystackReference,
   });
 
   factory Appointment.fromJson(Map<String, dynamic> json) {
@@ -42,6 +44,7 @@ class Appointment {
       amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
       notes: json['notes'],
       hasReview: json['has_review'] ?? false,
+      paystackReference: json['paystack_reference'],
     );
   }
 }

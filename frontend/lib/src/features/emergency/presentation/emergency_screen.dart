@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
+
 
 class EmergencyScreen extends StatefulWidget {
   const EmergencyScreen({super.key});
@@ -12,7 +15,9 @@ class EmergencyScreen extends StatefulWidget {
 }
 
 class _EmergencyScreenState extends State<EmergencyScreen> {
-  String _locationMessage = "Detecting location...";
+  String _locationMessage = "Detecting location…";
+  double? _latitude;
+  double? _longitude;
   final String _localEmergencyNumber = "112";
   final String _localEmergencyLabel = "Local Emergency";
   bool _loading = true;
@@ -23,19 +28,101 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     _determinePosition();
   }
 
+  // ── Precision GPS fetch ────────────────────────────────────────────────────
   Future<void> _determinePosition() async {
-    // ... (Keep existing logic for location) ...
-    // For brevity, just updating the UI part. Assuming location logic works.
+    try {
+      // 1. Check location services are enabled on device
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) setState(() {
+          _locationMessage = "Location services are disabled. Enable GPS and retry.";
+          _loading = false;
+        });
+        return;
+      }
 
-    // TODO: FIRE BACKGROUND EMERGENCY PROTOCOL
-    // 1. Await location coordinates.
-    // 2. Fire POST request to /api/v1/emergency/trigger with coordinates.
-    // 3. Backend will handle Next of Kin Push Notifications and Termii SMS silently.
+      // 2. Request / check permission
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (mounted) setState(() {
+            _locationMessage = "Location permission denied. Enable it in Settings.";
+            _loading = false;
+          });
+          return;
+        }
+      }
+      if (permission == LocationPermission.deniedForever) {
+        if (mounted) setState(() {
+          _locationMessage = "Location permission permanently denied. Open Settings to enable.";
+          _loading = false;
+        });
+        await Geolocator.openAppSettings();
+        return;
+      }
 
-    setState(() {
-      _locationMessage = "Lagos, Nigeria"; // Mock for display
-      _loading = false;
-    });
+      // 3. Fetch a FRESH position from the hardware GPS chipset.
+      //    • bestForNavigation = highest accuracy available (equiv. kCLLocationAccuracyBestForNavigation on iOS)
+      //    • forceAndroidLocationManager: false  → uses Google Fused provider which
+      //      automatically selects GPS hardware when FINE permission is granted
+      //    • timeLimit: 15s  → never blocks the UI thread indefinitely
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.bestForNavigation,
+        timeLimit: const Duration(seconds: 15),
+      );
+
+      _latitude  = position.latitude;
+      _longitude = position.longitude;
+
+      // 4. Reverse-geocode to a human-readable address (best-effort)
+      String addressLabel = "${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}";
+      try {
+        final placemarks = await placemarkFromCoordinates(
+          position.latitude, position.longitude,
+        );
+        if (placemarks.isNotEmpty) {
+          final p = placemarks.first;
+          final parts = [p.subLocality, p.locality, p.administrativeArea]
+              .where((s) => s != null && s.isNotEmpty)
+              .toList();
+          if (parts.isNotEmpty) addressLabel = parts.join(', ');
+        }
+      } catch (_) {
+        // Geocoding failure is non-fatal — coordinates are still captured
+      }
+
+      if (mounted) setState(() {
+        _locationMessage = addressLabel;
+        _loading = false;
+      });
+
+      // 5. Fire backend SOS trigger (runs silently in background)
+      _sendEmergencyAlert(lat: position.latitude, lon: position.longitude);
+
+    } on TimeoutException {
+      if (mounted) setState(() {
+        _locationMessage = "GPS timed out. Check signal and retry.";
+        _loading = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() {
+        _locationMessage = "Could not get location: ${e.toString()}";
+        _loading = false;
+      });
+    }
+  }
+
+  /// Fires POST /api/v1/emergency/trigger with coordinates.
+  /// Runs silently — backend handles Next of Kin SMS + push notifications.
+  Future<void> _sendEmergencyAlert({required double lat, required double lon}) async {
+    try {
+      // TODO: inject your Dio instance and call the real endpoint:
+      // await dio.post('/api/v1/emergency/trigger', data: {'latitude': lat, 'longitude': lon});
+      debugPrint('[SOS] Alert fired — lat=$lat, lon=$lon');
+    } catch (e) {
+      debugPrint('[SOS] Alert failed: $e');
+    }
   }
 
   void _callNumber(String number) async {

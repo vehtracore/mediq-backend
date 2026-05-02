@@ -170,6 +170,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
             title: data['title'] as String,
             appointmentId: data['appointmentId'] as int?,
             userId: data['userId'] as int?,
+            paystackReference: data['paystackReference'] as String?,
           );
         },
       ),

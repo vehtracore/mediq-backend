@@ -318,6 +318,7 @@ class QuickActionGrid extends ConsumerWidget {
                           'title': 'General Consultation',
                           'appointmentId': appt.id,
                           'userId': user?.id,
+                          'paystackReference': appt.paystackReference,
                         });
                       }
                     } catch (e) {

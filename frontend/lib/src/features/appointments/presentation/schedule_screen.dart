@@ -291,6 +291,7 @@ class _AppointmentCard extends ConsumerWidget {
                             'title': 'Consultation Payment',
                             'appointmentId': appointment.id,
                             'userId': appointment.patientId,
+                            'paystackReference': appointment.paystackReference,
                           }),
                       style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.green,

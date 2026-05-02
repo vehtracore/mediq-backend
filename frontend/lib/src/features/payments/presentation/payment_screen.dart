@@ -13,6 +13,7 @@ class PaymentScreen extends ConsumerStatefulWidget {
   /// identify the record even when flutter_paystack strips the metadata.
   final int? appointmentId;
   final int? userId;
+  final String? paystackReference;
 
   const PaymentScreen({
     super.key,
@@ -21,6 +22,7 @@ class PaymentScreen extends ConsumerStatefulWidget {
     required this.title,
     this.appointmentId,
     this.userId,
+    this.paystackReference,
   });
 
   @override
@@ -47,9 +49,10 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
     // Build a unique reference so we can reconcile on the backend.
     // Format: MDQ-{type}-{appointmentId}-{userId}-{timestamp}
     // The IDs are embedded here because flutter_paystack strips custom metadata.
+    // Use the backend-generated reference if available, otherwise generate locally.
     final appointmentId = widget.appointmentId ?? 0;
     final userId = widget.userId ?? 0;
-    final reference =
+    final reference = widget.paystackReference ??
         'MDQ-${widget.transactionType}-$appointmentId-$userId-${DateTime.now().millisecondsSinceEpoch}';
 
     // Show a non-blocking "Connecting…" snackbar while the sheet opens.

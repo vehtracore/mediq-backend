@@ -44,6 +44,16 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>We need access to save medical images and prescriptions to your photo library.</string>
 
+	<!-- Emergency Location Permissions -->
+	<!-- WhenInUse: required for foreground GPS during active SOS -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>MDQplus uses your precise GPS location during an SOS emergency to alert your next of kin and dispatch assistance to your exact position.</string>
+
+	<!-- Always: required if background emergency tracking is enabled -->
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>MDQplus uses your location in the background to continuously monitor your position during an active SOS emergency.</string>
+
+
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 
