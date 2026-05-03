@@ -21,7 +21,6 @@ class UserUpdate(BaseModel):
     last_name: Optional[str] = None
     location: Optional[str] = None
     dob: Optional[date] = None
-    dob: Optional[date] = None
     image_url: Optional[str] = None # ✅ ADDED
     
     # Medical History
@@ -39,7 +38,6 @@ class UserUpdate(BaseModel):
     # Emergency Protocol
     kin_phone: Optional[str] = None
     emergency_sms_enabled: Optional[bool] = None
-    emergency_voice_enabled: Optional[bool] = None
 
 # --- 🚀 UPDATED: User Response (Includes Medical & Settings) ---
 class UserResponse(UserBase):
@@ -65,7 +63,6 @@ class UserResponse(UserBase):
     # Emergency Protocol
     kin_phone: Optional[str] = None
     emergency_sms_enabled: Optional[bool] = False
-    emergency_voice_enabled: Optional[bool] = False
 
     model_config = ConfigDict(from_attributes=True)
 

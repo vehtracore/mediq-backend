@@ -56,10 +56,6 @@ def _apply_schema_patches():
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS emergency_sms_enabled BOOLEAN NOT NULL DEFAULT FALSE;
         """,
-        """
-        ALTER TABLE users
-        ADD COLUMN IF NOT EXISTS emergency_voice_enabled BOOLEAN NOT NULL DEFAULT FALSE;
-        """,
         # Doctor banking / subaccount columns (added 2026-04-22)
         """
         ALTER TABLE doctors
@@ -253,4 +249,4 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.get("/")
 async def health_check():
-    return {"status": "healthy", "service": "MDQ+ API"}
+    return {"status": "healthy", "service": "MDQ+ API"}

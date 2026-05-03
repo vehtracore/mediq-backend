@@ -100,6 +100,9 @@ class AuthRepository {
     String? settingsTheme,
     bool? settingsNotifications,
     bool? settingsEmailUpdates,
+    // Emergency / NOK fields
+    String? kinPhone,
+    bool? emergencySmsEnabled,
   }) async {
     try {
       final Map<String, dynamic> data = {};
@@ -118,6 +121,10 @@ class AuthRepository {
       if (settingsTheme != null) data['settings_theme'] = settingsTheme;
       if (settingsNotifications != null) data['settings_notifications'] = settingsNotifications;
       if (settingsEmailUpdates != null) data['settings_email_updates'] = settingsEmailUpdates;
+
+      // Emergency / NOK fields
+      if (kinPhone != null) data['kin_phone'] = kinPhone;
+      if (emergencySmsEnabled != null) data['emergency_sms_enabled'] = emergencySmsEnabled;
 
       await _dio.put('/api/v1/auth/me', data: data);
     } catch (e) {

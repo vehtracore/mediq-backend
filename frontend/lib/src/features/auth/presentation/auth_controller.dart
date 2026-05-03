@@ -80,8 +80,11 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
     String? medications,
     String? pastSurgeries,
     String? settingsTheme,
-    bool? settingsNotifications, // <-- Added
-    bool? settingsEmailUpdates,  // <-- Added
+    bool? settingsNotifications,
+    bool? settingsEmailUpdates,
+    // Emergency / NOK fields
+    String? kinPhone,
+    bool? emergencySmsEnabled,
   }) async {
     state = const AsyncLoading();
 
@@ -102,8 +105,10 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
         medications: medications,
         pastSurgeries: pastSurgeries,
         settingsTheme: settingsTheme,
-        settingsNotifications: settingsNotifications, // <-- Passed to Repo
-        settingsEmailUpdates: settingsEmailUpdates,   // <-- Passed to Repo
+        settingsNotifications: settingsNotifications,
+        settingsEmailUpdates: settingsEmailUpdates,
+        kinPhone: kinPhone,
+        emergencySmsEnabled: emergencySmsEnabled,
       );
 
       _ref.invalidate(userProvider);

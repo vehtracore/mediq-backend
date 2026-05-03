@@ -52,7 +52,6 @@ class User(Base):
     kin_phone = Column(String, nullable=True)
     # Per-channel toggles — the user controls which alerts fire
     emergency_sms_enabled = Column(Boolean, default=False)
-    emergency_voice_enabled = Column(Boolean, default=False)
 
     # --- 📲 PUSH NOTIFICATIONS ---
     fcm_token = Column(String, nullable=True)

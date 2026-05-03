@@ -164,13 +164,36 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/payment',
         builder: (context, state) {
           final data = state.extra as Map<String, dynamic>;
+
+          // --- Safe type extraction ---
+          // baseAmount: callers may pass double, int, or String
+          final baseAmountRaw = data['baseAmount'];
+          final double baseAmount = baseAmountRaw is num
+              ? baseAmountRaw.toDouble()
+              : double.tryParse(baseAmountRaw?.toString() ?? '') ?? 0.0;
+
+          // appointmentId: may arrive as int, String, or null
+          final idRaw = data['appointmentId'];
+          final int? appointmentId = idRaw is int
+              ? idRaw
+              : int.tryParse(idRaw?.toString() ?? '');
+
+          // userId: same treatment
+          final userIdRaw = data['userId'];
+          final int? userId = userIdRaw is int
+              ? userIdRaw
+              : int.tryParse(userIdRaw?.toString() ?? '');
+
+          // paystackReference: guard against non-String nullables
+          final paystackReference = data['paystackReference']?.toString();
+
           return PaymentScreen(
             transactionType: data['transactionType'] as String,
-            baseAmount: (data['baseAmount'] as num).toDouble(),
+            baseAmount: baseAmount,
             title: data['title'] as String,
-            appointmentId: data['appointmentId'] as int?,
-            userId: data['userId'] as int?,
-            paystackReference: data['paystackReference'] as String?,
+            appointmentId: appointmentId,
+            userId: userId,
+            paystackReference: paystackReference,
           );
         },
       ),

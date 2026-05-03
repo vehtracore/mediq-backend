@@ -21,6 +21,10 @@ class User {
   final bool settingsNotifications;
   final bool settingsEmailUpdates;
 
+  // --- 🚨 Emergency ---
+  final String? kinPhone;           // Next of Kin phone in international format
+  final bool emergencySmsEnabled;
+
   User({
     required this.id,
     required this.email,
@@ -39,6 +43,8 @@ class User {
     this.settingsTheme = 'light',
     this.settingsNotifications = true,
     this.settingsEmailUpdates = false,
+    this.kinPhone,
+    this.emergencySmsEnabled = false,
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
@@ -80,6 +86,8 @@ class User {
       settingsTheme: json['settings_theme'] ?? 'light',
       settingsNotifications: json['settings_notifications'] ?? true,
       settingsEmailUpdates: json['settings_email_updates'] ?? false,
+      kinPhone: json['kin_phone'],
+      emergencySmsEnabled: json['emergency_sms_enabled'] ?? false,
     );
   }
 
@@ -102,6 +110,8 @@ class User {
       'settings_theme': settingsTheme,
       'settings_notifications': settingsNotifications,
       'settings_email_updates': settingsEmailUpdates,
+      'kin_phone': kinPhone,
+      'emergency_sms_enabled': emergencySmsEnabled,
     };
   }
 }

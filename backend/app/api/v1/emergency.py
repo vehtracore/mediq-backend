@@ -4,8 +4,7 @@ Emergency Endpoints
 Routes
 ------
 POST /api/v1/emergency/trigger
-    Dispatches an emergency alert to the patient's Next of Kin (NoK) via Termii
-    SMS and/or voice call.
+    Dispatches an emergency alert to the patient's Next of Kin (NoK) via Termii SMS.
 
 GET  /api/v1/emergency/local-services
     Secure proxy for the Google Places API.  Accepts ?lat=&lon= and returns a
@@ -14,13 +13,13 @@ GET  /api/v1/emergency/local-services
 
 Subscription gating (POST /trigger)
 -------------------------------------
-NOK automated alerts (Termii SMS + voice) are a **paid feature**.
+NOK automated alerts (Termii SMS) are a **paid feature**.
 
 • FREE users  → Emergency is logged for MDQ+ internal dispatch.
                Termii calls are NOT fired (saves API cost).
                HTTP 202 is returned with a clear message.
 
-• PREMIUM users → Termii SMS and/or voice call are fired via BackgroundTasks.
+• PREMIUM users → Termii SMS is fired via BackgroundTasks.
                   HTTP 202 returned immediately; calls run asynchronously.
 
 • FAMILY tier  → Treated identically to PREMIUM once the family_groups table
@@ -127,30 +126,6 @@ async def _dispatch_sms(kin_phone: str, message: str) -> None:
         )
 
 
-async def _dispatch_voice(kin_phone: str, message: str) -> None:
-    """
-    Background task: trigger Termii voice call.
-    All exceptions are caught and logged; they must NOT propagate.
-    """
-    try:
-        logger.info("[EMERGENCY] 🚨 Triggering voice call to %s", kin_phone)
-        success = await termii_service.send_voice_call(to=kin_phone, message=message)
-        if not success:
-            logger.error(
-                "[EMERGENCY] ❌ Voice call to %s was not completed. "
-                "Check Termii credentials and recipient number.",
-                kin_phone,
-            )
-        else:
-            logger.info("[EMERGENCY] ✅ Emergency voice call initiated to %s", kin_phone)
-    except Exception as exc:
-        logger.error(
-            "[EMERGENCY] 💥 Unhandled error in voice call background task: %s: %s",
-            type(exc).__name__,
-            exc,
-        )
-
-
 # ─── Endpoint ─────────────────────────────────────────────────────────────────
 
 class EmergencyTriggerRequest(BaseModel):
@@ -170,7 +145,7 @@ class EmergencyTriggerRequest(BaseModel):
     summary="Trigger an emergency alert",
     description=(
         "Logs an emergency for MDQ+ dispatch. For premium subscribers, also "
-        "dispatches an SMS and/or voice call to the patient's Next of Kin via "
+        "dispatches an SMS to the patient's Next of Kin via "
         "Termii. Returns 202 immediately; Termii calls run asynchronously."
     ),
 )
@@ -185,7 +160,7 @@ async def trigger_emergency(
 
     Steps:
       1. Validate that the user has a Next of Kin phone number configured.
-      2. Validate that at least one alert channel (SMS / voice) is enabled.
+      2. Validate that the SMS alert channel is enabled.
       3. Build the alert message, appending GPS coordinates when available.
       4. [SUBSCRIPTION GATE] Check if user is premium/family.
            • Free  → log emergency, skip Termii, return 202 with upgrade prompt.
@@ -205,16 +180,15 @@ async def trigger_emergency(
             ),
         )
 
-    # ── 2. Guard: at least one channel must be enabled ────────────────────────
-    sms_enabled: bool   = bool(getattr(current_user, "emergency_sms_enabled", False))
-    voice_enabled: bool = bool(getattr(current_user, "emergency_voice_enabled", False))
+    # ── 2. Guard: SMS channel must be enabled ─────────────────────────────────
+    sms_enabled: bool = bool(getattr(current_user, "emergency_sms_enabled", False))
 
-    if not sms_enabled and not voice_enabled:
+    if not sms_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Emergency alert could not be sent: both SMS and voice alerts "
-                "are disabled. Enable at least one channel in your emergency settings."
+                "Emergency alert could not be sent: SMS alerts "
+                "are disabled. Enable the SMS channel in your emergency settings."
             ),
         )
 
@@ -231,12 +205,11 @@ async def trigger_emergency(
 
     logger.info(
         "[EMERGENCY] 🚨 Alert triggered | user_id=%s (%s) | plan=%s "
-        "| sms=%s | voice=%s | has_gps=%s",
+        "| sms=%s | has_gps=%s",
         current_user.id,
         patient_name,
         current_user.plan,
         sms_enabled,
-        voice_enabled,
         payload.latitude is not None,
     )
 
@@ -255,7 +228,7 @@ async def trigger_emergency(
             "status": "logged",
             "message": (
                 "Your emergency has been logged and flagged for MDQ+ dispatch. "
-                "Automated Next of Kin SMS and voice alerts require a Premium subscription. "
+                "Automated Next of Kin SMS alerts require a Premium subscription. "
                 "Upgrade your plan to enable instant NOK notifications."
             ),
             "nok_alerts_sent": False,
@@ -268,10 +241,6 @@ async def trigger_emergency(
     if sms_enabled:
         background_tasks.add_task(_dispatch_sms, kin_phone.strip(), message)
         channels_queued.append("SMS")
-
-    if voice_enabled:
-        background_tasks.add_task(_dispatch_voice, kin_phone.strip(), message)
-        channels_queued.append("voice call")
 
     logger.info(
         "[EMERGENCY] ✅ Premium NOK alerts queued for user_id=%s — channels: %s",
