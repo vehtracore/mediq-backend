@@ -367,7 +367,6 @@ def update_user_me(
     # 4. Update Emergency Protocol
     if user_update.kin_phone is not None: current_user.kin_phone = user_update.kin_phone
     if user_update.emergency_sms_enabled is not None: current_user.emergency_sms_enabled = user_update.emergency_sms_enabled
-    if user_update.emergency_voice_enabled is not None: current_user.emergency_voice_enabled = user_update.emergency_voice_enabled
 
     db.commit()
     db.refresh(current_user)
