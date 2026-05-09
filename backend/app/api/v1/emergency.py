@@ -145,9 +145,15 @@ class EmergencyTriggerRequest(BaseModel):
 
     latitude and longitude are optional — they are appended to the alert
     message when provided so the Next of Kin can locate the patient.
+
+    address is an optional human-readable string (e.g. "Akobo, Ibadan")
+    reverse-geocoded by the Flutter client. When present it is injected into
+    the SMS body so the Next of Kin gets a recognisable location name in
+    addition to the raw coordinates.
     """
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    address: Optional[str] = None
 
 
 @router.post(
@@ -204,25 +210,43 @@ async def trigger_emergency(
         )
 
     # ── 3. Build alert message ────────────────────────────────────────────────
-    message = (
-        f"EMERGENCY ALERT: {patient_name} requires immediate medical assistance."
-    )
-    if payload.latitude is not None and payload.longitude is not None:
-        message += (
-            f" Last known GPS location: "
+    has_coords = payload.latitude is not None and payload.longitude is not None
+    address = (payload.address or "").strip() or None
+
+    if has_coords and address:
+        # Rich template: human-readable area name + raw coordinates + map link
+        message = (
+            f"EMERGENCY ALERT: {patient_name} requires immediate medical assistance "
+            f"near {address}. "
+            f"Last known GPS: "
             f"Lat {payload.latitude:.6f}, Lon {payload.longitude:.6f}. "
             f"https://maps.google.com/?q={payload.latitude:.6f},{payload.longitude:.6f}"
+        )
+    elif has_coords:
+        # Coordinates-only fallback (address not provided)
+        message = (
+            f"EMERGENCY ALERT: {patient_name} requires immediate medical assistance. "
+            f"Last known GPS location: "
+            f"Lat {payload.latitude:.6f}, Lon {payload.longitude:.6f}. "
+            f"https://maps.google.com/?q={payload.latitude:.6f},{payload.longitude:.6f}"
+        )
+    else:
+        # No location data at all
+        message = (
+            f"EMERGENCY ALERT: {patient_name} requires immediate medical assistance. "
+            f"GPS location unavailable — please contact them immediately."
         )
 
     logger.info(
         "[EMERGENCY] 🚨 Alert triggered | user_id=%s (%s) | plan=%s "
-        "| sms=%s | kin_phone_raw=%r | has_gps=%s",
+        "| sms=%s | kin_phone_raw=%r | has_gps=%s | address=%r",
         current_user.id,
         patient_name,
         current_user.plan,
         sms_enabled,
         kin_phone,
-        payload.latitude is not None,
+        has_coords,
+        address,
     )
 
     # ── 4. Subscription gate ──────────────────────────────────────────────────

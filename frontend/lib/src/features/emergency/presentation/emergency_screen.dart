@@ -329,19 +329,36 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
   }) async {
     try {
       final dio = Dio(BaseOptions(baseUrl: ApiConstants.baseUrl));
-      
+
       const storage = FlutterSecureStorage();
-      final token = await storage.read(key: 'auth_token', aOptions: const AndroidOptions(encryptedSharedPreferences: true));
-      
+      final token = await storage.read(
+          key: 'auth_token',
+          aOptions: const AndroidOptions(encryptedSharedPreferences: true));
+
       if (token != null) {
         dio.options.headers['Authorization'] = 'Bearer $token';
       }
 
+      // Only forward a human-readable address — skip the loading placeholder
+      // and generic error strings that are not meaningful to the backend.
+      const _nonAddressStrings = {
+        'Detecting location…',
+        'Location unavailable. Emergency buttons still work.',
+      };
+      final String? addressToSend =
+          (!_gpsLoading && !_nonAddressStrings.contains(_locationMessage))
+              ? _locationMessage
+              : null;
+
       await dio.post(
         '/api/v1/emergency/trigger',
-        data: {'latitude': lat, 'longitude': lon},
+        data: {
+          'latitude': lat,
+          'longitude': lon,
+          if (addressToSend != null) 'address': addressToSend,
+        },
       );
-      debugPrint('[SOS] ✅ Alert fired — lat=$lat, lon=$lon');
+      debugPrint('[SOS] ✅ Alert fired — lat=$lat, lon=$lon, address=$addressToSend');
     } catch (e) {
       debugPrint('[SOS] ❌ Alert failed (non-fatal): $e');
     }
