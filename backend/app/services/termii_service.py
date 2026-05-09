@@ -110,7 +110,7 @@ class TermiiService:
             "from": self.sender_id,
             "sms": message,
             "type": "plain",
-            "channel": "generic",  # Falls back through DND routes automatically
+            "channel": "dnd",  # DND route bypasses telco Sender ID blocks via whitelisted numeric route
             "api_key": self.api_key,
         }
 

@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../../core/api/api_constants.dart';
 
@@ -320,7 +321,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
   }
 
   // ── SOS backend trigger ─────────────────────────────────────────────────────
-  /// Fires POST /api/v1/emergency/trigger silently.
+  /// Fires POST /api/v1/emergency/trigger.
   /// Backend handles Next of Kin SMS + push; we never block on the result.
   Future<void> _sendEmergencyAlert({
     required double lat,
@@ -328,6 +329,14 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
   }) async {
     try {
       final dio = Dio(BaseOptions(baseUrl: ApiConstants.baseUrl));
+      
+      const storage = FlutterSecureStorage();
+      final token = await storage.read(key: 'auth_token', aOptions: const AndroidOptions(encryptedSharedPreferences: true));
+      
+      if (token != null) {
+        dio.options.headers['Authorization'] = 'Bearer $token';
+      }
+
       await dio.post(
         '/api/v1/emergency/trigger',
         data: {'latitude': lat, 'longitude': lon},
@@ -484,9 +493,9 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
         child: Row(
           children: [
             Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              child: Icon(icon, color: Colors.white, size: 24),
+               padding: const EdgeInsets.all(12),
+               decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+               child: Icon(icon, color: Colors.white, size: 24),
             ),
             const SizedBox(width: 16),
             Expanded(
