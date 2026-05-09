@@ -56,6 +56,15 @@ def _apply_schema_patches():
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS emergency_sms_enabled BOOLEAN NOT NULL DEFAULT FALSE;
         """,
+        # Emergency rate-limiting columns (added 2026-05-09)
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS last_emergency_trigger TIMESTAMPTZ NULL;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS emergency_sms_count INTEGER NOT NULL DEFAULT 0;
+        """,
         # Doctor banking / subaccount columns (added 2026-04-22)
         """
         ALTER TABLE doctors

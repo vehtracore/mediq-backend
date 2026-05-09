@@ -19,8 +19,10 @@ NOK automated alerts (Termii SMS) are a **paid feature**.
                Termii calls are NOT fired (saves API cost).
                HTTP 202 is returned with a clear message.
 
-• PREMIUM users → Termii SMS is fired via BackgroundTasks.
-                  HTTP 202 returned immediately; calls run asynchronously.
+• PREMIUM users → Termii SMS is fired via BackgroundTasks, subject to:
+                    – 5-minute cooldown between triggers (anti-spam).
+                    – 5-SMS lifetime quota per user (cost control).
+                  HTTP 202 returned immediately; Termii calls run asynchronously.
 
 • FAMILY tier  → Treated identically to PREMIUM once the family_groups table
                   is implemented.  A TODO stub is clearly marked below.
@@ -31,14 +33,17 @@ Design decisions
   never block waiting for a Termii result.
 • try/except inside every background task ensures a Termii outage can never
   crash the main application thread.
-• GPS coordinates are appended to the message when supplied.
+• GPS coordinates and reverse-geocoded address are appended to the message
+  when supplied.
+• The cooldown and quota checks happen BEFORE the background task is queued so
+  the counter/timestamp update is committed synchronously in the same request.
 • /local-services always returns HTTP 200 with [] on any error so the Flutter
   app can fall back to its hardcoded default numbers.
 """
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import httpx
@@ -54,6 +59,10 @@ from app.services.termii_service import termii_service
 logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter()
+
+# ─── Rate-limit constants ──────────────────────────────────────────────────────
+_COOLDOWN_MINUTES: int = 5    # minimum gap between two NOK SMS dispatches
+_SMS_QUOTA: int = 5           # maximum lifetime NOK SMS sends per user
 
 
 # ─── Subscription Gate ─────────────────────────────────────────────────────────
@@ -163,7 +172,8 @@ class EmergencyTriggerRequest(BaseModel):
     description=(
         "Logs an emergency for MDQ+ dispatch. For premium subscribers, also "
         "dispatches an SMS to the patient's Next of Kin via "
-        "Termii. Returns 202 immediately; Termii calls run asynchronously."
+        "Termii. Returns 202 immediately; Termii calls run asynchronously. "
+        "A 5-minute cooldown and 5-SMS quota are enforced for premium users."
     ),
 )
 async def trigger_emergency(
@@ -178,10 +188,10 @@ async def trigger_emergency(
     Steps:
       1. Validate that the user has a Next of Kin phone number configured.
       2. Validate that the SMS alert channel is enabled.
-      3. Build the alert message, appending GPS coordinates when available.
+      3. Build the alert message, appending GPS coordinates / address when available.
       4. [SUBSCRIPTION GATE] Check if user is premium/family.
            • Free  → log emergency, skip Termii, return 202 with upgrade prompt.
-           • Premium → queue Termii SMS as background task, return 202.
+           • Premium → apply cooldown + quota checks, queue Termii SMS, return 202.
       5. Return HTTP 202 immediately.
     """
     patient_name = f"{current_user.first_name} {current_user.last_name}".strip()
@@ -271,7 +281,75 @@ async def trigger_emergency(
             "upgrade_required": True,
         }
 
-    # ── 5. Premium path: queue Termii SMS background task ────────────────────
+    # ── 5. Rate-limit checks (premium path only) ──────────────────────────────
+
+    now_utc = datetime.now(timezone.utc)
+
+    # 5a. Cooldown — block re-triggers within the cooldown window
+    last_trigger = getattr(current_user, "last_emergency_trigger", None)
+    if last_trigger is not None:
+        # Normalise timezone-naive timestamps from older rows
+        if last_trigger.tzinfo is None:
+            last_trigger = last_trigger.replace(tzinfo=timezone.utc)
+        elapsed = now_utc - last_trigger
+        if elapsed < timedelta(minutes=_COOLDOWN_MINUTES):
+            remaining = int((_COOLDOWN_MINUTES * 60) - elapsed.total_seconds())
+            logger.info(
+                "[EMERGENCY] ⏳ Cooldown active for user_id=%s "
+                "— last trigger was %s ago, %ds remaining. "
+                "Emergency logged for internal dispatch; Termii skipped.",
+                current_user.id,
+                elapsed,
+                remaining,
+            )
+            return {
+                "status": "logged",
+                "message": (
+                    "Your emergency has been logged for MDQ+ dispatch. "
+                    f"NOK SMS is on cooldown — please wait {remaining} seconds before retriggering."
+                ),
+                "nok_alerts_sent": False,
+                "upgrade_required": False,
+                "cooldown_remaining_seconds": remaining,
+            }
+
+    # 5b. Lifetime quota — block once the user exhausts their SMS allowance
+    sms_count: int = getattr(current_user, "emergency_sms_count", 0) or 0
+    if sms_count >= _SMS_QUOTA:
+        logger.info(
+            "[EMERGENCY] 🚫 SMS quota reached for user_id=%s "
+            "(count=%d, quota=%d). "
+            "Emergency logged for internal dispatch; Termii skipped.",
+            current_user.id,
+            sms_count,
+            _SMS_QUOTA,
+        )
+        return {
+            "status": "logged",
+            "message": (
+                "Your emergency has been logged for MDQ+ dispatch. "
+                "Your NOK SMS quota has been reached — please contact MDQ+ support."
+            ),
+            "nok_alerts_sent": False,
+            "upgrade_required": False,
+            "quota_exhausted": True,
+        }
+
+    # ── 6. Commit rate-limit state BEFORE queuing the background task ─────────
+    # Updating first ensures the counter increments even if the background
+    # worker crashes — preventing accidental re-fires.
+    current_user.last_emergency_trigger = now_utc
+    current_user.emergency_sms_count = sms_count + 1
+    db.commit()
+
+    logger.info(
+        "[EMERGENCY] 📊 Rate-limit updated | user_id=%s | sms_count=%d→%d",
+        current_user.id,
+        sms_count,
+        sms_count + 1,
+    )
+
+    # ── 7. Queue Termii SMS background task ───────────────────────────────────
     # Pass the raw stored value — termii_service.send_sms() sanitizes it
     background_tasks.add_task(_dispatch_sms, kin_phone.strip(), message)
 
@@ -287,6 +365,7 @@ async def trigger_emergency(
         "recipient": kin_phone.strip(),
         "nok_alerts_sent": True,
         "upgrade_required": False,
+        "sms_remaining": _SMS_QUOTA - (sms_count + 1),
     }
 
 

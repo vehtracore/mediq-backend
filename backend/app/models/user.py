@@ -15,9 +15,9 @@ class User(Base):
     hashed_password = Column(String)
     dob = Column(Date, nullable=True)
     location = Column(String, nullable=True)
-    image_url = Column(String, nullable=True) # ✅ NEW COLUMN
-    is_verified = Column(Boolean, default=False, index=True) # ✅ NEW: Email Verification
-    verification_token = Column(String, nullable=True) # ✅ NEW: Verification Token
+    image_url = Column(String, nullable=True)
+    is_verified = Column(Boolean, default=False, index=True)
+    verification_token = Column(String, nullable=True)
     auth_provider = Column(String, nullable=True, default=None)  # "google" | None (password)
     
     # --- ROLE & STATUS ---
@@ -26,7 +26,7 @@ class User(Base):
     is_banned = Column(Boolean, default=False)
     
     # --- SUBSCRIPTION & LIMITS ---
-    plan = Column(String, default="free") # 'free' or 'premium'
+    plan = Column(String, default="free")  # 'free' or 'premium'
     subscription_expiry = Column(DateTime, nullable=True)
     
     # Chat Limits
@@ -35,23 +35,26 @@ class User(Base):
     burst_chat_count = Column(Integer, default=0)
     burst_start_time = Column(DateTime, nullable=True)
 
-    # --- 🏥 NEW: MEDICAL HISTORY ---
+    # --- 🏥 MEDICAL HISTORY ---
     blood_type = Column(String, nullable=True)
-    allergies = Column(String, nullable=True)         # Store as text "Peanuts, Penicillin"
-    chronic_conditions = Column(String, nullable=True) # "Asthma, Diabetes"
-    medications = Column(String, nullable=True)       # "Ibuprofen, Insulin"
-    past_surgeries = Column(String, nullable=True)    # "Appendectomy 2015"
+    allergies = Column(String, nullable=True)          # Store as text "Peanuts, Penicillin"
+    chronic_conditions = Column(String, nullable=True)  # "Asthma, Diabetes"
+    medications = Column(String, nullable=True)        # "Ibuprofen, Insulin"
+    past_surgeries = Column(String, nullable=True)     # "Appendectomy 2015"
 
-    # --- ⚙️ NEW: SETTINGS ---
-    settings_theme = Column(String, default="light")  # 'light' or 'dark'
+    # --- ⚙️ SETTINGS ---
+    settings_theme = Column(String, default="light")   # 'light' or 'dark'
     settings_notifications = Column(Boolean, default=True)
     settings_email_updates = Column(Boolean, default=False)
 
     # --- 🚨 EMERGENCY PROTOCOL ---
     # Next of Kin phone in international format e.g. '+2348012345678'
     kin_phone = Column(String, nullable=True)
-    # Per-channel toggles — the user controls which alerts fire
+    # Per-channel toggle
     emergency_sms_enabled = Column(Boolean, default=False)
+    # Rate-limiting / quota tracking for NOK SMS
+    last_emergency_trigger = Column(DateTime(timezone=True), nullable=True)
+    emergency_sms_count = Column(Integer, default=0, nullable=False)
 
     # --- 📲 PUSH NOTIFICATIONS ---
     fcm_token = Column(String, nullable=True)
