@@ -123,6 +123,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget build(BuildContext context) {
     final theme  = Theme.of(context);
     final isPremium = _isPremium;
+    final user = ref.read(userProvider).value;
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
@@ -151,10 +152,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 24),
 
           // ── Emergency Protocol section ──────────────────────────────────
-          _buildSectionHeader('Emergency Protocol'),
-          _buildEmergencySection(theme, isPremium),
-
-          const SizedBox(height: 24),
+          if (user?.role == 'patient') ...[
+            _buildSectionHeader('Emergency Protocol'),
+            _buildEmergencySection(theme, isPremium),
+            const SizedBox(height: 24),
+          ],
 
           _buildSectionHeader('Account'),
           _buildActionTile('Delete Account', Icons.delete_forever, () {

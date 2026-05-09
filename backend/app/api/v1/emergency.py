@@ -105,19 +105,30 @@ def _has_active_premium(user: User) -> bool:
 async def _dispatch_sms(kin_phone: str, message: str) -> None:
     """
     Background task: send emergency SMS via Termii.
+
+    The phone number is passed as stored on the user record (any format).
+    termii_service.send_sms() internally sanitizes it to the correct format
+    (e.g. 2348012345678) before hitting the Termii API.
+
     All exceptions are caught and logged; they must NOT propagate.
     """
     try:
-        logger.info("[EMERGENCY] 🚨 Dispatching SMS to %s", kin_phone)
+        logger.info(
+            "[EMERGENCY] 🚨 Dispatching SMS | raw_number=%r",
+            kin_phone,
+        )
         success = await termii_service.send_sms(to=kin_phone, message=message)
         if not success:
             logger.error(
-                "[EMERGENCY] ❌ SMS to %s was not delivered. "
-                "Check Termii credentials and recipient number.",
+                "[EMERGENCY] ❌ SMS to %r was not delivered. "
+                "Check the Termii response body in the logs above for the rejection reason.",
                 kin_phone,
             )
         else:
-            logger.info("[EMERGENCY] ✅ Emergency SMS delivered to %s", kin_phone)
+            logger.info(
+                "[EMERGENCY] ✅ Emergency SMS dispatch confirmed for %r",
+                kin_phone,
+            )
     except Exception as exc:
         logger.error(
             "[EMERGENCY] 💥 Unhandled error in SMS background task: %s: %s",
@@ -164,7 +175,7 @@ async def trigger_emergency(
       3. Build the alert message, appending GPS coordinates when available.
       4. [SUBSCRIPTION GATE] Check if user is premium/family.
            • Free  → log emergency, skip Termii, return 202 with upgrade prompt.
-           • Premium → queue Termii calls as background tasks, return 202.
+           • Premium → queue Termii SMS as background task, return 202.
       5. Return HTTP 202 immediately.
     """
     patient_name = f"{current_user.first_name} {current_user.last_name}".strip()
@@ -187,8 +198,8 @@ async def trigger_emergency(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Emergency alert could not be sent: SMS alerts "
-                "are disabled. Enable the SMS channel in your emergency settings."
+                "Emergency alert could not be sent: SMS alerts are disabled. "
+                "Enable the SMS channel in your emergency settings."
             ),
         )
 
@@ -205,11 +216,12 @@ async def trigger_emergency(
 
     logger.info(
         "[EMERGENCY] 🚨 Alert triggered | user_id=%s (%s) | plan=%s "
-        "| sms=%s | has_gps=%s",
+        "| sms=%s | kin_phone_raw=%r | has_gps=%s",
         current_user.id,
         patient_name,
         current_user.plan,
         sms_enabled,
+        kin_phone,
         payload.latitude is not None,
     )
 
@@ -235,22 +247,19 @@ async def trigger_emergency(
             "upgrade_required": True,
         }
 
-    # ── 5. Premium path: queue Termii background tasks ────────────────────────
-    channels_queued = []
-
-    if sms_enabled:
-        background_tasks.add_task(_dispatch_sms, kin_phone.strip(), message)
-        channels_queued.append("SMS")
+    # ── 5. Premium path: queue Termii SMS background task ────────────────────
+    # Pass the raw stored value — termii_service.send_sms() sanitizes it
+    background_tasks.add_task(_dispatch_sms, kin_phone.strip(), message)
 
     logger.info(
-        "[EMERGENCY] ✅ Premium NOK alerts queued for user_id=%s — channels: %s",
+        "[EMERGENCY] ✅ Premium SMS alert queued | user_id=%s | kin_phone_raw=%r",
         current_user.id,
-        channels_queued,
+        kin_phone,
     )
 
     return {
         "status": "accepted",
-        "message": f"Emergency alert queued via: {', '.join(channels_queued)}.",
+        "message": "Emergency SMS alert queued for your Next of Kin.",
         "recipient": kin_phone.strip(),
         "nok_alerts_sent": True,
         "upgrade_required": False,
@@ -313,7 +322,7 @@ async def get_local_services(
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             for place_type in _TARGET_TYPES:
-                payload = {
+                request_payload = {
                     "includedTypes": [place_type],
                     "maxResultCount": 10,
                     "locationRestriction": {
@@ -329,7 +338,7 @@ async def get_local_services(
 
                 response = await client.post(
                     _PLACES_NEARBY_URL,
-                    json=payload,
+                    json=request_payload,
                     headers={
                         "Content-Type": "application/json",
                         "X-Goog-Api-Key": api_key,
