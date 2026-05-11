@@ -34,6 +34,7 @@ import '../../features/subscription/presentation/subscription_screen.dart';
 import 'package:mediq_app/src/features/chat/presentation/video_call_screen.dart';
 import '../../features/lab/presentation/lab_scanner_screen.dart';
 import '../../features/profile/presentation/payout_settings_screen.dart';
+import '../../features/subscription/presentation/family_dashboard_screen.dart';
 
 // Global key so Dio interceptor can navigate imperatively
 final rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -204,6 +205,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/payout_settings',
         builder: (context, state) => const PayoutSettingsScreen(),
+      ),
+      GoRoute(
+        path: '/family_dashboard',
+        builder: (context, state) => const FamilyDashboardScreen(),
       ),
     ],
   );

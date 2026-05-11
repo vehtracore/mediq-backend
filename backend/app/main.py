@@ -19,6 +19,7 @@ from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscr
 from app.api.v1 import google_auth
 from app.api.v1 import emergency
 from app.api.v1 import payments
+from app.api.v1 import family
 from app.api.v1.auth import scrub_expired_accounts
 from app.services.watchdog_service import sweep_pending_transactions
 
@@ -279,6 +280,7 @@ app.include_router(lab.router, prefix="/api/v1/lab", tags=["Lab Scanner"])
 app.include_router(google_auth.router, prefix="/auth/google", tags=["Google OAuth"])
 app.include_router(emergency.router, prefix="/api/v1/emergency", tags=["Emergency"])
 app.include_router(payments.router, prefix="/api/v1/payments", tags=["Payments"])
+app.include_router(family.router, prefix="/api/v1/family", tags=["Family Plan"])
 
 # --- STATIC FILES ---
 static_dir = "static"

@@ -25,6 +25,10 @@ class User {
   final String? kinPhone;           // Next of Kin phone in international format
   final bool emergencySmsEnabled;
 
+  // --- 👨‍👩‍👧 Family Plan ---
+  final String? primaryAccountId;
+  final List<DependentUser> dependents;
+
   User({
     required this.id,
     required this.email,
@@ -45,6 +49,8 @@ class User {
     this.settingsEmailUpdates = false,
     this.kinPhone,
     this.emergencySmsEnabled = false,
+    this.primaryAccountId,
+    this.dependents = const [],
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
@@ -88,6 +94,11 @@ class User {
       settingsEmailUpdates: json['settings_email_updates'] ?? false,
       kinPhone: json['kin_phone'],
       emergencySmsEnabled: json['emergency_sms_enabled'] ?? false,
+      primaryAccountId: json['primary_account_id']?.toString(),
+      dependents: (json['dependents'] as List?)
+              ?.map((e) => DependentUser.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
     );
   }
 
@@ -112,6 +123,60 @@ class User {
       'settings_email_updates': settingsEmailUpdates,
       'kin_phone': kinPhone,
       'emergency_sms_enabled': emergencySmsEnabled,
+      'primary_account_id': primaryAccountId,
+      'dependents': dependents.map((e) => e.toJson()).toList(),
+    };
+  }
+}
+
+class DependentUser {
+  final String id;
+  final String firstName;
+  final String lastName;
+  final String email;
+  final String plan;
+  final String imageUrl;
+
+  DependentUser({
+    required this.id,
+    required this.firstName,
+    required this.lastName,
+    required this.email,
+    required this.plan,
+    this.imageUrl = '',
+  });
+
+  factory DependentUser.fromJson(Map<String, dynamic> json) {
+    String rawImage = json['image_url'] ?? '';
+    String finalUrl = '';
+    if (rawImage.isNotEmpty) {
+      if (rawImage.startsWith('http')) {
+        finalUrl = rawImage;
+      } else {
+        const String baseUrl = "https://mediq-backend-m3ik.onrender.com"; 
+        final cleanPath = rawImage.startsWith('/') ? rawImage.substring(1) : rawImage;
+        finalUrl = "\$baseUrl/\$cleanPath";
+      }
+    }
+
+    return DependentUser(
+      id: (json['id'] ?? '').toString(),
+      firstName: json['first_name'] ?? '',
+      lastName: json['last_name'] ?? '',
+      email: json['email'] ?? '',
+      plan: json['plan'] ?? 'free',
+      imageUrl: finalUrl,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'first_name': firstName,
+      'last_name': lastName,
+      'email': email,
+      'plan': plan,
+      'image_url': imageUrl,
     };
   }
 }

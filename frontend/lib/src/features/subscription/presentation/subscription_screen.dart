@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../auth/presentation/user_controller.dart';
+import '../../auth/data/auth_repository.dart';
 
 class SubscriptionScreen extends ConsumerStatefulWidget {
   const SubscriptionScreen({super.key});
@@ -21,6 +22,82 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
       'title': planTitle,
       'userId': user?.id,
     });
+  }
+
+  void _showJoinFamilyDialog() {
+    final TextEditingController codeController = TextEditingController();
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Join Family Plan'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Enter the invite code from your family administrator.'),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: codeController,
+                    decoration: const InputDecoration(
+                      labelText: 'Invite Code',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          final code = codeController.text.trim();
+                          if (code.isEmpty) return;
+
+                          setState(() => isSubmitting = true);
+
+                          try {
+                            await ref.read(authRepositoryProvider).joinFamily(code);
+                            if (!context.mounted) return;
+                            
+                            // Refresh user state
+                            ref.invalidate(userProvider);
+                            
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Successfully joined the family plan!')),
+                            );
+                            // Optionally redirect to patient home
+                            context.go('/patient_home');
+                          } catch (e) {
+                            if (!context.mounted) return;
+                            setState(() => isSubmitting = false);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
+                            );
+                          }
+                        },
+                  child: isSubmitting
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Join'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -85,6 +162,15 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
               isFamily: true,
               theme: theme,
             ),
+            const SizedBox(height: 32),
+            TextButton(
+              onPressed: _showJoinFamilyDialog,
+              child: const Text(
+                "Have a family invite code? Join here.",
+                style: TextStyle(decoration: TextDecoration.underline),
+              ),
+            ),
+            const SizedBox(height: 16),
           ],
         ),
       ),

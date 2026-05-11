@@ -234,4 +234,31 @@ class AuthRepository {
       throw Exception("Upgrade failed: $e");
     }
   }
+
+  // --- FAMILY PLAN ---
+
+  Future<String> generateFamilyInvite() async {
+    try {
+      final response = await _dio.get('/api/v1/family/invite-code');
+      return response.data['invite_code'];
+    } on DioException catch (e) {
+      final msg = e.response?.data['detail'] ?? "Failed to generate invite.";
+      throw Exception(msg);
+    } catch (e) {
+      throw Exception("Generate invite failed: \$e");
+    }
+  }
+
+  Future<void> joinFamily(String inviteCode) async {
+    try {
+      await _dio.post('/api/v1/family/join', data: {
+        'invite_code': inviteCode,
+      });
+    } on DioException catch (e) {
+      final msg = e.response?.data['detail'] ?? "Failed to join family plan.";
+      throw Exception(msg);
+    } catch (e) {
+      throw Exception("Join family failed: \$e");
+    }
+  }
 }

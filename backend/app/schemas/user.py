@@ -64,6 +64,20 @@ class UserResponse(UserBase):
     kin_phone: Optional[str] = None
     emergency_sms_enabled: Optional[bool] = False
 
+    # Family Plan
+    primary_account_id: Optional[int] = None
+    dependents: Optional[list['DependentUser']] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+class DependentUser(BaseModel):
+    id: int
+    first_name: str
+    last_name: str
+    email: EmailStr
+    plan: str
+    image_url: Optional[str] = None
+    
     model_config = ConfigDict(from_attributes=True)
 
 # Auth Schemas
