@@ -1,18 +1,38 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_paystack_plus/flutter_paystack_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mediq_app/src/core/constants/api_keys.dart';
+import 'package:mediq_app/src/core/api/api_constants.dart';
+import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+/// Payment screen — secure server-side checkout flow.
+///
+/// Architecture
+/// ------------
+/// 1. The screen calls  POST /api/v1/payments/initialize  on the MDQ+ backend.
+/// 2. The backend proxies the request to Paystack using the Secret Key
+///    (which never leaves the server).
+/// 3. The backend returns an `authorization_url`.
+/// 4. The frontend opens that URL in the device browser via url_launcher.
+/// 5. After the user completes payment, Paystack fires a webhook to the backend
+///    which confirms the appointment / subscription in the database.
+/// 6. The frontend shows a "Awaiting confirmation" state and pops back to the
+///    calling screen with the reference string so that screen can poll or
+///    display a pending badge while the webhook arrives.
 class PaymentScreen extends ConsumerStatefulWidget {
   final String transactionType;
   final double baseAmount;
   final String title;
 
-  /// Optional IDs embedded in the reference so the backend webhook can
-  /// identify the record even when flutter_paystack strips the metadata.
+  /// Optional IDs embedded in the reference so the backend webhook/watchdog
+  /// can identify the correct DB row.
   final int? appointmentId;
   final int? userId;
+
+  /// A pre-generated backend reference. When provided (e.g. from the
+  /// appointments router), this exact string is used. Otherwise the screen
+  /// generates one locally in the standard MDQ format.
   final String? paystackReference;
 
   const PaymentScreen({
@@ -30,8 +50,18 @@ class PaymentScreen extends ConsumerStatefulWidget {
 }
 
 class _PaymentScreenState extends ConsumerState<PaymentScreen> {
+  // ── State ────────────────────────────────────────────────────────────────────
+  bool _isLoading = false;
 
-  // ── Fee calculation ─────────────────────────────────────────────────────────
+  /// Set to true once the browser has been launched. The UI transitions to
+  /// an "Awaiting confirmation" view so the user knows what to expect.
+  bool _awaitingWebhook = false;
+
+  /// The reference used for this checkout session (either pre-supplied by the
+  /// backend or generated locally).
+  late String _reference;
+
+  // ── Fee calculation ──────────────────────────────────────────────────────────
   double get _processingFee => (widget.baseAmount * 0.015) + 100.0;
   double get _totalAmount => widget.baseAmount + _processingFee;
 
@@ -40,55 +70,94 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
 
   String _formatCurrency(double amount) => '₦${amount.toStringAsFixed(2)}';
 
-  // ── Checkout ────────────────────────────────────────────────────────────────
-  Future<void> _handlePayment() async {
-    // Get the signed-in user's email to attach to the charge.
-    final user = ref.read(userProvider).value;
-    final email = user?.email ?? 'customer@mediqplus.app';
-
-    // Build a unique reference so we can reconcile on the backend.
-    // Format: MDQ-{type}-{appointmentId}-{userId}-{timestamp}
-    // The IDs are embedded here because flutter_paystack strips custom metadata.
-    // Use the backend-generated reference if available, otherwise generate locally.
+  // ── Lifecycle ────────────────────────────────────────────────────────────────
+  @override
+  void initState() {
+    super.initState();
     final appointmentId = widget.appointmentId ?? 0;
     final userId = widget.userId ?? 0;
-    final reference = widget.paystackReference ??
-        'MDQ-${widget.transactionType}-$appointmentId-$userId-${DateTime.now().millisecondsSinceEpoch}';
+    // Use the backend-supplied reference when available; otherwise generate one
+    // locally using the canonical MDQ format so the webhook can parse it.
+    _reference = widget.paystackReference ??
+        'MDQ-${widget.transactionType}-$appointmentId-$userId-'
+            '${DateTime.now().millisecondsSinceEpoch}';
+  }
 
-    // Show a non-blocking "Connecting…" snackbar while the sheet opens.
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('Connecting to secure gateway…'),
-      behavior: SnackBarBehavior.floating,
-      duration: Duration(seconds: 2),
-    ));
+  // ── Checkout logic ───────────────────────────────────────────────────────────
+
+  /// Calls the secure backend initialization endpoint and opens the returned
+  /// Paystack `authorization_url` in the device browser.
+  Future<void> _handlePayment() async {
+    final userAsync = ref.read(userProvider);
+    final user = userAsync.value;
+    final email = user?.email ?? 'customer@mediqplus.app';
+
+    setState(() => _isLoading = true);
 
     try {
-      await FlutterPaystackPlus.openPaystackPopup(
-        context: context,
-        customerEmail: email,
-        amount: _totalAmountInKobo.toString(), 
-        reference: reference,
-        secretKey: paystackSecretKey,
-        callBackUrl: 'https://api.mdqplus.com', // Dummy URL to trigger WebView closure
-        onSuccess: () {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).clearSnackBars();
-          _showSnack('Payment Successful! Reference: $reference');
-          Navigator.of(context).pop(reference);
+      // ── Step 1: Call the backend to initialize the transaction ─────────────
+      final dio = ref.read(dioProvider);
+      final response = await dio.post(
+        '${ApiConstants.baseUrl}/api/v1/payments/initialize',
+        data: {
+          'email': email,
+          'amount': _totalAmountInKobo,
+          'reference': _reference,
         },
-        onClosed: () {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).clearSnackBars();
-          _showSnack('Payment was cancelled.', isError: true);
-        },
+        options: Options(
+          contentType: 'application/json',
+          receiveTimeout: const Duration(seconds: 20),
+        ),
       );
+
+      final authorizationUrl = response.data['authorization_url'] as String?;
+
+      if (authorizationUrl == null || authorizationUrl.isEmpty) {
+        _showSnack(
+          'Payment gateway returned an invalid URL. Please try again.',
+          isError: true,
+        );
+        return;
+      }
+
+      // ── Step 2: Launch the checkout URL in the device browser ──────────────
+      final uri = Uri.parse(authorizationUrl);
+      if (!await canLaunchUrl(uri)) {
+        _showSnack(
+          'Cannot open the payment page. Please check your browser settings.',
+          isError: true,
+        );
+        return;
+      }
+
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+      // ── Step 3: Transition UI to "Awaiting confirmation" state ────────────
+      // The actual DB update is handled by the backend webhook. The frontend
+      // pops back with the reference so the calling screen can display a
+      // "Payment pending" badge or poll the status.
+      if (mounted) {
+        setState(() => _awaitingWebhook = true);
+      }
+    } on DioException catch (e) {
+      final serverMsg = e.response?.data is Map
+          ? e.response?.data['detail'] ?? e.message
+          : e.message;
+      _showSnack('Payment error: $serverMsg', isError: true);
+      debugPrint('[PAYMENTS] DioException during initialize: $e');
     } catch (e) {
-      // Any exception from the SDK — surface the exact message so we can debug.
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).clearSnackBars();
-      _showSnack('Checkout error: ${e.toString()}', isError: true);
-      debugPrint('[PAYSTACK] Checkout exception: $e');
+      _showSnack('Unexpected error: ${e.toString()}', isError: true);
+      debugPrint('[PAYMENTS] Unexpected error during initialize: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  /// Called when the user taps "Done" after the browser has been opened.
+  /// Returns the reference to the previous screen so it can display a
+  /// pending-payment indicator or trigger a status poll.
+  void _dismissToCallerWithReference() {
+    Navigator.of(context).pop(_reference);
   }
 
   void _showSnack(String message, {bool isError = false}) {
@@ -100,11 +169,11 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      duration: const Duration(seconds: 5),
+      duration: const Duration(seconds: 6),
     ));
   }
 
-  // ── Build ───────────────────────────────────────────────────────────────────
+  // ── Build ────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -112,8 +181,10 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Checkout',
-            style: TextStyle(fontWeight: FontWeight.w600)),
+        title: const Text(
+          'Checkout',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
         centerTitle: true,
         elevation: 0,
         backgroundColor: Colors.transparent,
@@ -121,114 +192,246 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // ── Order Summary Card ────────────────────────────────────────
-              Card(
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  side: BorderSide(color: cs.outlineVariant.withOpacity(0.5)),
-                ),
-                color: cs.surface,
-                child: Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('ORDER SUMMARY',
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: cs.onSurfaceVariant,
-                            letterSpacing: 1.2,
-                            fontWeight: FontWeight.w600,
-                          )),
-                      const SizedBox(height: 12),
-                      Text(widget.title,
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: cs.onSurface,
-                          )),
-                      const SizedBox(height: 32),
-                      _PriceRow(
-                        label: 'Subtotal',
-                        amount: _formatCurrency(widget.baseAmount),
-                        theme: theme,
-                      ),
-                      const SizedBox(height: 16),
-                      _PriceRow(
-                        label: 'Processing Fee (1.5% + ₦100)',
-                        amount: _formatCurrency(_processingFee),
-                        theme: theme,
-                      ),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 20.0),
-                        child: Divider(height: 1),
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text('Total',
-                              style: theme.textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                color: cs.onSurface,
-                              )),
-                          Text(_formatCurrency(_totalAmount),
-                              style: theme.textTheme.headlineSmall?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                color: cs.primary,
-                              )),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              const Spacer(),
-
-              // ── Security badge ─────────────────────────────────────────────
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.lock_rounded,
-                      size: 16, color: cs.onSurfaceVariant),
-                  const SizedBox(width: 8),
-                  Text('Secured by Paystack',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: cs.onSurfaceVariant,
-                        fontWeight: FontWeight.w500,
-                      )),
-                ],
-              ),
-              const SizedBox(height: 24),
-
-              // ── Pay button ──────────────────────────────────────────────────
-              SizedBox(
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _handlePayment,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: cs.primary,
-                    foregroundColor: cs.onPrimary,
-                    disabledBackgroundColor: cs.primary.withOpacity(0.5),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                    elevation: 0,
-                  ),
-                  child: Text(
-                    'Pay ${_formatCurrency(_totalAmount)}',
-                    style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.5),
-                  ),
-                ),
-              ),
-            ],
-          ),
+          child: _awaitingWebhook
+              ? _buildAwaitingConfirmationView(theme, cs)
+              : _buildSummaryView(theme, cs),
         ),
       ),
+    );
+  }
+
+  // ── Summary view (before checkout is opened) ─────────────────────────────────
+  Widget _buildSummaryView(ThemeData theme, ColorScheme cs) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── Order Summary Card ────────────────────────────────────────────────
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: cs.outlineVariant.withOpacity(0.5)),
+          ),
+          color: cs.surface,
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'ORDER SUMMARY',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: cs.onSurfaceVariant,
+                    letterSpacing: 1.2,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  widget.title,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: cs.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 32),
+                _PriceRow(
+                  label: 'Subtotal',
+                  amount: _formatCurrency(widget.baseAmount),
+                  theme: theme,
+                ),
+                const SizedBox(height: 16),
+                _PriceRow(
+                  label: 'Processing Fee (1.5% + ₦100)',
+                  amount: _formatCurrency(_processingFee),
+                  theme: theme,
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 20.0),
+                  child: Divider(height: 1),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Total',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: cs.onSurface,
+                      ),
+                    ),
+                    Text(
+                      _formatCurrency(_totalAmount),
+                      style: theme.textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: cs.primary,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const Spacer(),
+
+        // ── Security badge ────────────────────────────────────────────────────
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.lock_rounded, size: 16, color: cs.onSurfaceVariant),
+            const SizedBox(width: 8),
+            Text(
+              'Secured by Paystack',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: cs.onSurfaceVariant,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 24),
+
+        // ── Pay button ────────────────────────────────────────────────────────
+        SizedBox(
+          height: 56,
+          child: ElevatedButton(
+            onPressed: _isLoading ? null : _handlePayment,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: cs.primary,
+              foregroundColor: cs.onPrimary,
+              disabledBackgroundColor: cs.primary.withOpacity(0.5),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              elevation: 0,
+            ),
+            child: _isLoading
+                ? const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: Colors.white,
+                    ),
+                  )
+                : Text(
+                    'Pay ${_formatCurrency(_totalAmount)}',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Awaiting webhook confirmation view ───────────────────────────────────────
+  Widget _buildAwaitingConfirmationView(ThemeData theme, ColorScheme cs) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── Animated icon ─────────────────────────────────────────────────────
+        Center(
+          child: Container(
+            width: 96,
+            height: 96,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: cs.primaryContainer,
+            ),
+            child: Icon(
+              Icons.hourglass_top_rounded,
+              size: 48,
+              color: cs.primary,
+            ),
+          ),
+        ),
+        const SizedBox(height: 32),
+
+        // ── Heading ───────────────────────────────────────────────────────────
+        Text(
+          'Awaiting Payment Confirmation',
+          textAlign: TextAlign.center,
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: cs.onSurface,
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // ── Body copy ─────────────────────────────────────────────────────────
+        Text(
+          'Complete your payment in the browser that just opened.\n\n'
+          'Once Paystack processes your payment, your appointment will be '
+          'confirmed automatically — no further action is needed here.',
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: cs.onSurfaceVariant,
+            height: 1.6,
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // ── Reference chip ────────────────────────────────────────────────────
+        Center(
+          child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              'Ref: $_reference',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: cs.onSurfaceVariant,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 48),
+
+        // ── Done button ───────────────────────────────────────────────────────
+        SizedBox(
+          height: 56,
+          child: ElevatedButton(
+            onPressed: _dismissToCallerWithReference,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: cs.primary,
+              foregroundColor: cs.onPrimary,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              elevation: 0,
+            ),
+            child: const Text(
+              'Done',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // ── Re-open browser link ──────────────────────────────────────────────
+        TextButton(
+          onPressed: _handlePayment,
+          child: Text(
+            'Re-open payment page',
+            style: TextStyle(color: cs.primary),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -239,7 +442,11 @@ class _PriceRow extends StatelessWidget {
   final String amount;
   final ThemeData theme;
 
-  const _PriceRow({required this.label, required this.amount, required this.theme});
+  const _PriceRow({
+    required this.label,
+    required this.amount,
+    required this.theme,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -247,14 +454,19 @@ class _PriceRow extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Expanded(
-          child: Text(label,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+          child: Text(
+            label,
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
         ),
-        Text(amount,
-            style: theme.textTheme.bodyLarge?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: theme.colorScheme.onSurface)),
+        Text(
+          amount,
+          style: theme.textTheme.bodyLarge?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: theme.colorScheme.onSurface,
+          ),
+        ),
       ],
     );
   }

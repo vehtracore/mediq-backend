@@ -4,6 +4,10 @@ Payments Router
 Owns all Paystack-facing HTTP surface area for the MDQ+ platform.
 
 Exposes:
+  POST /api/v1/payments/initialize     — Server-side Paystack transaction init.
+                                         Accepts (email, amount_kobo, reference)
+                                         and returns an authorization_url so the
+                                         Secret Key never touches the client.
   POST /api/v1/payments/webhook        — HMAC-verified Paystack webhook with
                                          reference-based routing and a Dead
                                          Letter Queue (DLQ) fallback.
@@ -36,6 +40,7 @@ from datetime import datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -54,8 +59,127 @@ if not PAYSTACK_SECRET_KEY:
     )
 
 PAYSTACK_VERIFY_URL = "https://api.paystack.co/transaction/verify"
+PAYSTACK_INITIALIZE_URL = "https://api.paystack.co/transaction/initialize"
 
 router = APIRouter()
+
+
+# ─── Schemas ──────────────────────────────────────────────────────────────────
+
+class PaymentInitializeRequest(BaseModel):
+    """
+    Request body for POST /api/v1/payments/initialize.
+
+    Fields
+    ------
+    email      : The customer's email address forwarded to Paystack.
+    amount     : Transaction amount in **Kobo** (Naira × 100). Must be > 0.
+    reference  : The pre-generated MDQ reference string. The backend stores this
+                 on the Appointment row before calling /initialize so the watchdog
+                 and webhook can locate the record immediately upon receipt.
+    """
+
+    email: EmailStr
+    amount: int = Field(..., gt=0, description="Amount in Kobo (Naira × 100)")
+    reference: str = Field(..., min_length=8, description="MDQ-prefixed transaction reference")
+
+
+# ─── Initialize Endpoint ──────────────────────────────────────────────────────
+
+@router.post("/initialize", status_code=200)
+async def initialize_transaction(payload: PaymentInitializeRequest):
+    """
+    POST /api/v1/payments/initialize
+
+    Exchanges the client-supplied (email, amount, reference) for a Paystack
+    ``authorization_url`` and ``access_code``.  The Secret Key is used here on
+    the server and is never forwarded to the Flutter client.
+
+    Flow
+    ----
+    1. Flutter builds the MDQ reference and calls this endpoint.
+    2. This endpoint calls Paystack /transaction/initialize with the Secret Key.
+    3. Paystack returns an authorization_url + access_code.
+    4. We return those two values to the Flutter app.
+    5. Flutter opens the authorization_url in a WebView (flutter_paystack_plus
+       can accept a checkout URL directly, no Secret Key required).
+    6. After the user pays, Paystack fires a webhook to /webhook which confirms
+       the DB record using the same reference.
+
+    Error responses
+    ---------------
+    503  Payment service unavailable — PAYSTACK_SECRET_KEY not configured.
+    502  Bad Gateway              — Could not reach Paystack.
+    400  Bad Request              — Paystack rejected the initialization request.
+    """
+
+    if not PAYSTACK_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Payment service unavailable — secret key not configured.",
+        )
+
+    headers = {
+        "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "email": payload.email,
+        "amount": payload.amount,
+        "reference": payload.reference,
+    }
+
+    logger.info(
+        "[PAYMENTS] Initializing transaction | reference='%s' | email='%s' | amount=%d kobo",
+        payload.reference,
+        payload.email,
+        payload.amount,
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                PAYSTACK_INITIALIZE_URL,
+                headers=headers,
+                json=body,
+            )
+    except httpx.RequestError as exc:
+        logger.error("[PAYMENTS] HTTP error reaching Paystack /initialize: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not reach Paystack. Please try again.",
+        )
+
+    resp_data: dict = resp.json()
+
+    if not resp.is_success or not resp_data.get("status"):
+        error_msg: str = resp_data.get("message", "Unknown error from Paystack")
+        logger.error(
+            "[PAYMENTS] ❌ Paystack initialization failed | HTTP %s | message='%s' | reference='%s'",
+            resp.status_code,
+            error_msg,
+            payload.reference,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Paystack error: {error_msg}",
+        )
+
+    tx: dict = resp_data.get("data", {})
+    authorization_url: str = tx.get("authorization_url", "")
+    access_code: str = tx.get("access_code", "")
+
+    logger.info(
+        "[PAYMENTS] ✅ Transaction initialized | reference='%s' | access_code='%s'",
+        payload.reference,
+        access_code,
+    )
+
+    return {
+        "authorization_url": authorization_url,
+        "access_code": access_code,
+        "reference": payload.reference,
+    }
 
 
 # ─── Shared helpers ───────────────────────────────────────────────────────────
