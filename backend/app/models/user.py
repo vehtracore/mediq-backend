@@ -35,6 +35,13 @@ class User(Base):
     burst_chat_count = Column(Integer, default=0)
     burst_start_time = Column(DateTime, nullable=True)
 
+    # Lab / Gemini Vision Limits
+    # Tracks how many AI urinalysis scans the user has made this calendar month.
+    # Reset inline: when last_lab_reset is not in the current year+month, the
+    # endpoint zeroes monthly_lab_count before checking the cap.
+    monthly_lab_count = Column(Integer, default=0, nullable=False)
+    last_lab_reset = Column(Date, nullable=True)
+
     # --- 🏥 MEDICAL HISTORY ---
     blood_type = Column(String, nullable=True)
     allergies = Column(String, nullable=True)          # Store as text "Peanuts, Penicillin"

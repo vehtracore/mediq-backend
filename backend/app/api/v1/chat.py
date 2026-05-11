@@ -36,35 +36,54 @@ async def analyze_symptoms(
     now = datetime.utcnow()
     today = now.date()
 
-    # ... (Limiting logic omitted for brevity, assuming it's unchanged above) ...
+    # ── 1. Inline daily reset ────────────────────────────────────────────────
+    # If the user's last_chat_date is before today (or has never been set),
+    # roll the counter back to zero so the new day starts fresh.
+    # This avoids any background cron job — the reset is lazy and happens on
+    # the first request of each day.
+    if current_user.last_chat_date is None or current_user.last_chat_date < today:
+        current_user.daily_chat_count = 0
+        current_user.last_chat_date = today
 
-    # 4. Process Request (Now with image_url, context, history AND language)
-    
-    # Calculate Age
+    # ── 2. Enforce daily quota ───────────────────────────────────────────────
+    # Free  → 3 AI diagnostic messages per day
+    # Premium → 30 AI diagnostic messages per day
+    daily_limit: int = 30 if current_user.plan == "premium" else 3
+
+    if current_user.daily_chat_count >= daily_limit:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Daily AI diagnostic limit reached. "
+                "Please try again tomorrow or upgrade your plan."
+            ),
+        )
+
+    # ── 3. Build user context for the AI ────────────────────────────────────
     user_age = "Unknown"
     if current_user.dob:
-        user_age = (now.date() - current_user.dob).days // 365
-        
+        user_age = (today - current_user.dob).days // 365
+
     user_context = {
         "age": f"{user_age} years old",
-        "conditions": current_user.chronic_conditions if current_user.chronic_conditions else "None"
+        "conditions": current_user.chronic_conditions or "None",
     }
 
-    # Sanitise and pass language to the AI service
+    # ── 4. Call Gemini ───────────────────────────────────────────────────────
     target_language = chat_request.language or "English"
 
     ai_response = await ai_service.get_medical_response(
-        chat_request.message, 
+        chat_request.message,
         history=chat_request.history,
         image_url=chat_request.image_url,
         user_context=user_context,
-        target_language=target_language
+        target_language=target_language,
     )
 
-    # 5. Increment Counters
+    # ── 5. Persist updated counters ──────────────────────────────────────────
     current_user.daily_chat_count += 1
     current_user.burst_chat_count += 1
-    
+
     db.add(current_user)
     db.commit()
 

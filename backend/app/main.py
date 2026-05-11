@@ -103,6 +103,22 @@ def _apply_schema_patches():
         ON appointments (paystack_reference)
         WHERE paystack_reference IS NOT NULL;
         """,
+        # ── AI quota tracking columns (added 2026-05-11) ─────────────────────
+        # last_chat_date — used by /api/v1/chat/analyze for inline daily resets
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS last_chat_date DATE NULL;
+        """,
+        # monthly_lab_count — hard cap on Gemini Vision calls per calendar month
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS monthly_lab_count INTEGER NOT NULL DEFAULT 0;
+        """,
+        # last_lab_reset — the date (year+month) the monthly counter was last zeroed
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS last_lab_reset DATE NULL;
+        """,
     ]
     with engine.connect() as conn:
         from sqlalchemy import text
