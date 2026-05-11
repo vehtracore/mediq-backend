@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/core/api/api_constants.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:mediq_app/src/core/constants/api_keys.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -97,12 +98,16 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
     try {
       // ── Step 1: Call the backend to initialize the transaction ─────────────
       final dio = ref.read(dioProvider);
+      final planCode = _planCodeForType(widget.transactionType);
+
       final response = await dio.post(
         '${ApiConstants.baseUrl}/api/v1/payments/initialize',
         data: {
           'email': email,
           'amount': _totalAmountInKobo,
           'reference': _reference,
+          // Only included for subscription types; null is omitted by Dio
+          if (planCode != null) 'plan': planCode,
         },
         options: Options(
           contentType: 'application/json',
@@ -158,6 +163,23 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
   /// pending-payment indicator or trigger a status poll.
   void _dismissToCallerWithReference() {
     Navigator.of(context).pop(_reference);
+  }
+
+  /// Returns the Paystack Plan Code for recurring subscription types,
+  /// or null for one-time consultation payments.
+  ///
+  /// The plan code is forwarded to the backend /initialize endpoint so
+  /// Paystack creates a recurring charge instead of a one-time transaction.
+  String? _planCodeForType(String transactionType) {
+    switch (transactionType) {
+      case 'subscription':
+        return individualPlanCode;
+      case 'family_subscription':
+        return familyPlanCode;
+      default:
+        // GP / specialist consultations are one-time charges — no plan code.
+        return null;
+    }
   }
 
   void _showSnack(String message, {bool isError = false}) {

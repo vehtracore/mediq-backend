@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, ForeignKey
+from sqlalchemy.orm import relationship, backref
 from sqlalchemy import func
 from app.core.database import Base
 from datetime import datetime
@@ -41,6 +42,22 @@ class User(Base):
     # endpoint zeroes monthly_lab_count before checking the cap.
     monthly_lab_count = Column(Integer, default=0, nullable=False)
     last_lab_reset = Column(Date, nullable=True)
+
+    # --- 👨‍👩‍👧 FAMILY PLAN ---
+    # Self-referential FK. NULL → this user is a primary account holder.
+    # Non-null → this user is a dependent linked to the given primary user ID.
+    # ON DELETE SET NULL ensures removing the primary account unlinks dependents
+    # gracefully rather than cascade-deleting them.
+    primary_account_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # Bidirectional relationship:
+    #   primary_user.dependents  → list of User objects linked to this account
+    #   dependent_user.primary_account → the User object they are linked under
+    dependents = relationship(
+        "User",
+        backref=backref("primary_account", remote_side="User.id"),
+        foreign_keys=[primary_account_id],
+    )
 
     # --- 🏥 MEDICAL HISTORY ---
     blood_type = Column(String, nullable=True)

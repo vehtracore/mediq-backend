@@ -119,6 +119,21 @@ def _apply_schema_patches():
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS last_lab_reset DATE NULL;
         """,
+        # ── Family Plan: self-referential account linking (added 2026-05-11) ──
+        # primary_account_id = NULL  → primary account holder
+        # primary_account_id = <id>  → dependent linked to that primary user
+        # ON DELETE SET NULL ensures dependents are unlinked (not deleted) when
+        # the primary account is removed.
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS primary_account_id INTEGER
+            REFERENCES users(id) ON DELETE SET NULL;
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_users_primary_account_id
+        ON users (primary_account_id)
+        WHERE primary_account_id IS NOT NULL;
+        """,
     ]
     with engine.connect() as conn:
         from sqlalchemy import text

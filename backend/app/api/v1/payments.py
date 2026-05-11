@@ -41,6 +41,7 @@ from datetime import datetime, timedelta
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
+from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -74,14 +75,24 @@ class PaymentInitializeRequest(BaseModel):
     ------
     email      : The customer's email address forwarded to Paystack.
     amount     : Transaction amount in **Kobo** (Naira × 100). Must be > 0.
+                 Required by Paystack even when a plan code is supplied.
     reference  : The pre-generated MDQ reference string. The backend stores this
                  on the Appointment row before calling /initialize so the watchdog
                  and webhook can locate the record immediately upon receipt.
+    plan       : Optional Paystack Plan Code (e.g. ``PLN_xxxx``) for recurring
+                 subscriptions. When present, Paystack will create a subscription
+                 against this plan instead of a one-time charge. Omit entirely
+                 (or pass null) for one-time consultation payments.
     """
 
     email: EmailStr
     amount: int = Field(..., gt=0, description="Amount in Kobo (Naira × 100)")
     reference: str = Field(..., min_length=8, description="MDQ-prefixed transaction reference")
+    plan: Optional[str] = Field(
+        default=None,
+        description="Paystack Plan Code for recurring subscriptions (e.g. PLN_xxxx). "
+                    "Omit for one-time payments.",
+    )
 
 
 # ─── Initialize Endpoint ──────────────────────────────────────────────────────
@@ -123,17 +134,24 @@ async def initialize_transaction(payload: PaymentInitializeRequest):
         "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
         "Content-Type": "application/json",
     }
-    body = {
+    # Base payload — amount is always required by Paystack even for plan-based
+    # recurring charges, so we never omit it regardless of whether plan is set.
+    body: dict = {
         "email": payload.email,
         "amount": payload.amount,
         "reference": payload.reference,
     }
+    # Conditionally attach the Plan Code for recurring subscriptions.
+    if payload.plan:
+        body["plan"] = payload.plan
 
     logger.info(
-        "[PAYMENTS] Initializing transaction | reference='%s' | email='%s' | amount=%d kobo",
+        "[PAYMENTS] Initializing transaction | reference='%s' | email='%s' "
+        "| amount=%d kobo | plan=%s",
         payload.reference,
         payload.email,
         payload.amount,
+        payload.plan or "(one-time)",
     )
 
     try:
@@ -206,6 +224,8 @@ def _parse_reference(reference: str) -> tuple[str, str | None, str | None]:
         transaction_type = "gp_consult"
     elif "specialist" in reference:
         transaction_type = "specialist_consult"
+    elif "family_subscription" in reference:   # must precede plain "sub" check
+        transaction_type = "family_subscription"
     elif "sub" in reference:
         transaction_type = "subscription"
 
@@ -229,41 +249,80 @@ def _apply_db_update(
     Raises ValueError with a descriptive message if the required IDs are
     missing or the target record is not found — callers must handle this.
     """
-    # ── Flow A: Subscription upgrade ──────────────────────────────────────────
-    if transaction_type == "subscription":
+    # ── Flow A: Individual subscription upgrade ───────────────────────────────
+    # ── Flow A2: Family Plan upgrade (payer + all dependents) ─────────────────
+    if transaction_type in ("subscription", "family_subscription"):
         if not ref_user_id:
             raise ValueError(
-                f"subscription: reference missing user_id segment (ref='{reference}')"
+                f"{transaction_type}: reference missing user_id segment (ref='{reference}')"
             )
 
         user: User | None = db.query(User).filter(User.id == int(ref_user_id)).first()
         if not user:
             raise ValueError(
-                f"subscription: user id={ref_user_id} not found"
+                f"{transaction_type}: user id={ref_user_id} not found"
             )
 
+        # ── Upgrade the primary payer ──────────────────────────────────────────
+        expiry = datetime.utcnow() + timedelta(days=30)
         user.plan = "premium"
-        user.subscription_expiry = datetime.utcnow() + timedelta(days=30)
+        user.subscription_expiry = expiry
         db.commit()
         db.refresh(user)
 
         logger.info(
-            "[PAYMENTS] ✅ Subscription upgraded — user_id=%s (%s) | expiry=%s",
+            "[PAYMENTS] ✅ Subscription upgraded — user_id=%s (%s) | type=%s | expiry=%s",
             user.id,
             user.email,
+            transaction_type,
             user.subscription_expiry,
         )
 
-        # ── Queue subscription confirmation email ──────────────────────────
+        # ── Flow A2 only: Bulk-upgrade all linked dependents ───────────────────
+        upgraded_dependents: list[int] = []
+        if transaction_type == "family_subscription":
+            dependents: list[User] = (
+                db.query(User)
+                .filter(User.primary_account_id == user.id)
+                .all()
+            )
+            for dep in dependents:
+                dep.plan = "premium"
+                dep.subscription_expiry = expiry
+
+            if dependents:
+                db.commit()
+                upgraded_dependents = [d.id for d in dependents]
+                logger.info(
+                    "[PAYMENTS] ✅ Family Plan — upgraded %d dependent(s) | ids=%s | expiry=%s",
+                    len(dependents),
+                    upgraded_dependents,
+                    expiry,
+                )
+            else:
+                logger.info(
+                    "[PAYMENTS] ℹ️  Family Plan — primary user_id=%s has no linked dependents.",
+                    user.id,
+                )
+
+        # ── Queue confirmation email ───────────────────────────────────────────
         if background_tasks and user.email:
             expiry_str = user.subscription_expiry.strftime('%d %B %Y')
+            plan_label = "MDQ+ Family Plan" if transaction_type == "family_subscription" else "MDQ+ Premium"
+            family_note = (
+                f"<p>This plan also covers <strong>{len(upgraded_dependents)} linked member(s)</strong> "
+                f"on your family account.</p>"
+                if transaction_type == "family_subscription"
+                else ""
+            )
             html_body = f"""
             <div style="font-family:sans-serif;max-width:520px;margin:auto;">
-              <h2 style="color:#4A90E2;">MDQ+ Premium Activated 🎉</h2>
+              <h2 style="color:#4A90E2;">{plan_label} Activated 🎉</h2>
               <p>Hi {user.first_name or 'there'},</p>
-              <p>Your <strong>MDQ+ Premium</strong> subscription is now active!</p>
+              <p>Your <strong>{plan_label}</strong> subscription is now active!</p>
               <p>Your plan has been upgraded and will remain active until
               <strong>{expiry_str}</strong>.</p>
+              {family_note}
               <p>You now have access to:</p>
               <ul>
                 <li>Unlimited AI health chats</li>
@@ -277,14 +336,16 @@ def _apply_db_update(
             background_tasks.add_task(
                 send_transactional_email,
                 to_email=user.email,
-                subject="MDQ+ Premium Activated 🎉",
+                subject=f"{plan_label} Activated 🎉",
                 html_body=html_body,
             )
 
         return {
             "action": "subscription_upgraded",
+            "plan": transaction_type,
             "user_id": user.id,
             "expiry": str(user.subscription_expiry),
+            "dependents_upgraded": upgraded_dependents,
         }
 
     # ── Flow B: Appointment payment confirmation ───────────────────────────────
