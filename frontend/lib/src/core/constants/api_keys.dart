@@ -10,11 +10,12 @@ library;
 //   POST /api/v1/payments/initialize
 // The frontend only holds the Public Key below for reference; it is NOT
 // passed to any SDK call — the backend returns an authorization_url instead.
-const String paystackPublicKey = 'pk_test_5e33cafde60e1d571c9bc31539df71796bf60d14';
+const String paystackPublicKey =
+    'pk_test_5e33cafde60e1d571c9bc31539df71796bf60d14';
 // ↑ Replace with your actual key from https://dashboard.paystack.com/#/settings/developer
 
 // Paystack recurring Plan Codes — safe to store on the client (not secret).
 // These are passed to the backend /initialize endpoint so Paystack can create
 // a recurring subscription instead of a one-time charge.
-const String individualPlanCode = 'PLN_cdi2rapcohe8zst';
-const String familyPlanCode = 'PLN_vs1as05c6302132';
+const String individualPlanCode = 'PLN_92o23tulrohyve4';
+const String familyPlanCode = 'PLN_jb2m1yq93cun6x3';

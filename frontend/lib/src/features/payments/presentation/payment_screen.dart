@@ -63,8 +63,9 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
   late String _reference;
 
   // ── Fee calculation ──────────────────────────────────────────────────────────
-  double get _processingFee => (widget.baseAmount * 0.015) + 100.0;
-  double get _totalAmount => widget.baseAmount + _processingFee;
+  // Paystack adds its processing fees automatically at the checkout URL based
+  // on our merchant settings. We only pass the base subscription/consult amount.
+  double get _totalAmount => widget.baseAmount;
 
   // Paystack expects amounts in Kobo (smallest Naira unit). Multiply by 100.
   int get _totalAmountInKobo => (_totalAmount * 100).toInt();
@@ -75,13 +76,6 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
   @override
   void initState() {
     super.initState();
-    final appointmentId = widget.appointmentId ?? 0;
-    final userId = widget.userId ?? 0;
-    // Use the backend-supplied reference when available; otherwise generate one
-    // locally using the canonical MDQ format so the webhook can parse it.
-    _reference = widget.paystackReference ??
-        'MDQ-${widget.transactionType}-$appointmentId-$userId-'
-            '${DateTime.now().millisecondsSinceEpoch}';
   }
 
   // ── Checkout logic ───────────────────────────────────────────────────────────
@@ -95,6 +89,15 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
 
     setState(() => _isLoading = true);
 
+    final appointmentId = widget.appointmentId ?? 0;
+    final userId = widget.userId ?? 0;
+    final String dynamicReference = widget.paystackReference ??
+        'MDQ-${widget.transactionType}-$appointmentId-$userId-'
+            '${DateTime.now().millisecondsSinceEpoch}';
+    
+    // Cache it in state so the awaiting confirmation view and back navigation can use it.
+    _reference = dynamicReference;
+
     try {
       // ── Step 1: Call the backend to initialize the transaction ─────────────
       final dio = ref.read(dioProvider);
@@ -105,7 +108,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
         data: {
           'email': email,
           'amount': _totalAmountInKobo,
-          'reference': _reference,
+          'reference': dynamicReference,
           // Only included for subscription types; null is omitted by Dio
           if (planCode != null) 'plan': planCode,
         },
@@ -258,14 +261,14 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
                 ),
                 const SizedBox(height: 32),
                 _PriceRow(
-                  label: 'Subtotal',
+                  label: 'Base Amount',
                   amount: _formatCurrency(widget.baseAmount),
                   theme: theme,
                 ),
                 const SizedBox(height: 16),
                 _PriceRow(
-                  label: 'Processing Fee (1.5% + ₦100)',
-                  amount: _formatCurrency(_processingFee),
+                  label: 'Processing Fee',
+                  amount: 'Calculated at checkout',
                   theme: theme,
                 ),
                 const Padding(

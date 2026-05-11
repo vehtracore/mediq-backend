@@ -265,7 +265,7 @@ def _apply_db_update(
 
         # ── Upgrade the primary payer ──────────────────────────────────────────
         expiry = datetime.utcnow() + timedelta(days=30)
-        user.plan = "premium"
+        user.plan = "family" if transaction_type == "family_subscription" else "premium"
         user.subscription_expiry = expiry
         db.commit()
         db.refresh(user)
@@ -287,7 +287,7 @@ def _apply_db_update(
                 .all()
             )
             for dep in dependents:
-                dep.plan = "premium"
+                dep.plan = "family"
                 dep.subscription_expiry = expiry
 
             if dependents:

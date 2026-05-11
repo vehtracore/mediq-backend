@@ -13,10 +13,10 @@ class SubscriptionScreen extends ConsumerStatefulWidget {
 class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
   final bool _isLoading = false;
 
-  void _handleSubscribe({required String planTitle, required double parsedPrice}) {
+  void _handleSubscribe({required String planTitle, required double parsedPrice, required bool isFamily}) {
     final user = ref.read(userProvider).value;
     context.push('/payment', extra: {
-      'transactionType': 'subscription',
+      'transactionType': isFamily ? 'family_subscription' : 'subscription',
       'baseAmount': parsedPrice,
       'title': planTitle,
       'userId': user?.id,
@@ -73,7 +73,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
             _buildPlanCard(
               context,
               title: "Family Plan",
-              price: "₦7,500/mo",
+              price: "₦10,000/mo",
               features: [
                 "4 Independent Premium Accounts",
                 "Private Medical Records for each",
@@ -198,6 +198,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                       _handleSubscribe(
                         planTitle: title,
                         parsedPrice: parsedPrice,
+                        isFamily: isFamily,
                       );
                     },
                     style: ElevatedButton.styleFrom(
