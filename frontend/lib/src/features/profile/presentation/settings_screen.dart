@@ -48,7 +48,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   bool get _isPremium {
     final user = ref.read(userProvider).value;
-    return user?.subscriptionTier == 'premium';
+    return user?.isPremium ?? false;
   }
 
   /// Saves general toggles (theme / notifications / email)

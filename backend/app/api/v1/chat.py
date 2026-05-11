@@ -46,9 +46,11 @@ async def analyze_symptoms(
         current_user.last_chat_date = today
 
     # ── 2. Enforce daily quota ───────────────────────────────────────────────
-    # Free  → 3 AI diagnostic messages per day
+    # Free    →  3 AI diagnostic messages per day
     # Premium → 30 AI diagnostic messages per day
-    daily_limit: int = 30 if current_user.plan == "premium" else 3
+    # Family  → 30 AI diagnostic messages per day (same as Premium)
+    _PAID_PLANS = {"premium", "family"}
+    daily_limit: int = 30 if current_user.plan in _PAID_PLANS else 3
 
     if current_user.daily_chat_count >= daily_limit:
         raise HTTPException(

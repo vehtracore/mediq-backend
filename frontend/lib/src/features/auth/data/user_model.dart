@@ -29,6 +29,10 @@ class User {
   final String? primaryAccountId;
   final List<DependentUser> dependents;
 
+  // --- 💎 Premium Check ---
+  bool get isPremium => subscriptionTier == 'premium' || subscriptionTier == 'family';
+  bool get isFamilyAdmin => subscriptionTier == 'family' && primaryAccountId == null;
+
   User({
     required this.id,
     required this.email,

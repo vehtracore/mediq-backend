@@ -103,8 +103,57 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(userProvider).value;
-    final isPremium = user?.subscriptionTier == 'premium';
+    final isFamilyUser = user?.subscriptionTier == 'family';
+    final isPremium = user?.isPremium ?? false;
     final theme = Theme.of(context);
+
+    if (isFamilyUser) {
+      return Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        appBar: AppBar(
+          title: const Text("Subscription"),
+          backgroundColor: theme.appBarTheme.backgroundColor,
+          foregroundColor: theme.appBarTheme.foregroundColor,
+          elevation: 0,
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.family_restroom, size: 64, color: Color(0xFFD4AF37)),
+                const SizedBox(height: 24),
+                Text(
+                  "You are on the Family Plan",
+                  style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  "Enjoy unlimited access to all premium features for you and your family.",
+                  style: theme.textTheme.bodyMedium,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 32),
+                if (user?.isFamilyAdmin ?? false)
+                  ElevatedButton.icon(
+                    onPressed: () => context.push('/family_dashboard'),
+                    icon: const Icon(Icons.dashboard),
+                    label: const Text("Go to Family Dashboard"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFD4AF37),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor, // ✅ Dynamic

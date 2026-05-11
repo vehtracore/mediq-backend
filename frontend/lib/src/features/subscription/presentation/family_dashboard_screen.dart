@@ -151,7 +151,7 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
                             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           ),
                           Text(
-                            "\$seatsUsed / \$totalSeats",
+                            "$seatsUsed / $totalSeats",
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
@@ -256,7 +256,7 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
                                     : '?')
                                 : null,
                           ),
-                          title: Text("\${dependent.firstName} \${dependent.lastName}"),
+                          title: Text("${dependent.firstName} ${dependent.lastName}"),
                           subtitle: Text(dependent.email),
                           trailing: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -278,7 +278,7 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
           );
         },
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, stack) => Center(child: Text("Error: \$error")),
+        error: (error, stack) => Center(child: Text("Error: $error")),
       ),
     );
   }

@@ -30,8 +30,11 @@ cloudinary.config(
 # Allowed image types
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
 
-# Monthly cap for Premium lab scans (Gemini Vision calls)
+# Monthly cap for Premium/Family lab scans (Gemini Vision calls)
 MONTHLY_LAB_LIMIT: int = 10
+
+# Plans that have access to AI lab analysis
+_LAB_ELIGIBLE_PLANS = {"premium", "family"}
 
 
 @router.post("/analyze", response_model=LabAnalysisResponse)
@@ -46,7 +49,7 @@ async def analyze_lab_image(
     Analyze a urinalysis test strip image.
 
     - Validates the uploaded file is an image
-    - Enforces a monthly Gemini Vision quota (10 scans / month for Premium)
+    - Enforces a monthly Gemini Vision quota (10 scans / month for Premium & Family)
     - Sends the image to Gemini Vision for analysis
     - On SUCCESS, uploads to Cloudinary, saves a draft LabResult record,
       and increments the user's monthly quota counter
@@ -54,7 +57,8 @@ async def analyze_lab_image(
     """
 
     # ── 0. Subscription gate ─────────────────────────────────────────────────
-    if current_user.plan != "premium":
+    # Both "premium" and "family" plan holders have access to AI Urinalysis.
+    if current_user.plan not in _LAB_ELIGIBLE_PLANS:
         raise HTTPException(
             status_code=403,
             detail="Upgrade to MDQ+ Premium to access AI Urinalysis.",
@@ -80,8 +84,8 @@ async def analyze_lab_image(
         current_user.last_lab_reset = today
 
     # ── 2. Enforce monthly quota ─────────────────────────────────────────────
-    # Premium users are capped at MONTHLY_LAB_LIMIT Gemini Vision calls per
-    # calendar month. The check runs before any file I/O so we fail fast.
+    # Premium/Family users are capped at MONTHLY_LAB_LIMIT Gemini Vision calls
+    # per calendar month. The check runs before any file I/O so we fail fast.
     if current_user.monthly_lab_count >= MONTHLY_LAB_LIMIT:
         raise HTTPException(
             status_code=429,

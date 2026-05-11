@@ -75,6 +75,12 @@ class ProfileScreen extends ConsumerWidget {
                     text: "Manage Subscription",
                     iconColor: Colors.amber,
                     onTap: () => context.push('/subscription')),
+                if (user != null && user.isFamilyAdmin)
+                  _buildProfileItem(context,
+                      icon: Icons.family_restroom,
+                      text: "Manage Family Plan",
+                      iconColor: const Color(0xFF4A90E2),
+                      onTap: () => context.push('/family_dashboard')),
                 _buildProfileItem(context,
                     icon: Icons.settings_outlined,
                     text: "Settings",
