@@ -34,6 +34,22 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
+            <!--
+                Supabase Auth deep link handler.
+                Catches: io.supabase.mediqapp://login-callback
+                Used for: password resets, magic links, email confirmations.
+                Supabase Dashboard → Auth → URL Configuration → Redirect URLs
+                must include:  io.supabase.mediqapp://login-callback
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data
+                    android:scheme="io.supabase.mediqapp"
+                    android:host="login-callback"/>
+            </intent-filter>
         </activity>
         <meta-data
             android:name="flutterEmbedding"

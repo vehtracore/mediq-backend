@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request, Form, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Form, File, UploadFile
 from fastapi.responses import HTMLResponse
 import uuid
 from pydantic import EmailStr
@@ -10,7 +10,7 @@ from app.models.doctor import Doctor
 from app.schemas.user import UserCreate, UserResponse, UserUpdate, DeviceTokenUpdate
 from app.schemas.doctor import DoctorResponse
 from app.api import deps
-from app.core.limiter import limiter
+
 from app.services.media_service import upload_image
 
 router = APIRouter()

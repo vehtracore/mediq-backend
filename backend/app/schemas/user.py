@@ -85,19 +85,5 @@ class DependentUser(BaseModel):
     
     model_config = ConfigDict(from_attributes=True)
 
-# Auth Schemas
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-class Token(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str
-    doctor_status: Optional[str] = None  # 'active' | 'rejected' | None (non-doctors)
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
 class DeviceTokenUpdate(BaseModel):
     fcm_token: str

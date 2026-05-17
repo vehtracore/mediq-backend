@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:mediq_app/src/core/storage/storage_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 
@@ -19,43 +19,52 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
   }
 
   Future<void> _checkSession() async {
-    await Future.delayed(const Duration(seconds: 2));
-    try {
-      final token = await ref.read(storageServiceProvider).getToken();
-      if (token != null && token.isNotEmpty) {
-        try {
-          final user = await ref.read(userProvider.future);
-          if (!mounted) return;
+    // Brief pause so the splash animation is visible
+    await Future.delayed(const Duration(milliseconds: 800));
+    if (!mounted) return;
 
-          // FIX: Added '?' to prevent crash if user is null
-          if (user?.role == 'doctor') {
-            try {
-              final doctor =
-                  await ref.read(authRepositoryProvider).getMyDoctorProfile();
-              switch (doctor.status) {
-                case 'active':
-                  context.go('/doctor_home');
-                case 'rejected':
-                  context.go('/doctor_rejected');
-                default:
-                  context.go('/auth');
-              }
-            } catch (e) {
-              context.go('/auth');
-            }
-          } else if (user?.role == 'admin') {
-            context.go('/admin_dashboard');
-          } else {
-            context.go('/patient_home');
-          }
-        } catch (e) {
-          context.go('/auth');
-        }
-      } else {
+    try {
+      // Supabase.instance.client.auth.currentSession is synchronously available
+      // after Supabase.initialize() resolves in main(). No race condition.
+      final session = Supabase.instance.client.auth.currentSession;
+
+      if (session == null) {
+        // No valid session — go to onboarding for new users
         context.go('/onboarding');
+        return;
+      }
+
+      // Session exists: fetch the backend user profile to determine role
+      try {
+        final user = await ref.read(userProvider.future);
+        if (!mounted) return;
+
+        if (user?.role == 'doctor') {
+          try {
+            final doctor =
+                await ref.read(authRepositoryProvider).getMyDoctorProfile();
+            switch (doctor.status) {
+              case 'active':
+                context.go('/doctor_home');
+              case 'rejected':
+                context.go('/doctor_rejected');
+              default:
+                context.go('/auth');
+            }
+          } catch (_) {
+            context.go('/auth');
+          }
+        } else if (user?.role == 'admin') {
+          context.go('/admin_dashboard');
+        } else {
+          context.go('/patient_home');
+        }
+      } catch (_) {
+        // Backend unreachable but Supabase session is valid— send to auth to retry
+        context.go('/auth');
       }
     } catch (e) {
-      context.go('/auth');
+      if (mounted) context.go('/auth');
     }
   }
 
@@ -85,7 +94,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
                 const SizedBox(height: 50),
                 TextButton.icon(
                   onPressed: () async {
-                    await ref.read(storageServiceProvider).deleteToken();
+                    await Supabase.instance.client.auth.signOut();
                     if (context.mounted) context.go('/auth');
                   },
                   icon: const Icon(Icons.delete_forever, color: Colors.white70),

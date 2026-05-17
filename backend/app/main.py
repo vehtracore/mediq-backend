@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.sessions import SessionMiddleware
+
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -211,9 +211,7 @@ app = FastAPI(title="MDQplus API", redirect_slashes=False, lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-if not SECRET_KEY:
-    raise ValueError("FATAL: SECRET_KEY environment variable is missing.")
+
 
 # --- Global Exception Handler: ensures CORS headers are present even on 500 errors ---
 @app.exception_handler(Exception)
@@ -249,13 +247,7 @@ async def limit_payload_size(request: Request, call_next):
         )
     return await call_next(request)
 
-# 2. Session Middleware (required for Google OAuth state tracking)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=SECRET_KEY,
-)
-
-# 3. CORS Middleware — MUST be added LAST so it runs FIRST (outermost wrapper)
+# 2. CORS Middleware — MUST be added LAST so it runs FIRST (outermost wrapper)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

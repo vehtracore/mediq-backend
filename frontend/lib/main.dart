@@ -21,6 +21,12 @@ void main() async {
   await Supabase.initialize(
     url: dotenv.env['SUPABASE_URL']!,
     anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
+    // Tells the Supabase SDK to intercept deep links on this scheme and
+    // automatically exchange the token before firing onAuthStateChange.
+    // Must match AndroidManifest.xml android:scheme value.
+    authOptions: const FlutterAuthClientOptions(
+      authFlowType: AuthFlowType.pkce,
+    ),
   );
   
   // --- 🔥 Firebase Initialization ---
