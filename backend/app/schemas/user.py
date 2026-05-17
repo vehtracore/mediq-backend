@@ -44,11 +44,14 @@ class UserUpdate(BaseModel):
 # --- 🚀 UPDATED: User Response (Includes Medical & Settings) ---
 class UserResponse(UserBase):
     id: int
-    is_active: bool
-    is_banned: bool = False
-    plan: str = "free"
-    image_url: Optional[str] = None # ✅ ADDED
-    is_verified: Optional[bool] = False # ✅ Optional: column may not exist in prod DB
+    # is_active / is_banned / plan: all use Optional so that legacy DB rows with NULL
+    # values (before the relevant column was added with a DEFAULT) do not trigger a
+    # Pydantic ResponseValidationError and crash the /me endpoint.
+    is_active: Optional[bool] = True
+    is_banned: Optional[bool] = False
+    plan: Optional[str] = "free"          # NULL in DB → treated as "free"
+    image_url: Optional[str] = None
+    is_verified: Optional[bool] = False
     
     # Medical History
     blood_type: Optional[str] = None
@@ -77,7 +80,7 @@ class DependentUser(BaseModel):
     first_name: str
     last_name: str
     email: EmailStr
-    plan: str
+    plan: Optional[str] = "free"   # NULL-safe: mirrors UserResponse.plan
     image_url: Optional[str] = None
     
     model_config = ConfigDict(from_attributes=True)
