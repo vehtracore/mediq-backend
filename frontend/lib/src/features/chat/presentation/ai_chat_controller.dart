@@ -27,7 +27,7 @@ class AiChatState {
 // 2. CONTROLLER
 class AiChatController extends StateNotifier<AiChatState> {
   final Dio _dio;
-  final String subscriptionTier; // "free" or "premium"
+  final String subscriptionTier; // "free", "premium", or "family"
 
   AiChatController(this._dio, this.subscriptionTier) : super(AiChatState());
 
@@ -42,7 +42,7 @@ class AiChatController extends StateNotifier<AiChatState> {
       // --- PREPARE HISTORY (Premium Only) ---
       List<Map<String, dynamic>> history = [];
       
-      if (subscriptionTier == 'premium') {
+      if ({'premium', 'family'}.contains(subscriptionTier)) {
         // Convert local chat state to Gemini History Format
         // Exclude the very last message we just added (that's the current query)
         // And exclude any system/error messages

@@ -7,9 +7,8 @@ from datetime import date, datetime, timezone
 from app.core.database import get_db
 from app.models.user import User
 from app.models.doctor import Doctor
-from app.schemas.user import UserCreate, UserResponse, LoginRequest, Token, UserUpdate, RefreshRequest, DeviceTokenUpdate
+from app.schemas.user import UserCreate, UserResponse, UserUpdate, DeviceTokenUpdate
 from app.schemas.doctor import DoctorResponse
-from app.core import security
 from app.api import deps
 from app.core.limiter import limiter
 from app.services.media_service import upload_image
@@ -131,36 +130,44 @@ def send_email(to_email: str, subject: str, body: str):
             "  └─ Check Render logs for the line above to diagnose the Resend failure."
         )
 
+
+# ---------------------------------------------------------------------------
+# 🔐 SIGNUP — Creates the local DB row for a Supabase-authenticated user.
+#
+# The frontend authenticates directly with Supabase Auth and then calls this
+# endpoint to provision the application-level user record.  No password is
+# stored here; Supabase owns the credential.
+#
+# TODO: Convert this to a Supabase Auth webhook/trigger so the row is
+#       created automatically on Supabase sign-up.
+# ---------------------------------------------------------------------------
+
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user: raise HTTPException(400, detail="Email already registered")
     
-    hashed_pwd = security.get_password_hash(user.password)
     new_user = User(
         email=user.email, 
         first_name=user.first_name, 
         last_name=user.last_name, 
         dob=user.dob, 
         location=user.location, 
-        hashed_password=hashed_pwd, 
+        hashed_password="SUPABASE_MANAGED",   # Placeholder — password lives in Supabase Auth
         role=user.role,
-        is_verified=False, # ✅ Set to False so they MUST verify
-        verification_token=str(uuid.uuid4()) # ✅ Generate Token
+        is_verified=True,                      # Supabase handles email verification
+        verification_token=None,
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
     
-    # ✅ Background Task: Send Verification Email
-    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
-    verification_link = f"{backend_url}/api/v1/auth/verify-email?token={new_user.verification_token}"
-    
+    # Welcome email (verification is handled by Supabase)
     background_tasks.add_task(
         send_email, 
         new_user.email, 
-        "Verify your mdqplus Account", 
-        f"Welcome to mdqplus! PLease click the link below to verify your account:<br><br><a href='{verification_link}'>Verify Email</a>"
+        "Welcome to mdqplus!", 
+        "Your account has been created successfully. You can now start using mdqplus.<br><br>- The mdqplus Team"
     )
 
     return new_user
@@ -169,7 +176,6 @@ def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session
 async def register_doctor(
     background_tasks: BackgroundTasks,
     email: str = Form(...),
-    password: str = Form(...),
     full_name: str = Form(...),
     specialty: str = Form(...),
     license_number: str = Form(...),
@@ -186,21 +192,20 @@ async def register_doctor(
     mdcn_license_url = await upload_image(mdcn_license, folder="mdq_plus/doctor_licenses")
     indemnity_cert_url = await upload_image(indemnity_certificate, folder="mdq_plus/indemnity_certs")
 
-    hashed_pwd = security.get_password_hash(password)
     names = full_name.split(" ")
     
-    # ✅ Doctor user is INACTIVE initially
+    # ✅ Doctor user is INACTIVE initially — password lives in Supabase Auth
     new_user = User(
         email=email, 
         first_name=names[0], 
         last_name=names[-1] if len(names)>1 else "", 
-        hashed_password=hashed_pwd, 
+        hashed_password="SUPABASE_MANAGED",
         role="doctor", 
         is_active=False, # Wait for Admin
         dob=date(1980, 1, 1), 
         location="Princeton-Plainsboro",
-        is_verified=False,
-        verification_token=str(uuid.uuid4()) # ✅ Generate Token
+        is_verified=True,          # Supabase handles email verification
+        verification_token=None,
     )
     db.add(new_user)
     db.flush()
@@ -221,19 +226,13 @@ async def register_doctor(
     db.commit()
     db.refresh(new_user)
 
-    # ✅ Generate the Verification Link
-    backend_url = os.getenv("BACKEND_URL", "https://your-render-url.onrender.com") # Update if needed
-    verification_link = f"{backend_url}/api/v1/auth/verify-email?token={new_user.verification_token}"
-
-    # ✅ Email 1: Confirmation + Verification Link
+    # ✅ Email 1: Confirmation to Doctor
     background_tasks.add_task(
         send_email,
         email,
-        "mdqplus: Application Received & Verify Email",
+        "mdqplus: Application Received",
         f"Hello Dr. {full_name},<br><br>"
         f"Thank you for applying to join mdqplus!<br><br>"
-        f"<b>ACTION REQUIRED:</b> Please verify your email address by clicking the link below:<br>"
-        f"<a href='{verification_link}'>Verify My Email</a><br><br>"
         f"Your application is currently pending admin review based on your submitted documents. "
         f"You will receive another email once your account is approved.<br><br>"
         f"- The mdqplus Team"
@@ -250,87 +249,19 @@ async def register_doctor(
 
     return new_user
 
-@router.post("/login", response_model=Token)
-@limiter.limit("5/minute")
-def login(request: Request, login_data: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == login_data.email).first()
-    if not user or not security.verify_password(login_data.password, user.hashed_password):
-        raise HTTPException(401, detail="Incorrect email or password", headers={"WWW-Authenticate": "Bearer"})
 
-    # ── is_active gate ────────────────────────────────────────────────────────
-    # is_active=False means "pending admin first-review" for doctors.
-    # However, rejected doctors must be allowed to log in (they go to the
-    # quarantine screen). We do a quick status lookup FIRST so we can make an
-    # informed decision before raising the inactive exception.
-    doctor_status: str | None = None
-    if user.role == "doctor":
-        doctor = db.query(Doctor).filter(Doctor.user_id == user.id).first()
-        if not doctor:
-            raise HTTPException(400, detail="Doctor profile not found")
-        doctor_status = doctor.status
+# ---------------------------------------------------------------------------
+# POST /login and POST /refresh have been REMOVED.
+#
+# Authentication is now handled entirely by Supabase Auth.  The frontend
+# authenticates with Supabase, receives a Supabase access_token, and sends
+# it in the Authorization header.  The backend verifies that JWT via
+# deps.get_current_user (see app/api/deps.py).
+# ---------------------------------------------------------------------------
 
-    # Block if inactive, UNLESS this is a rejected doctor (they have a right
-    # to log in so they can reach /doctor_rejected and reapply).
-    if not user.is_active and doctor_status != "rejected":
-        raise HTTPException(400, detail="Account is pending approval or inactive")
-
-    # ── Email verification gate ───────────────────────────────────────────────
-    if not user.is_verified:
-        raise HTTPException(403, detail="Please verify your email before logging in. Check your inbox for a verification link.")
-
-    # ── Doctor status gate ────────────────────────────────────────────────────
-    # 'active'   → proceeds to /doctor_home
-    # 'rejected' → proceeds to /doctor_rejected  (quarantine, can reapply)
-    # 'pending'  → blocked here (admin hasn't reviewed yet)
-    if doctor_status == "pending":
-        raise HTTPException(400, detail="Doctor account is pending approval")
-
-    access_token = security.create_access_token(data={"sub": user.email})
-    refresh_token = security.create_refresh_token(data={"sub": user.email})
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-        "doctor_status": doctor_status,  # Flutter uses this to pick the right screen
-    }
 
 @router.get("/me", response_model=UserResponse)
 def read_users_me(current_user: User = Depends(deps.get_current_user)): return current_user
-
-@router.post("/refresh", response_model=Token)
-def refresh_token(body: RefreshRequest, db: Session = Depends(get_db)):
-    """Exchange a valid refresh token for a new access + refresh token pair."""
-    from jose import jwt, JWTError
-
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid refresh token",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-    try:
-        payload = jwt.decode(
-            body.refresh_token,
-            security.SECRET_KEY,
-            algorithms=[security.ALGORITHM],
-        )
-        if payload.get("type") != "refresh":
-            raise credentials_exception
-
-        email: str = payload.get("sub")
-        if email is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-
-    user = db.query(User).filter(User.email == email).first()
-    if user is None:
-        raise credentials_exception
-
-    # Issue a brand-new token pair
-    new_access = security.create_access_token(data={"sub": user.email})
-    new_refresh = security.create_refresh_token(data={"sub": user.email})
-    return {"access_token": new_access, "refresh_token": new_refresh, "token_type": "bearer"}
 
 # ... (End of standard endpoints) ...
 
@@ -545,7 +476,7 @@ def scrub_expired_accounts(db: Session) -> int:
     NDPA-compliant scrambling:
       - email        → irreversible hash so uniqueness constraint is preserved
       - first/last   → "Deleted User"
-      - password     → random bcrypt hash (account becomes permanently inaccessible)
+      - password     → placeholder string (account becomes permanently inaccessible)
       - location,    → None
         image_url,
         dob,
@@ -560,7 +491,6 @@ def scrub_expired_accounts(db: Session) -> int:
     """
     import uuid
     from datetime import timedelta, timezone
-    from app.core import security as sec
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
 
@@ -583,7 +513,7 @@ def scrub_expired_accounts(db: Session) -> int:
         user.email              = f"deleted_{anon_tag}@purged.invalid"
         user.first_name         = "Deleted"
         user.last_name          = "User"
-        user.hashed_password    = sec.get_password_hash(uuid.uuid4().hex)
+        user.hashed_password    = f"PURGED_{uuid.uuid4().hex}"
         user.dob                = None
         user.location           = None
         user.image_url          = None
@@ -608,4 +538,3 @@ def scrub_expired_accounts(db: Session) -> int:
 
     logger.info(f"[NDPA SCRUBBER] Run complete. Accounts scrubbed: {scrubbed}")
     return scrubbed
-

@@ -7,6 +7,7 @@ import 'package:http_parser/http_parser.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_model.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' as supabase;
 
 final authRepositoryProvider = Provider((ref) {
   return AuthRepository(ref.watch(dioProvider));
@@ -20,31 +21,12 @@ class AuthRepository {
 
   Future<void> login(String email, String password) async {
     try {
-      final response = await _dio.post('/api/v1/auth/login', data: {
-        'email': email,
-        'password': password,
-      });
-
-      final token = response.data['access_token'];
-      final refreshToken = response.data['refresh_token'];
-      if (token != null) {
-        const storage = FlutterSecureStorage();
-        await storage.write(
-          key: 'auth_token',
-          value: token,
-          aOptions: const AndroidOptions(encryptedSharedPreferences: true),
-        );
-        if (refreshToken != null) {
-          await storage.write(
-            key: 'refresh_token',
-            value: refreshToken,
-            aOptions: const AndroidOptions(encryptedSharedPreferences: true),
-          );
-        }
-      }
-    } on DioException catch (e) {
-      final msg = e.response?.data['detail'] ?? "Login failed. Please check your connection.";
-      throw Exception(msg);
+      await supabase.Supabase.instance.client.auth.signInWithPassword(
+        email: email,
+        password: password,
+      );
+    } on supabase.AuthException catch (e) {
+      throw Exception(e.message);
     } catch (e) {
       throw Exception("Login failed: $e");
     }
@@ -52,14 +34,26 @@ class AuthRepository {
 
   Future<void> signup(String email, String password, String firstName, String lastName, DateTime dob) async {
     try {
-      await _dio.post('/api/v1/auth/signup', data: {
-        'email': email,
-        'password': password,
-        'first_name': firstName,
-        'last_name': lastName,
-        'dob': dob.toIso8601String().split('T')[0], // YYYY-MM-DD
-        'role': 'patient'
-      });
+      // 1. Authenticate / create user in Supabase
+      final response = await supabase.Supabase.instance.client.auth.signUp(
+        email: email,
+        password: password,
+      );
+      
+      // 2. Provision the backend DB row
+      if (response.user != null) {
+        // At this point, Dio interceptor will pick up the Supabase session token
+        // But since this is right after signup, we can just make the call.
+        await _dio.post('/api/v1/auth/signup', data: {
+          'email': email,
+          'first_name': firstName,
+          'last_name': lastName,
+          'dob': dob.toIso8601String().split('T')[0], // YYYY-MM-DD
+          'role': 'patient'
+        });
+      }
+    } on supabase.AuthException catch (e) {
+      throw Exception(e.message);
     } on DioException catch (e) {
       final msg = e.response?.data['detail'] ?? "Signup failed. Please try again.";
       throw Exception(msg);
@@ -69,6 +63,13 @@ class AuthRepository {
   }
 
   Future<void> logout() async {
+    try {
+      await supabase.Supabase.instance.client.auth.signOut();
+    } catch (e) {
+      debugPrint('Supabase logout error: $e');
+    }
+    
+    // Legacy cleanup just in case
     const storage = FlutterSecureStorage();
     await storage.delete(key: 'auth_token', aOptions: const AndroidOptions(encryptedSharedPreferences: true));
     await storage.delete(key: 'refresh_token', aOptions: const AndroidOptions(encryptedSharedPreferences: true));

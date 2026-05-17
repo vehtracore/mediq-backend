@@ -16,7 +16,7 @@ from app.core.database import engine, Base, SessionLocal
 
 # ✅ KEEP "app." prefix because your main.py is inside the app folder
 from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab
-from app.api.v1 import google_auth
+
 from app.api.v1 import emergency
 from app.api.v1 import payments
 from app.api.v1 import family
@@ -277,7 +277,7 @@ app.include_router(video.router, prefix="/api/v1/video", tags=["Video Call"])
 app.include_router(chat_socket.router, prefix="/api/v1/p2p", tags=["P2P Chat"])
 app.include_router(upload.router, prefix="/api/v1/upload", tags=["Upload"])
 app.include_router(lab.router, prefix="/api/v1/lab", tags=["Lab Scanner"])
-app.include_router(google_auth.router, prefix="/auth/google", tags=["Google OAuth"])
+
 app.include_router(emergency.router, prefix="/api/v1/emergency", tags=["Emergency"])
 app.include_router(payments.router, prefix="/api/v1/payments", tags=["Payments"])
 app.include_router(family.router, prefix="/api/v1/family", tags=["Family Plan"])

@@ -186,7 +186,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                 Navigator.pop(context); // Close menu
                 
                 final user = ref.read(userProvider).value;
-                if (user?.subscriptionTier != 'premium') {
+                if (user?.isPremium != true) {
                   // SHOW PAYWALL DIALOG
                   showDialog(
                     context: context,
@@ -294,7 +294,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                 Text("MDQ+ AI Assistant", style: theme.textTheme.titleMedium),
                 userAsync.when(
                   data: (user) => Text(
-                    user?.subscriptionTier == 'premium'
+                    user?.isPremium == true
                         ? "Premium Mode ⚡"
                         : "Free Mode",
                     style: const TextStyle(fontSize: 10, color: Colors.green),

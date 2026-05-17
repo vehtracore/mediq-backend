@@ -12,8 +12,10 @@ class UserBase(BaseModel):
     role: Optional[str] = "patient"
 
 # Properties to receive via API on creation
+# NOTE: password is optional — Supabase Auth owns the credential.
+# This field is retained temporarily for backward compatibility but ignored by the endpoint.
 class UserCreate(UserBase):
-    password: str
+    password: Optional[str] = None
 
 # --- 🚀 UPDATED: User Update (Includes Medical & Settings) ---
 class UserUpdate(BaseModel):

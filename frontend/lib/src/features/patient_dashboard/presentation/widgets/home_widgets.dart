@@ -273,18 +273,8 @@ class QuickActionGrid extends ConsumerWidget {
     // ✅ Safe Read: Use ref.read in callbacks (prevents rebuilds)
     final user = ref.read(userProvider).value; 
     
-    String priceText = "Loading...";
+    String priceText = "NGN 4,000";
     double priceVal = 4000.0;
-
-    if (user != null) {
-      if (user.subscriptionTier == 'premium') {
-        priceText = "NGN 2,500 (Premium)";
-        priceVal = 2500.0;
-      } else {
-        priceText = "NGN 4,000 (Standard)";
-        priceVal = 4000.0;
-      }
-    }
 
     final theme = Theme.of(context);
 
