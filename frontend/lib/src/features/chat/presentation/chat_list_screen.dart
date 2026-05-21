@@ -4,7 +4,18 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../appointments/data/appointment_model.dart';
 import '../../appointments/data/appointment_repository.dart';
+import 'package:mediq_app/presentation/widgets/global_error_widget.dart';
 
+/// Purpose: Drives the state of the user's Chat list screen by fetching their appointments
+/// and strictly filtering for 'confirmed' status, which governs access to active doctor communication channels.
+///
+/// Data Source: Communicates with `appointmentRepositoryProvider` (`getMyAppointments()` API endpoint).
+///
+/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(chatAppointmentsProvider)` 
+/// on pull-to-refresh, retry taps in GlobalErrorWidget, or post-booking/status-change mutations.
+///
+/// Error & Loading Annotations: Exceptions thrown by the API (like `DioException`) are caught by Riverpod 
+/// and translated into clean localized strings by the `GlobalErrorWidget` wrapped around this provider's `error` state.
 final chatAppointmentsProvider =
     FutureProvider.autoDispose<List<Appointment>>((ref) async {
   final repo = ref.watch(appointmentRepositoryProvider);
@@ -31,7 +42,10 @@ class ChatListScreen extends ConsumerWidget {
       ),
       body: appointmentsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (err, stack) => Center(child: Text("Error: $err")),
+        error: (err, stack) => GlobalErrorWidget(
+              error: err,
+              onRetry: () => ref.invalidate(chatAppointmentsProvider),
+            ),
         data: (appointments) {
           return ListView(
             padding: const EdgeInsets.all(16),

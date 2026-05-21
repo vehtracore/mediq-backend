@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_repository.dart';
+import 'package:mediq_app/src/shared/presentation/widgets/skeleton_loader.dart';
+import '../../../../presentation/widgets/global_error_widget.dart';
 
 // ─── Bank model ───────────────────────────────────────────────────────────────
 class _PaystackBank {
@@ -144,24 +146,49 @@ class _PayoutSettingsScreenState extends ConsumerState<PayoutSettingsScreen> {
         title: Text('Payout Settings', style: theme.textTheme.titleLarge),
       ),
       body: SafeArea(
-        child: doctorAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => Center(child: Text('Error: $e')),
-          data: (doctor) {
-            // ── Linked account view ───────────────────────────────────────────
-            final isLinked = doctor.accountNumber != null && !_overrideMode;
-            if (isLinked) {
-              return _LinkedAccountView(
-                doctor: doctor,
-                onChangePressed: () => setState(() => _overrideMode = true),
-              );
-            }
-
-            // ── Setup / override form ─────────────────────────────────────────
-            final cardColor = isDark ? const Color(0xFF1E2A3A) : Colors.white;
-            return SingleChildScrollView(
+        child: RefreshIndicator(
+          onRefresh: () async => ref.invalidate(_myDoctorProvider),
+          child: doctorAsync.when(
+            loading: () => ListView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              itemCount: 4,
               padding: const EdgeInsets.all(20),
-              child: Form(
+              itemBuilder: (context, index) => Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: SkeletonLoader(child: Container(height: 80, width: double.infinity, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)))),
+              ),
+            ),
+            error: (e, _) => ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                SizedBox(
+                  height: MediaQuery.of(context).size.height * 0.7,
+                  child: GlobalErrorWidget(
+                    error: e,
+                    onRetry: () => ref.invalidate(_myDoctorProvider),
+                  ),
+                ),
+              ],
+            ),
+            data: (doctor) {
+              // ── Linked account view ───────────────────────────────────────────
+              final isLinked = doctor.accountNumber != null && !_overrideMode;
+              if (isLinked) {
+                return SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  child: _LinkedAccountView(
+                    doctor: doctor,
+                    onChangePressed: () => setState(() => _overrideMode = true),
+                  ),
+                );
+              }
+  
+              // ── Setup / override form ─────────────────────────────────────────
+              final cardColor = isDark ? const Color(0xFF1E2A3A) : Colors.white;
+              return SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(20),
+                child: Form(
                 key: _formKey,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -304,6 +331,7 @@ class _PayoutSettingsScreenState extends ConsumerState<PayoutSettingsScreen> {
               ),
             );
           },
+        ),
         ),
       ),
     );

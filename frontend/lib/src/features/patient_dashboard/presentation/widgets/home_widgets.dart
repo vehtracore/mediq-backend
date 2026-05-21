@@ -6,7 +6,24 @@ import 'package:mediq_app/src/features/appointments/data/appointment_repository.
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_model.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart'; // ✅ Added for User type
+import 'package:mediq_app/src/shared/presentation/widgets/skeleton_loader.dart';
+import 'package:mediq_app/src/shared/presentation/widgets/error_state_widget.dart';
+import 'package:mediq_app/src/core/api/app_exception.dart';
+import 'package:dio/dio.dart';
+import 'package:mediq_app/presentation/widgets/global_error_widget.dart';
+import 'dart:ui';
 
+/// Purpose: Drives the top 'Dark Frosted Glass' Appointment Card on the Patient Dashboard,
+/// displaying the singular closest upcoming, confirmed appointment to give immediate context to the user.
+///
+/// Data Source: Communicates with `appointmentRepositoryProvider` (`getMyAppointments()` API endpoint)
+/// and applies a local sort/filter to find the chronologically first upcoming visit.
+///
+/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(nextAppointmentProvider)` 
+/// on pull-to-refresh of the Patient Dashboard, retry taps, or after booking/canceling an appointment.
+///
+/// Error & Loading Annotations: Exceptions thrown by the API (like `DioException`) are caught by Riverpod 
+/// and translated into clean localized strings by the `GlobalErrorWidget` wrapped around this provider's `error` state.
 // ✅ REAL DATA PROVIDER: Fetches next confirmed appointment
 final nextAppointmentProvider =
     FutureProvider.autoDispose<Appointment?>((ref) async {
@@ -109,9 +126,14 @@ class AppointmentCard extends ConsumerWidget {
     final nextApptAsync = ref.watch(nextAppointmentProvider);
 
     return nextApptAsync.when(
-      loading: () => const SizedBox(
-          height: 160, child: Center(child: CircularProgressIndicator())),
-      error: (e, _) => const SizedBox(),
+      loading: () => const AppointmentCardSkeleton(),
+      error: (e, _) => SizedBox(
+        height: 160,
+        child: GlobalErrorWidget(
+          error: e,
+          onRetry: () => ref.invalidate(nextAppointmentProvider),
+        ),
+      ),
       data: (appointment) {
         // 1. EMPTY STATE (No confirmed appointments)
         if (appointment == null) {
@@ -170,25 +192,19 @@ class AppointmentCard extends ConsumerWidget {
 
         return GestureDetector(
           onTap: () => context.go('/schedule'),
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(32),
-              gradient: const LinearGradient(
-                colors: [Color(0xFF4A90E2), Color(0xFF00CEC9)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF4A90E2).withOpacity(0.4),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(32),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12.0, sigmaY: 12.0),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.6),
+                  borderRadius: BorderRadius.circular(32),
+                  border: Border.all(color: Colors.white.withOpacity(0.15), width: 1.0),
                 ),
-              ],
-            ),
-            child: Column(
+                child: Column(
               children: [
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -258,6 +274,8 @@ class AppointmentCard extends ConsumerWidget {
                   ],
                 ),
               ],
+            ),
+          ),
             ),
           ),
         );

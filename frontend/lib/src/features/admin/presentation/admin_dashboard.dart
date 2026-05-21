@@ -7,6 +7,8 @@ import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/content/data/content_repository.dart';
 import 'package:mediq_app/src/features/admin/presentation/content/admin_content_editor.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
+import 'package:mediq_app/src/shared/presentation/widgets/skeleton_loader.dart';
+import 'package:mediq_app/presentation/widgets/global_error_widget.dart';
 
 final adminStatsProvider = FutureProvider.autoDispose((ref) async {
   final dio = ref.watch(dioProvider);
@@ -20,6 +22,16 @@ final unverifiedDoctorsProvider = FutureProvider.autoDispose((ref) async {
   return response.data;
 });
 
+/// Purpose: Drives the user management table in the Admin Dashboard, allowing administrators
+/// to view, suspend, and reactivate accounts across the platform.
+///
+/// Data Source: Directly uses `dioProvider` to hit the `/api/v1/admin/users` endpoint.
+///
+/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(allUsersProvider)` 
+/// on pull-to-refresh of the users tab, or immediately after a successful suspend/reactivate mutation.
+///
+/// Error & Loading Annotations: Network exceptions (e.g., `DioException`) are caught by Riverpod 
+/// and translated into localized strings by the `GlobalErrorWidget` wrapped around this provider's `error` state.
 final allUsersProvider = FutureProvider.autoDispose<List<User>>((ref) async {
   final dio = ref.watch(dioProvider);
   final response = await dio.get('/api/v1/admin/users');
@@ -206,10 +218,32 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
 
   Widget _buildOverviewTab() {
     final statsAsync = ref.watch(adminStatsProvider);
-    return statsAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text("Error: $e")),
-      data: (stats) => SingleChildScrollView(
+    return RefreshIndicator(
+      onRefresh: () async => ref.invalidate(adminStatsProvider),
+      child: statsAsync.when(
+        loading: () => ListView.builder(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16),
+          itemCount: 4,
+          itemBuilder: (context, index) => Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: SkeletonLoader(child: Container(height: 100, width: double.infinity, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)))),
+          ),
+        ),
+        error: (e, _) => ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(
+              height: MediaQuery.of(context).size.height * 0.7,
+              child: GlobalErrorWidget(
+                error: e,
+                onRetry: () => ref.invalidate(adminStatsProvider),
+              ),
+            ),
+          ],
+        ),
+        data: (stats) => SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -256,18 +290,49 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
           ],
         ),
       ),
+      ),
     );
   }
 
   Widget _buildDoctorsTab() {
     final docsAsync = ref.watch(unverifiedDoctorsProvider);
-    return docsAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text("Error: $e")),
-      data: (doctors) => doctors.isEmpty
-          ? const Center(child: Text("No pending verifications."))
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
+    return RefreshIndicator(
+      onRefresh: () async => ref.invalidate(unverifiedDoctorsProvider),
+      child: docsAsync.when(
+        loading: () => ListView.builder(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16),
+          itemCount: 4,
+          itemBuilder: (context, index) => Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: SkeletonLoader(child: Container(height: 100, width: double.infinity, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)))),
+          ),
+        ),
+        error: (e, _) => ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(
+              height: MediaQuery.of(context).size.height * 0.7,
+              child: GlobalErrorWidget(
+                error: e,
+                onRetry: () => ref.invalidate(unverifiedDoctorsProvider),
+              ),
+            ),
+          ],
+        ),
+        data: (doctors) => doctors.isEmpty
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.7,
+                    child: const Center(child: Text("No pending verifications.")),
+                  ),
+                ],
+              )
+            : ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
               itemCount: doctors.length,
               itemBuilder: (ctx, i) {
                 final licenseData = doctors[i]['license_number'] ?? "";
@@ -301,9 +366,14 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                               Text("License: $licenseData",
                                   style: const TextStyle(color: Colors.grey)),
                             const Spacer(),
-                            IconButton(
-                                icon: const Icon(Icons.close, color: Colors.red),
+                            IconButton.filledTonal(
+                                icon: const Icon(Icons.close),
                                 tooltip: "Reject",
+                                style: IconButton.styleFrom(
+                                    backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                                    foregroundColor: theme.colorScheme.primary,
+                                    elevation: 0,
+                                ),
                                 onPressed: () {
                                   final reasonCtrl = TextEditingController();
                                   showDialog(
@@ -336,17 +406,17 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                                     ),
                                   );
                                 }),
-                            Container(
-                              decoration: BoxDecoration(
-                                  color: Colors.green.withOpacity(0.1),
-                                  shape: BoxShape.circle),
-                              child: IconButton(
-                                  icon: const Icon(Icons.check,
-                                      color: Colors.green),
-                                  tooltip: "Verify",
-                                  onPressed: () =>
-                                      _verifyDoctor(doctors[i]['id'])),
-                            ),
+                            const SizedBox(width: 8),
+                            IconButton.filledTonal(
+                                icon: const Icon(Icons.check),
+                                tooltip: "Verify",
+                                style: IconButton.styleFrom(
+                                    backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                                    foregroundColor: theme.colorScheme.primary,
+                                    elevation: 0,
+                                ),
+                                onPressed: () =>
+                                    _verifyDoctor(doctors[i]['id'])),
                           ],
                         ),
                       ),
@@ -356,6 +426,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                 );
               },
             ),
+      ),
     );
   }
 
@@ -385,23 +456,53 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
           ),
         ),
         Expanded(
-          child: usersAsync.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (e, _) => Center(child: Text("Error: $e")),
-            data: (users) {
-              final filtered = users.where((u) {
-                final fullName = "${u.firstName} ${u.lastName}";
-                return fullName.toLowerCase().contains(_searchQuery) ||
-                    u.email.toLowerCase().contains(_searchQuery);
-              }).toList();
-
-              if (filtered.isEmpty) {
-                return const Center(child: Text("No users found."));
-              }
-
-              return ListView.builder(
-                itemCount: filtered.length,
+          child: RefreshIndicator(
+            onRefresh: () async => ref.invalidate(allUsersProvider),
+            child: usersAsync.when(
+              loading: () => ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
                 padding: const EdgeInsets.all(16),
+                itemCount: 6,
+                itemBuilder: (context, index) => Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: SkeletonLoader(child: Container(height: 70, width: double.infinity, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)))),
+                ),
+              ),
+              error: (e, _) => ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.7,
+                    child: GlobalErrorWidget(
+                      error: e,
+                      onRetry: () => ref.invalidate(allUsersProvider),
+                    ),
+                  ),
+                ],
+              ),
+              data: (users) {
+                final filtered = users.where((u) {
+                  final fullName = "${u.firstName} ${u.lastName}";
+                  return fullName.toLowerCase().contains(_searchQuery) ||
+                      u.email.toLowerCase().contains(_searchQuery);
+                }).toList();
+  
+                if (filtered.isEmpty) {
+                  return ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      SizedBox(
+                        height: MediaQuery.of(context).size.height * 0.7,
+                        child: const Center(child: Text("No users found.")),
+                      ),
+                    ],
+                  );
+                }
+  
+                return ListView.builder(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  itemCount: filtered.length,
+                  padding: const EdgeInsets.all(16),
                 itemBuilder: (ctx, i) {
                   final user = filtered[i];
                   final fullName = "${user.firstName} ${user.lastName}";
@@ -431,12 +532,15 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                       subtitle: Text(
                           "${user.email} • ${user.role.toUpperCase()}",
                           style: theme.textTheme.bodyMedium),
-                      trailing: ElevatedButton(
+                      trailing: IconButton.filledTonal(
                         onPressed: () => _suspendUser(user.id),
-                        style: ElevatedButton.styleFrom(
-                            backgroundColor: isBanned ? Colors.green : Colors.red,
-                            foregroundColor: Colors.white),
-                        child: Text(isBanned ? "Reactivate" : "Suspend"),
+                        icon: Icon(isBanned ? Icons.check_circle_outline : Icons.block),
+                        tooltip: isBanned ? "Reactivate" : "Suspend",
+                        style: IconButton.styleFrom(
+                            backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                            foregroundColor: theme.colorScheme.primary,
+                            elevation: 0,
+                        ),
                       ),
                     ),
                   );
@@ -445,6 +549,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
             },
           ),
         ),
+      ),
       ],
     );
   }
@@ -453,12 +558,34 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
     final contentAsync = ref.watch(adminContentProvider);
     final theme = Theme.of(context);
 
-    return contentAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Text("$e"),
-      data: (tips) => ListView.builder(
-        itemCount: tips.length,
-        padding: const EdgeInsets.all(16),
+    return RefreshIndicator(
+      onRefresh: () async => ref.invalidate(adminContentProvider),
+      child: contentAsync.when(
+        loading: () => ListView.builder(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16),
+          itemCount: 5,
+          itemBuilder: (context, index) => Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: SkeletonLoader(child: Container(height: 80, width: double.infinity, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)))),
+          ),
+        ),
+        error: (e, _) => ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(
+              height: MediaQuery.of(context).size.height * 0.7,
+              child: GlobalErrorWidget(
+                error: e,
+                onRetry: () => ref.invalidate(adminContentProvider),
+              ),
+            ),
+          ],
+        ),
+        data: (tips) => ListView.builder(
+          physics: const AlwaysScrollableScrollPhysics(),
+          itemCount: tips.length,
+          padding: const EdgeInsets.all(16),
         itemBuilder: (ctx, i) => Card(
           color: theme.cardTheme.color, // ✅ Dynamic Card
           margin: const EdgeInsets.only(bottom: 12),
@@ -467,8 +594,14 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                IconButton(
-                  icon: const Icon(Icons.edit, color: Colors.blue),
+                IconButton.filledTonal(
+                  icon: const Icon(Icons.edit, size: 20),
+                  tooltip: "Edit",
+                  style: IconButton.styleFrom(
+                      backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                      foregroundColor: theme.colorScheme.primary,
+                      elevation: 0,
+                  ),
                   onPressed: () async {
                     final result = await Navigator.push(
                         context,
@@ -478,8 +611,15 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                     if (result == true) ref.refresh(adminContentProvider);
                   },
                 ),
-                IconButton(
-                  icon: const Icon(Icons.delete, color: Colors.red),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  icon: const Icon(Icons.delete, size: 20),
+                  tooltip: "Delete",
+                  style: IconButton.styleFrom(
+                      backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                      foregroundColor: theme.colorScheme.primary,
+                      elevation: 0,
+                  ),
                   onPressed: () async {
                     await ref
                         .read(contentRepositoryProvider)
@@ -491,6 +631,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
             ),
           ),
         ),
+      ),
       ),
     );
   }

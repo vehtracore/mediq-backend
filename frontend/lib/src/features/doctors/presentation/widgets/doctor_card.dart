@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../data/doctor_model.dart';
+import 'package:mediq_app/src/shared/presentation/widgets/doctor_avatar.dart';
 
 class DoctorCard extends StatelessWidget {
   final Doctor doctor;
@@ -30,21 +31,10 @@ class DoctorCard extends StatelessWidget {
             // --- Avatar ---
             Hero(
               tag: 'doc_${doctor.id}',
-              child: CircleAvatar(
+              child: DoctorAvatar(
+                imageUrl: doctor.imageUrl,
+                fullName: doctor.fullName,
                 radius: 40,
-                backgroundColor: Colors.grey[200],
-                child: ClipOval(
-                  child: doctor.imageUrl.isNotEmpty
-                      ? Image.network(
-                          doctor.imageUrl,
-                          width: 80,
-                          height: 80,
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) =>
-                              const Icon(Icons.person, size: 35, color: Colors.grey),
-                        )
-                      : const Icon(Icons.person, size: 35, color: Colors.grey),
-                ),
               ),
             ),
             const SizedBox(width: 16),

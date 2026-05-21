@@ -3,102 +3,183 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_model.dart';
 import 'package:mediq_app/src/features/doctor_dashboard/presentation/requests_controller.dart';
+import 'package:mediq_app/src/shared/presentation/widgets/skeleton_loader.dart';
+import 'package:mediq_app/src/shared/presentation/widgets/error_state_widget.dart';
+import 'package:mediq_app/src/core/api/app_exception.dart';
+import 'package:dio/dio.dart';
 
-class DoctorRequestsScreen extends ConsumerWidget {
+class DoctorRequestsScreen extends ConsumerStatefulWidget {
   const DoctorRequestsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final requestsAsync = ref.watch(requestsControllerProvider);
-    final currentTab = ref.watch(requestTabProvider);
+  ConsumerState<DoctorRequestsScreen> createState() =>
+      _DoctorRequestsScreenState();
+}
+
+class _DoctorRequestsScreenState extends ConsumerState<DoctorRequestsScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(() {
+      if (!_tabController.indexIsChanging) {
+        ref.read(requestTabProvider.notifier).setTab(_tabController.index);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+
+    // Keep TabController in sync if state is changed externally
+    final currentTab = ref.watch(requestTabProvider);
+    if (_tabController.index != currentTab) {
+      _tabController.animateTo(currentTab);
+    }
+
+    // ── FIX: Each tab watches its OWN independent provider ──────────────────
+    // Previously both tabs consumed the same requestsControllerProvider, which
+    // meant whichever tab wasn't "active" always showed a skeleton because the
+    // cached data was for the other tab. Now each tab fetches independently and
+    // both results are cached concurrently by Riverpod.
+    final requestsAsync = ref.watch(doctorRequestsProvider);
+    final queueAsync = ref.watch(generalQueueProvider);
 
     return Column(
       children: [
-        // --- Tabs ---
-        Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: SegmentedButton<int>(
-            segments: const [
-              ButtonSegment(
-                value: 0,
-                label: Text("My Requests"),
-                icon: Icon(Icons.person),
-              ),
-              ButtonSegment(
-                value: 1,
-                label: Text("General Queue"),
-                icon: Icon(Icons.groups),
-              ),
-            ],
-            selected: {currentTab},
-            onSelectionChanged: (Set<int> newSelection) {
-              ref.read(requestTabProvider.notifier).setTab(newSelection.first);
-            },
-            style: ButtonStyle(
-              backgroundColor: WidgetStateProperty.resolveWith<Color>((
-                Set<WidgetState> states,
-              ) {
-                if (states.contains(WidgetState.selected)) {
-                  return const Color(0xFF4A90E2);
-                }
-                return isDark ? Colors.grey[800]! : Colors.white; // ✅ Dynamic
-              }),
-              foregroundColor: WidgetStateProperty.resolveWith<Color>((
-                Set<WidgetState> states,
-              ) {
-                if (states.contains(WidgetState.selected)) {
-                  return Colors.white;
-                }
-                return theme.textTheme.bodyLarge?.color ??
-                    Colors.black; // ✅ Dynamic
-              }),
-            ),
-          ),
+        // --- Tab Bar ---
+        TabBar(
+          controller: _tabController,
+          labelColor: theme.colorScheme.primary,
+          unselectedLabelColor: theme.colorScheme.onSurfaceVariant,
+          indicatorColor: theme.colorScheme.primary,
+          tabs: const [
+            Tab(text: 'My Requests'),
+            Tab(text: 'General Queue'),
+          ],
         ),
 
-        // --- List ---
+        // --- Tab Content ---
         Expanded(
-          child: requestsAsync.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (err, stack) => Center(child: Text("Error: $err")),
-            data: (appointments) {
-              if (appointments.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.inbox, size: 64, color: theme.disabledColor),
-                      const SizedBox(height: 16),
-                      Text(
-                        "No pending items",
-                        style: theme.textTheme.bodyMedium,
-                      ),
-                    ],
-                  ),
-                );
-              }
-
-              return ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: appointments.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 16),
-                itemBuilder: (context, index) {
-                  return _RequestCard(
-                    appointment: appointments[index],
-                    isGeneral: currentTab == 1,
-                  );
-                },
-              );
-            },
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              // Tab 0 — Direct requests assigned to this doctor
+              _buildList(
+                context: context,
+                asyncValue: requestsAsync,
+                isGeneral: false,
+                onRefresh: () => ref.invalidate(doctorRequestsProvider),
+              ),
+              // Tab 1 — Unassigned GP queue items
+              _buildList(
+                context: context,
+                asyncValue: queueAsync,
+                isGeneral: true,
+                onRefresh: () => ref.invalidate(generalQueueProvider),
+              ),
+            ],
           ),
         ),
       ],
     );
   }
+
+  Widget _buildList({
+    required BuildContext context,
+    required AsyncValue<List<Appointment>> asyncValue,
+    required bool isGeneral,
+    required VoidCallback onRefresh,
+  }) {
+    final theme = Theme.of(context);
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        onRefresh();
+        await Future.delayed(const Duration(milliseconds: 500));
+      },
+      child: asyncValue.when(
+        loading: () => ListView.builder(
+          padding: const EdgeInsets.only(top: 16, left: 16, right: 16),
+          itemCount: 5,
+          itemBuilder: (_, __) => const RequestCardSkeleton(),
+        ),
+        error: (err, stack) {
+          String errorMessage = err.toString();
+          if (err is DioException && err.error is AppException) {
+            errorMessage = (err.error as AppException).message;
+          }
+          return ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: [
+              SizedBox(
+                height: 400,
+                child: ErrorStateWidget(
+                  message: errorMessage,
+                  onRetry: onRefresh,
+                ),
+              ),
+            ],
+          );
+        },
+        data: (appointments) {
+          if (appointments.isEmpty) {
+            return ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                SizedBox(
+                  height: 300,
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.inbox, size: 64, color: theme.disabledColor),
+                        const SizedBox(height: 16),
+                        Text(
+                          isGeneral
+                              ? 'No patients in the queue'
+                              : 'No pending requests',
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }
+
+          return ListView.separated(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(16),
+            itemCount: appointments.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 16),
+            itemBuilder: (context, index) {
+              return _RequestCard(
+                appointment: appointments[index],
+                isGeneral: isGeneral,
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
 }
 
+// ---------------------------------------------------------------------------
+// Request Card
+// ---------------------------------------------------------------------------
 class _RequestCard extends ConsumerWidget {
   final Appointment appointment;
   final bool isGeneral;
@@ -111,18 +192,28 @@ class _RequestCard extends ConsumerWidget {
     final timeStr = DateFormat('jm').format(appointment.startTime);
     final theme = Theme.of(context);
 
+    // In doctor-side views the backend encodes the *patient* name in the
+    // `doctor_name` field (the field is repurposed for display). The new
+    // `patient_name` field is now the authoritative source; fall back to
+    // `doctor_name` for backwards compatibility with any cached responses.
+    final patientDisplayName =
+        appointment.patientName.isNotEmpty && appointment.patientName != 'Patient'
+            ? appointment.patientName
+            : appointment.doctorName;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: theme.cardTheme.color, // ✅ Dynamic Background
+        color: theme.cardTheme.color,
         borderRadius: BorderRadius.circular(16),
         boxShadow: theme.brightness == Brightness.dark
             ? []
             : [
                 BoxShadow(
-                    color: Colors.grey.withOpacity(0.08),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4))
+                  color: Colors.grey.withOpacity(0.08),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                )
               ],
         border: isGeneral
             ? Border.all(color: Colors.orange.withOpacity(0.3))
@@ -131,6 +222,7 @@ class _RequestCard extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── Header Row ──────────────────────────────────────────────────
           Row(
             children: [
               CircleAvatar(
@@ -143,29 +235,61 @@ class _RequestCard extends ConsumerWidget {
                 ),
               ),
               const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isGeneral ? "General Queue Request" : "Direct Request",
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold), // ✅ Dynamic
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      patientDisplayName,
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.bold),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      '${isGeneral ? "GP Queue" : "Direct Request"} · $timeStr',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              // Payment badge
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: appointment.paymentStatus == 'paid'
+                      ? Colors.green.withOpacity(0.1)
+                      : Colors.amber.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  appointment.paymentStatus.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: appointment.paymentStatus == 'paid'
+                        ? Colors.green
+                        : Colors.orange,
                   ),
-                  Text(
-                    "Requested: $timeStr",
-                    style: theme.textTheme.bodySmall, // ✅ Dynamic
-                  ),
-                ],
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Text(
-            appointment.notes ?? "No notes",
-            style: theme.textTheme.bodyMedium
-                ?.copyWith(fontStyle: FontStyle.italic), // ✅ Dynamic
-          ),
+
+          // ── Notes ────────────────────────────────────────────────────────
+          if (appointment.notes != null && appointment.notes!.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              appointment.notes!,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(fontStyle: FontStyle.italic),
+            ),
+          ],
+
           const SizedBox(height: 16),
+
+          // ── Actions ──────────────────────────────────────────────────────
           if (isGeneral)
             SizedBox(
               width: double.infinity,
@@ -175,7 +299,7 @@ class _RequestCard extends ConsumerWidget {
                   backgroundColor: Colors.orange,
                   foregroundColor: Colors.white,
                 ),
-                child: const Text("Claim Patient"),
+                child: const Text('Claim Patient'),
               ),
             )
           else
@@ -187,7 +311,7 @@ class _RequestCard extends ConsumerWidget {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.red,
                     ),
-                    child: const Text("Decline"),
+                    child: const Text('Decline'),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -198,7 +322,7 @@ class _RequestCard extends ConsumerWidget {
                       backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
                     ),
-                    child: const Text("Accept"),
+                    child: const Text('Accept'),
                   ),
                 ),
               ],

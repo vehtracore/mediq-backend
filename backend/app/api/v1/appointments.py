@@ -19,21 +19,45 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# ... (Helper to Map Response) ...
-def map_appt(a, doc_name=None):
+# --- Helper to build an AppointmentResponse, now including the
+#     relational IDs that were previously missing from the schema.
+def map_appt(a, doc_name=None, patient_name=None):
     d_name = doc_name if doc_name else (a.doctor.full_name if a.doctor else "Waiting...")
-    # BUG FIX #3: Guard slot access — slot may not be lazy-loaded in all contexts
+
+    # Guard slot access — slot may not be lazy-loaded in all contexts
     try:
         s_time = a.slot.start_time if a.slot else a.start_time
     except Exception:
         s_time = a.start_time
-    # CHECK IF REVIEW EXISTS
-    has_rev = True if a.review else False
+
+    # Resolve patient name from relationship if not supplied directly
+    if patient_name is None and getattr(a, 'patient', None):
+        patient_name = f"{a.patient.first_name} {a.patient.last_name}"
+
+    has_rev = bool(getattr(a, 'review', None))
+
+    logger.debug(
+        "[map_appt] appt_id=%s doctor_id=%s patient_id=%s status=%s payment=%s",
+        a.id,
+        getattr(a, 'doctor_id', None),
+        getattr(a, 'patient_id', None),
+        a.status,
+        a.payment_status,
+    )
+
     return AppointmentResponse(
-        id=a.id, doctor_name=d_name, status=a.status,
-        payment_status=a.payment_status, start_time=s_time,
-        notes=a.notes, amount=a.amount, has_review=has_rev,
-        paystack_reference=getattr(a, "paystack_reference", None),
+        id=a.id,
+        doctor_id=getattr(a, 'doctor_id', None),
+        patient_id=getattr(a, 'patient_id', None),
+        doctor_name=d_name,
+        patient_name=patient_name,
+        status=a.status,
+        payment_status=a.payment_status,
+        start_time=s_time,
+        notes=a.notes,
+        amount=getattr(a, 'amount', 0.0),
+        has_review=has_rev,
+        paystack_reference=getattr(a, 'paystack_reference', None),
     )
 
 # ... (Slots & Booking - Standard) ...
@@ -200,24 +224,92 @@ def cancel_my_appointment(appt_id: int, db: Session = Depends(get_db), current_u
 @router.get("/doctor/requests", response_model=List[AppointmentResponse])
 def get_doctor_requests(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
     doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-    if not doctor: raise HTTPException(403, "Not a doctor")
-    appts = db.query(Appointment).options(joinedload(Appointment.patient)).join(DoctorSlot).filter(Appointment.doctor_id == doctor.id, Appointment.status == "pending", Appointment.payment_status == "paid").all()
+    if not doctor:
+        logger.warning("[doctor/requests] No doctor row for user_id=%s", current_user.id)
+        raise HTTPException(403, "Not a doctor")
+
+    logger.info(
+        "[doctor/requests] Fetching pending requests for doctor_id=%s user_id=%s",
+        doctor.id, current_user.id,
+    )
+
+    # NOTE: We intentionally include BOTH 'paid' and 'unpaid' pending appointments
+    # so the list is visible to doctors even before Paystack webhook fires.
+    # Tighten this back to payment_status=="paid" once webhooks are confirmed working.
+    appts = (
+        db.query(Appointment)
+        .options(joinedload(Appointment.patient), joinedload(Appointment.slot))
+        .join(DoctorSlot)
+        .filter(
+            Appointment.doctor_id == doctor.id,
+            Appointment.status == "pending",
+        )
+        .all()
+    )
+
+    logger.info("[doctor/requests] Found %d pending request(s).", len(appts))
+
     results = []
     for a in appts:
-        a.patient_name = f"{a.patient.first_name} {a.patient.last_name}" if a.patient else "Unknown"
-        results.append(AppointmentResponse(id=a.id, doctor_name=a.patient_name, status=a.status, payment_status=a.payment_status, start_time=a.slot.start_time, notes=a.notes, has_review=False))
+        p_name = f"{a.patient.first_name} {a.patient.last_name}" if a.patient else "Unknown"
+        # doctor_name field repurposed to carry patient name in doctor-side view
+        results.append(AppointmentResponse(
+            id=a.id,
+            doctor_id=a.doctor_id,
+            patient_id=a.patient_id,
+            doctor_name=p_name,        # shown as "patient" on doctor's UI
+            patient_name=p_name,
+            status=a.status,
+            payment_status=a.payment_status,
+            start_time=a.slot.start_time if a.slot else a.start_time,
+            notes=a.notes,
+            has_review=False,
+            amount=getattr(a, 'amount', 0.0),
+        ))
     return results
 
 @router.get("/doctor/queue", response_model=List[AppointmentResponse])
 def get_general_queue(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
     doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-    if not doctor: raise HTTPException(403)
-    appts = db.query(Appointment).options(joinedload(Appointment.patient)).filter(Appointment.doctor_id == None, Appointment.status == "pending", Appointment.payment_status == "paid").all()
+    if not doctor:
+        logger.warning("[doctor/queue] No doctor row for user_id=%s", current_user.id)
+        raise HTTPException(403, "Not a doctor")
+
+    logger.info(
+        "[doctor/queue] Fetching general queue for doctor_id=%s user_id=%s",
+        doctor.id, current_user.id,
+    )
+
+    # NOTE: payment_status filter removed temporarily to surface all pending GP
+    # consultations regardless of Paystack webhook status. Re-add once webhooks confirmed.
+    appts = (
+        db.query(Appointment)
+        .options(joinedload(Appointment.patient))
+        .filter(
+            Appointment.doctor_id == None,  # noqa: E711
+            Appointment.status == "pending",
+        )
+        .all()
+    )
+
+    logger.info("[doctor/queue] Found %d item(s) in general queue.", len(appts))
+
     results = []
     for a in appts:
-        # doctor_name field used for Patient Name in Doctor View
         p_name = f"{a.patient.first_name} {a.patient.last_name}" if a.patient else "Unknown"
-        results.append(AppointmentResponse(id=a.id, doctor_name=p_name, status=a.status, payment_status=a.payment_status, start_time=a.start_time, notes=a.notes, has_review=False))
+        results.append(AppointmentResponse(
+            id=a.id,
+            doctor_id=a.doctor_id,
+            patient_id=a.patient_id,
+            doctor_name=p_name,      # shown as "patient" on doctor's UI
+            patient_name=p_name,
+            status=a.status,
+            payment_status=a.payment_status,
+            start_time=a.start_time,
+            notes=a.notes,
+            has_review=False,
+            amount=getattr(a, 'amount', 0.0),
+        ))
     return results
 
 @router.put("/doctor/queue/{appt_id}/claim", response_model=AppointmentResponse)

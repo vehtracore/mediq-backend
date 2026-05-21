@@ -7,7 +7,21 @@ import 'package:mediq_app/src/features/doctor_dashboard/presentation/doctor_prof
 import 'package:mediq_app/src/features/doctor_dashboard/presentation/doctor_schedule_screen.dart';
 import 'package:mediq_app/src/features/doctor_dashboard/presentation/requests_controller.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_repository.dart';
+import 'package:mediq_app/src/shared/presentation/widgets/error_state_widget.dart';
+import 'package:mediq_app/src/core/api/app_exception.dart';
+import 'package:dio/dio.dart';
+import '../../../../presentation/widgets/global_error_widget.dart';
 
+/// Purpose: Drives the overview statistics (Earnings, Rating) on the Doctor Dashboard 
+/// to give medical professionals a quick summary of their performance and revenue.
+///
+/// Data Source: Communicates with `doctorRepositoryProvider` (`getDoctorStats()` API endpoint).
+///
+/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(doctorStatsProvider)` 
+/// on dashboard pull-to-refresh, retry taps, or after a consultation is marked complete and paid.
+///
+/// Error & Loading Annotations: Exceptions thrown by the API are caught by Riverpod 
+/// and translated into clean localized strings by the `GlobalErrorWidget` wrapped around this provider's `error` state.
 final doctorStatsProvider = FutureProvider.autoDispose((ref) async {
   return await ref.watch(doctorRepositoryProvider).getDoctorStats();
 });
@@ -62,7 +76,9 @@ class _DoctorDashboardTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final userAsync = ref.watch(userProvider);
-    final requestsAsync = ref.watch(requestsControllerProvider);
+    // FIX: use doctorRequestsProvider (List<Appointment>) instead of the
+    // mutation-only requestsControllerProvider (void) for the pending count.
+    final requestsAsync = ref.watch(doctorRequestsProvider);
     final scheduleAsync = ref.watch(doctorScheduleProvider);
     final statsAsync = ref.watch(doctorStatsProvider);
     final theme = Theme.of(context);
@@ -131,7 +147,10 @@ class _DoctorDashboardTab extends ConsumerWidget {
                     Icons.star, Colors.purple)),
           ]),
           loading: () => const LinearProgressIndicator(),
-          error: (e, s) => const Text("Stats Error"),
+          error: (e, s) => GlobalErrorWidget(
+            error: e,
+            onRetry: () => ref.invalidate(doctorStatsProvider),
+          ),
         ),
       ]),
     );

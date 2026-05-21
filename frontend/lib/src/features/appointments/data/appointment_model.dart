@@ -1,23 +1,28 @@
+import 'package:flutter/foundation.dart';
+
 class Appointment {
   final int id;
-  final int doctorId;
+  // These are the backend's integer relational PKs.
+  // The backend's AppointmentResponse schema now emits them explicitly.
+  // Safe fallback to 0 prevents type-cast crashes if a legacy response omits them.
+  final int? doctorId;
   final String doctorName;
-  final int patientId; // <--- NEW FIELD
-  final String patientName; // <--- NEW FIELD
+  final int? patientId;
+  final String patientName;
   final DateTime startTime;
   final String status;
   final String paymentStatus;
   final double amount;
   final String? notes;
   final bool hasReview;
-  final String? paystackReference; // <--- NEW FIELD
+  final String? paystackReference;
 
   Appointment({
     required this.id,
-    required this.doctorId,
+    this.doctorId,
     required this.doctorName,
-    required this.patientId, // <--- Required
-    required this.patientName, // <--- Required
+    this.patientId,
+    required this.patientName,
     required this.startTime,
     required this.status,
     required this.paymentStatus,
@@ -28,23 +33,37 @@ class Appointment {
   });
 
   factory Appointment.fromJson(Map<String, dynamic> json) {
+    // ── Debug handshake: log the raw payload so UUID/int mismatches are visible ──
+    if (kDebugMode) {
+      debugPrint(
+        '📦 [Appointment.fromJson] id=${json["id"]} '
+        'doctor_id=${json["doctor_id"]} (${json["doctor_id"].runtimeType}) '
+        'patient_id=${json["patient_id"]} (${json["patient_id"].runtimeType}) '
+        'status=${json["status"]} payment=${json["payment_status"]}',
+      );
+    }
+
+    // Safe int parsing: handles both int and string representations gracefully.
+    int? _safeInt(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is String) return int.tryParse(v);
+      return null;
+    }
+
     return Appointment(
-      // The '?? 0' prevents the "Null is not a subtype of int" crash
-      id: json['id'] ?? 0,
-      doctorId: json['doctor_id'] ?? 0,
-      doctorName: json['doctor_name'] ?? 'Doctor',
-
-      // These safe defaults prevent crashes if backend data is missing
-      patientId: json['patient_id'] ?? 0,
-      patientName: json['patient_name'] ?? 'Patient',
-
-      startTime: DateTime.parse(json['start_time']),
-      status: json['status'] ?? 'pending',
-      paymentStatus: json['payment_status'] ?? 'unpaid',
+      id: _safeInt(json['id']) ?? 0,
+      doctorId: _safeInt(json['doctor_id']),
+      doctorName: (json['doctor_name'] as String?) ?? 'Doctor',
+      patientId: _safeInt(json['patient_id']),
+      patientName: (json['patient_name'] as String?) ?? 'Patient',
+      startTime: DateTime.parse(json['start_time'] as String),
+      status: (json['status'] as String?) ?? 'pending',
+      paymentStatus: (json['payment_status'] as String?) ?? 'unpaid',
       amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
-      notes: json['notes'],
-      hasReview: json['has_review'] ?? false,
-      paystackReference: json['paystack_reference'],
+      notes: json['notes'] as String?,
+      hasReview: (json['has_review'] as bool?) ?? false,
+      paystackReference: json['paystack_reference'] as String?,
     );
   }
 }

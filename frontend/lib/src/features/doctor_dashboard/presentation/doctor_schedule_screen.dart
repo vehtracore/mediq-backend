@@ -309,6 +309,22 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
     String timeNum = timeStr.split(' ')[0];
     String timeAmPm = timeStr.contains(' ') ? timeStr.split(' ')[1] : "";
     final theme = Theme.of(context);
+    
+    final isConfirmed = widget.appointment.status == 'confirmed';
+    final isCompleted = widget.appointment.status == 'completed';
+
+    Color statusBgColor = Colors.orange.withOpacity(0.1);
+    Color statusTextColor = Colors.orange;
+    if (isConfirmed) {
+      statusBgColor = Colors.green.withOpacity(0.1);
+      statusTextColor = Colors.green;
+    } else if (isCompleted) {
+      statusBgColor = Colors.blue.withOpacity(0.1);
+      statusTextColor = Colors.blue;
+    } else if (widget.appointment.status == 'cancelled') {
+      statusBgColor = Colors.grey.shade200;
+      statusTextColor = Colors.grey.shade700;
+    }
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -378,19 +394,20 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                           style: theme.textTheme.bodyMedium
                               ?.copyWith(fontSize: 13),
                         ),
-                        const SizedBox(width: 12),
-                        const Icon(Icons.payment,
-                            size: 14, color: Colors.green),
-                        const SizedBox(width: 4),
-                        Text(
-                          widget.appointment.paymentStatus.toUpperCase(),
-                          style: const TextStyle(
-                            color: Colors.green,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
                       ],
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                          color: statusBgColor,
+                          borderRadius: BorderRadius.circular(8)),
+                      child: Text(widget.appointment.status.toUpperCase(),
+                          style: TextStyle(
+                              color: statusTextColor,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold)),
                     ),
                   ],
                 ),
@@ -399,10 +416,13 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                 onSelected: (value) {
                   if (value == 'notes') {
                     _showNotesDialog(context);
-                  } else if (value == 'complete')
+                  } else if (value == 'refer') {
+                    _showReferralDialog(context);
+                  } else if (value == 'complete') {
                     _confirmCompletion(context, ref);
-                  else if (value == 'cancel')
+                  } else if (value == 'cancel') {
                     _confirmCancellation(context, ref);
+                  }
                 },
                 color: theme.cardTheme.color, // ✅ Dynamic Menu Background
                 itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
@@ -412,6 +432,18 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                       Icon(Icons.notes, color: theme.iconTheme.color),
                       const SizedBox(width: 8),
                       Text('View Notes', style: theme.textTheme.bodyMedium)
+                    ]),
+                  ),
+                  PopupMenuItem<String>(
+                    value: 'refer',
+                    child: Row(children: [
+                      Icon(Icons.local_hospital_outlined, color: theme.colorScheme.primary),
+                      const SizedBox(width: 8),
+                      Text('Refer Patient', 
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.primary,
+                            fontWeight: FontWeight.w600,
+                          ))
                     ]),
                   ),
                   const PopupMenuItem<String>(
@@ -440,60 +472,47 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
           const SizedBox(height: 16),
 
           // Action Buttons
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => context.push('/chat', extra: {
-                    'title': widget.appointment.patientName,
-                    'appointmentId': widget.appointment.id,
-                    'isCompleted': widget.appointment.status == 'completed'
-                  }),
-                  icon: const Icon(Icons.chat_bubble_outline, size: 16),
-                  label: const Text("Chat"),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.blue,
-                    side: const BorderSide(color: Colors.blue),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 2,
-                child: ElevatedButton.icon(
-                  onPressed: () =>
-                      context.push('/video_call', extra: widget.appointment.id),
-                  icon: const Icon(Icons.videocam_outlined),
-                  label: const Text("Start Call"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF4A90E2),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-
-          // ── Refer to Physical Hospital ─────────────────────────────────
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () => _showReferralDialog(context),
-              icon: const Icon(Icons.local_hospital_outlined, size: 18),
-              label: const Text("Refer to Physical Hospital"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFE53935),
-                foregroundColor: Colors.white,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                padding: const EdgeInsets.symmetric(vertical: 12),
+          if (widget.appointment.status != 'cancelled' && isConfirmed)
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  IconButton.filledTonal(
+                      onPressed: () => context.push('/chat', extra: {
+                            'title': widget.appointment.patientName,
+                            'isAi': false,
+                            'appointmentId': widget.appointment.id,
+                            'isCompleted': widget.appointment.status == 'completed'
+                          }),
+                      icon: const Icon(Icons.chat_bubble_outline, size: 18),
+                      style: IconButton.styleFrom(
+                          backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                          foregroundColor: theme.colorScheme.primary,
+                      )),
+                  const SizedBox(width: 8),
+                  IconButton.filledTonal(
+                      onPressed: () => context.push('/video_call?type=voice',
+                          extra: widget.appointment.id),
+                      icon: const Icon(Icons.phone, size: 18),
+                      style: IconButton.styleFrom(
+                          backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                          foregroundColor: theme.colorScheme.primary,
+                      )),
+                  const SizedBox(width: 8),
+                  FilledButton.tonalIcon(
+                      onPressed: () =>
+                          context.push('/video_call', extra: widget.appointment.id),
+                      icon: const Icon(Icons.videocam, size: 16),
+                      label: const Text("Video"),
+                      style: FilledButton.styleFrom(
+                          backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                          foregroundColor: theme.colorScheme.primary,
+                          elevation: 0,
+                      )),
+                ],
               ),
             ),
-          ),
         ],
       ),
     );

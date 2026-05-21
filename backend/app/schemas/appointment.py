@@ -3,9 +3,11 @@ from pydantic import BaseModel, ConfigDict
 from typing import Optional
 from datetime import datetime
 
+
 class SlotCreate(BaseModel):
     doctor_id: int
     start_time: datetime
+
 
 class SlotResponse(BaseModel):
     id: int
@@ -14,13 +16,26 @@ class SlotResponse(BaseModel):
     is_booked: bool
     model_config = ConfigDict(from_attributes=True)
 
+
 class AppointmentCreate(BaseModel):
     slot_id: int
     notes: Optional[str] = None
 
+
 class AppointmentResponse(BaseModel):
     id: int
+    # --- IDs (integer, relational DB PKs) ---
+    # These were previously omitted, causing the Flutter model to default to 0
+    # which broke the payment screen (userId: 0) and any per-appointment logic.
+    doctor_id: Optional[int] = None
+    patient_id: Optional[int] = None
+
+    # --- Display names ---
+    # doctor_name is re-purposed by doctor-side views to hold the *patient* name.
+    # patient_name is always the real patient name (for patient-side views).
     doctor_name: str
+    patient_name: Optional[str] = None
+
     status: str
     payment_status: str
     start_time: datetime
@@ -31,8 +46,10 @@ class AppointmentResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 class GeneralBookRequest(BaseModel):
     notes: str
+
 
 # --- Continuity of Care: Referral Schemas ---
 
@@ -40,6 +57,7 @@ class ReferralRequest(BaseModel):
     """Payload sent by the doctor to initiate a physical-hospital referral."""
     hospital_name: str                    # e.g. "Lagos Island General Hospital A&E"
     note: str                             # Brief clinical reason for referral
+
 
 class ReferralResponse(AppointmentResponse):
     """Extends the standard appointment response with the generated referral note."""

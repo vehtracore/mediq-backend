@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
@@ -229,6 +230,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     );
   }
 
+  // Language selector removed in favor of PopupMenuButton in AppBar
+
   @override
   Widget build(BuildContext context) {
     final chatState = ref.watch(aiChatControllerProvider);
@@ -282,7 +285,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         }
       },
       child: Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
+      backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
         title: Row(
           children: [
@@ -291,56 +294,50 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text("MDQ+ AI Assistant", style: theme.textTheme.titleMedium),
+                Text("MDQ+ AI Assistant", style: TextStyle(color: theme.colorScheme.onSurface, fontSize: 18, fontWeight: FontWeight.w600)),
                 userAsync.when(
                   data: (user) => Text(
                     user?.isPremium == true
                         ? "Premium Mode ⚡"
                         : "Free Mode",
-                    style: const TextStyle(fontSize: 10, color: Colors.green),
+                    style: const TextStyle(fontSize: 10, color: Colors.greenAccent, fontWeight: FontWeight.w500, letterSpacing: 0.5),
                   ),
-                  loading: () => const Text("Connecting...",
-                      style: TextStyle(fontSize: 10, color: Colors.grey)),
+                  loading: () => Text("Connecting...",
+                      style: TextStyle(fontSize: 10, color: theme.colorScheme.onSurfaceVariant)),
                   error: (_, __) => const SizedBox.shrink(),
                 ),
               ],
             ),
           ],
         ),
-        backgroundColor: theme.appBarTheme.backgroundColor,
-        foregroundColor: theme.appBarTheme.foregroundColor,
-        elevation: 1,
+        backgroundColor: isDark ? theme.colorScheme.surface : Colors.grey.shade50,
+        foregroundColor: theme.colorScheme.onSurface,
+        elevation: 2,
+        shadowColor: Colors.black.withOpacity(0.1),
+        surfaceTintColor: Colors.transparent,
         actions: [
           PopupMenuButton<String>(
-            initialValue: _selectedLanguage,
-            onSelected: (String newValue) {
-              setState(() {
-                _selectedLanguage = newValue;
-              });
+            icon: Icon(Icons.language, color: theme.colorScheme.onSurface),
+            onSelected: (String lang) {
+              setState(() => _selectedLanguage = lang);
             },
-            icon: const Icon(Icons.language),
-            itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-              const PopupMenuItem<String>(
-                value: 'English',
-                child: Text('English'),
-              ),
-              const PopupMenuItem<String>(
-                value: 'Nigerian Pidgin',
-                child: Text('Nigerian Pidgin'),
-              ),
-              const PopupMenuItem<String>(
-                value: 'Yoruba',
-                child: Text('Yoruba'),
-              ),
-              const PopupMenuItem<String>(
-                value: 'Hausa',
-                child: Text('Hausa'),
-              ),
-              const PopupMenuItem<String>(
-                value: 'Igbo',
-                child: Text('Igbo'),
-              ),
-            ],
+            color: theme.colorScheme.surface,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            elevation: 4,
+            itemBuilder: (BuildContext context) {
+              return ['English', 'Nigerian Pidgin', 'Yoruba', 'Hausa', 'Igbo'].map((String choice) {
+                return PopupMenuItem<String>(
+                  value: choice,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(choice, style: TextStyle(color: _selectedLanguage == choice ? Colors.blue : theme.colorScheme.onSurface)),
+                      if (_selectedLanguage == choice) const Icon(Icons.check, color: Colors.blue, size: 20),
+                    ],
+                  ),
+                );
+              }).toList();
+            },
           ),
         ],
       ),
@@ -443,72 +440,68 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
           // --- INPUT BAR ---
           Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: theme.cardTheme.color,
-              boxShadow: isDark
-                  ? []
-                  : [const BoxShadow(color: Colors.black12, blurRadius: 5)],
-            ),
-            child: Row(
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: Colors.blue),
-                  onPressed: _showAttachmentMenu,
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    style: theme.textTheme.bodyLarge,
-                    minLines: 1,
-                    maxLines: 5,
-                    keyboardType: TextInputType.multiline,
-                    textInputAction: TextInputAction.newline,
-                    decoration: InputDecoration(
-                      hintText: _isListening
-                          ? "Listening..."
-                          : (_stagedImageUrl != null
-                              ? "Add a message or tap send..."
-                              : "Describe symptoms..."),
-                      hintStyle: TextStyle(
-                          color: _isListening
-                              ? Colors.redAccent
-                              : (isDark ? Colors.grey[500] : Colors.grey[400])),
-                      filled: true,
-                      fillColor: theme.inputDecorationTheme.fillColor,
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(30),
-                          borderSide: BorderSide.none),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 10),
+            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 24, top: 12),
+            color: theme.colorScheme.surface,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white.withOpacity(0.1) : Colors.grey[100],
+                borderRadius: BorderRadius.circular(30),
+                border: Border.all(color: isDark ? Colors.white.withOpacity(0.05) : Colors.transparent),
+              ),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.add_circle, color: Colors.blueAccent),
+                    onPressed: _showAttachmentMenu,
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: _messageController,
+                      style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                      minLines: 1,
+                      maxLines: 5,
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      decoration: InputDecoration(
+                        hintText: _isListening
+                            ? "Listening..."
+                            : (_stagedImageUrl != null
+                                ? "Add a message..."
+                                : "Describe symptoms..."),
+                        hintStyle: TextStyle(
+                            color: _isListening ? Colors.redAccent : (isDark ? Colors.white54 : Colors.black54),
+                            fontSize: 15),
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-
-                // --- 🎙️ VOICE BUTTON (With Lazy Init) ---
-                GestureDetector(
-                  onTap: _toggleListening,
-                  child: CircleAvatar(
-                    backgroundColor: _isListening
-                        ? Colors.redAccent
-                        : (isDark ? Colors.grey[800] : Colors.grey[200]),
-                    radius: 22,
-                    child: _isListening
-                        ? const Icon(Icons.mic, color: Colors.white, size: 20)
-                        : Icon(Icons.mic_none,
-                            color: theme.iconTheme.color, size: 20),
+                  GestureDetector(
+                    onTap: _toggleListening,
+                    child: CircleAvatar(
+                      backgroundColor: _isListening ? Colors.redAccent : Colors.transparent,
+                      radius: 20,
+                      child: Icon(
+                        _isListening ? Icons.mic : Icons.mic_none,
+                        color: _isListening ? Colors.white : Theme.of(context).colorScheme.onSurfaceVariant,
+                        size: 22,
+                      ),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-
-                FloatingActionButton(
-                  onPressed: _sendMessage,
-                  mini: true,
-                  backgroundColor: const Color(0xFF4A90E2),
-                  child: const Icon(Icons.send, color: Colors.white),
-                ),
-              ],
+                  const SizedBox(width: 4),
+                  Container(
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF4A90E2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: IconButton(
+                      onPressed: _sendMessage,
+                      icon: const Icon(Icons.arrow_upward, color: Colors.white, size: 20),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -608,12 +601,18 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.medical_services_outlined,
-              size: 64, color: Colors.blue[100]),
-          const SizedBox(height: 16),
-          Text("Hello! I'm MDQ+.", style: theme.textTheme.bodyLarge),
-          Text("I can help assess your symptoms.",
-              style: theme.textTheme.bodyMedium),
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.blue.withOpacity(0.05),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.auto_awesome, size: 64, color: Colors.blue.withOpacity(0.8)),
+          ),
+          const SizedBox(height: 24),
+          Text("Hello! I'm MDQ+.", style: TextStyle(color: theme.colorScheme.onSurfaceVariant, fontSize: 18)),
+          const SizedBox(height: 8),
+          Text("I can help assess your symptoms.", style: TextStyle(color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7), fontSize: 14)),
         ],
       ),
     );

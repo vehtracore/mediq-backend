@@ -2,8 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_repository.dart';
-import 'package:mediq_app/src/features/auth/presentation/user_controller.dart'; // ✅ Import User Provider
+import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:mediq_app/src/shared/presentation/widgets/skeleton_loader.dart';
+import 'package:mediq_app/presentation/widgets/global_error_widget.dart';
 
+/// Purpose: Drives the centralized Notifications screen, aggregating alerts,
+/// appointment updates, and system messages into a unified timeline based on the user's role (Patient or Doctor).
+///
+/// Data Source: Aggregates data by querying `appointmentRepositoryProvider` and merging it with static system messages.
+///
+/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(notificationsProvider)` 
+/// on pull-to-refresh of the Notifications screen, or when real-time push events arrive.
+///
+/// Error & Loading Annotations: Exceptions thrown during aggregation are caught by Riverpod 
+/// and translated into localized strings by the `GlobalErrorWidget` wrapped around this provider's `error` state.
 // ✅ PRODUCTION READY: Role-Aware Notification Logic
 final notificationsProvider =
     FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
@@ -94,41 +106,56 @@ class NotificationsScreen extends ConsumerWidget {
         elevation: 0,
         centerTitle: false,
       ),
-      body: notifsAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+      body: RefreshIndicator(
+        onRefresh: () async => ref.invalidate(notificationsProvider),
+        child: notifsAsync.when(
+          loading: () => ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(16),
+            itemCount: 6,
+            itemBuilder: (context, index) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: SkeletonLoader(child: Container(height: 80, width: double.infinity, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)))),
+            ),
+          ),
+          error: (e, _) => ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
             children: [
-              const Icon(Icons.error_outline, size: 48, color: Colors.red),
-              const SizedBox(height: 16),
-              Text("Couldn't load notifications", style: theme.textTheme.bodyLarge),
-              TextButton(
-                onPressed: () => ref.refresh(notificationsProvider), 
-                child: const Text("Retry"),
-              )
+              SizedBox(
+                height: MediaQuery.of(context).size.height * 0.7,
+                child: GlobalErrorWidget(
+                  error: e,
+                  onRetry: () => ref.invalidate(notificationsProvider),
+                ),
+              ),
             ],
           ),
-        ),
-        data: (notifications) {
-          if (notifications.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+          data: (notifications) {
+            if (notifications.isEmpty) {
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
                 children: [
-                  Icon(Icons.notifications_off_outlined,
-                      size: 64, color: Colors.grey[300]),
-                  const SizedBox(height: 16),
-                  Text("No new notifications",
-                      style: TextStyle(color: Colors.grey[600], fontSize: 16)),
+                  SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.7,
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.notifications_off_outlined,
+                              size: 64, color: Colors.grey[300]),
+                          const SizedBox(height: 16),
+                          Text("No new notifications",
+                              style: TextStyle(color: Colors.grey[600], fontSize: 16)),
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
-              ),
-            );
-          }
-
-          return RefreshIndicator(
-            onRefresh: () async => ref.refresh(notificationsProvider),
-            child: ListView.separated(
+              );
+            }
+  
+            return ListView.separated(
+              physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.all(16),
               itemCount: notifications.length,
               separatorBuilder: (_, __) => const SizedBox(height: 12),
@@ -136,9 +163,9 @@ class NotificationsScreen extends ConsumerWidget {
                 final item = notifications[index];
                 return _buildNotificationItem(context, item, theme, isDark);
               },
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }

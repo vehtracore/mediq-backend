@@ -223,7 +223,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         : baseUrl;
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor, // ✅ Dynamic
+      backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -236,7 +236,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
         backgroundColor: theme.appBarTheme.backgroundColor,
         foregroundColor: theme.appBarTheme.foregroundColor,
-        elevation: 1,
+        elevation: 2,
+        shadowColor: Colors.black.withOpacity(0.1),
+        surfaceTintColor: Colors.transparent,
       ),
       body: Column(
         children: [
@@ -279,9 +281,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           decoration: BoxDecoration(
                             color: isMe
                                 ? Colors.blueAccent
-                                : (isDark
-                                    ? const Color(0xFF2C2C2C)
-                                    : Colors.white), // ✅ Dynamic Bubble
+                                : theme.cardTheme.color,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: isImage
@@ -318,9 +318,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                   style: TextStyle(
                                     color: isMe
                                         ? Colors.white
-                                        : (isDark
-                                            ? Colors.white
-                                            : Colors.black87), // ✅ Dynamic Text
+                                        : theme.colorScheme.onSurface,
                                     fontSize: 16,
                                   ),
                                 ),
@@ -343,50 +341,58 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   ),
                 )
               : Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  color: theme.cardTheme.color, // ✅ Dynamic Input Area
+                  padding: const EdgeInsets.only(left: 16, right: 16, bottom: 24, top: 12),
+                  color: theme.colorScheme.surface,
                   child: SafeArea(
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: Icon(Icons.add_photo_alternate,
-                        color: theme.iconTheme.color),
-                    onPressed: _handleImageUpload,
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _msgController,
-                      style: theme.textTheme.bodyLarge, // ✅ Dynamic Text
-                      minLines: 1,
-                      maxLines: 5,
-                      keyboardType: TextInputType.multiline,
-                      textInputAction: TextInputAction.newline,
-                      decoration: InputDecoration(
-                        hintText: "Type a message...",
-                        hintStyle: TextStyle(color: Colors.grey[400]),
-                        filled: true,
-                        fillColor: isDark
-                            ? const Color(0xFF1E1E1E)
-                            : Colors.grey[100], // ✅ Dynamic Field
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(24),
-                            borderSide: BorderSide.none),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: isDark ? Colors.white.withOpacity(0.05) : Colors.grey[200],
+                        borderRadius: BorderRadius.circular(30),
+                        border: Border.all(color: isDark ? Colors.white.withOpacity(0.05) : Colors.transparent),
+                      ),
+                      child: Row(
+                        children: [
+                          IconButton(
+                            icon: Icon(Icons.add_photo_alternate, color: theme.colorScheme.onSurfaceVariant),
+                            onPressed: _handleImageUpload,
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.mic, color: theme.colorScheme.onSurfaceVariant),
+                            onPressed: () {},
+                          ),
+                          Expanded(
+                            child: TextField(
+                              controller: _msgController,
+                              style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                              minLines: 1,
+                              maxLines: 5,
+                              keyboardType: TextInputType.multiline,
+                              textInputAction: TextInputAction.newline,
+                              decoration: InputDecoration(
+                                hintText: "Type a message...",
+                                hintStyle: TextStyle(color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6)),
+                                border: InputBorder.none,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary,
+                              shape: BoxShape.circle,
+                            ),
+                            child: IconButton(
+                              onPressed: () => _sendMessage(),
+                              icon: Icon(Icons.arrow_upward, color: theme.colorScheme.onPrimary, size: 20),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  CircleAvatar(
-                    backgroundColor: Colors.blueAccent,
-                    child: IconButton(
-                      icon:
-                          const Icon(Icons.send, color: Colors.white, size: 20),
-                      onPressed: () => _sendMessage(),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+                ),
         ],
       ),
     );

@@ -100,12 +100,20 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
 
     return Stack(
       children: [
-        SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // ✅ WIRED: Passes full user object to Header for Avatar + Name
+        RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(userProvider);
+            ref.invalidate(nextAppointmentProvider);
+            // wait a bit for the UI to update
+            await Future.delayed(const Duration(milliseconds: 500));
+          },
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 24.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ✅ WIRED: Passes full user object to Header for Avatar + Name
               userAsync.when(
                 data: (user) => HomeHeader(user: user),
                 loading: () => const HomeHeader(user: null),
@@ -131,6 +139,7 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
               const SizedBox(height: 180),
             ],
           ),
+        ),
         ),
         NotificationListener<DraggableScrollableNotification>(
           onNotification: (n) {
@@ -173,17 +182,13 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF6B8EFF), Color(0xFF4A90E2)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
+            color: theme.colorScheme.primary,
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF4A90E2).withOpacity(0.3),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
+                color: Colors.black.withOpacity(0.05),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
               ),
             ],
           ),

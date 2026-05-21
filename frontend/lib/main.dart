@@ -109,9 +109,13 @@ class MDQApp extends ConsumerWidget {
     final User? currentUser = activeUser ?? fetchedUser;
 
     // 4. Determine Theme
-    ThemeMode currentMode = ThemeMode.light;
-    if (currentUser != null && currentUser.settingsTheme == 'dark') {
-      currentMode = ThemeMode.dark;
+    ThemeMode currentMode = ThemeMode.system;
+    if (currentUser != null) {
+      if (currentUser.settingsTheme == 'dark') {
+        currentMode = ThemeMode.dark;
+      } else if (currentUser.settingsTheme == 'light') {
+        currentMode = ThemeMode.light;
+      }
     }
 
     return MaterialApp.router(

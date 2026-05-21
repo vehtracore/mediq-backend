@@ -5,7 +5,18 @@ import 'package:intl/intl.dart';
 import 'package:mediq_app/src/features/reviews/data/review_repository.dart';
 import '../data/appointment_model.dart';
 import '../data/appointment_repository.dart';
+import 'package:mediq_app/presentation/widgets/global_error_widget.dart';
 
+/// Purpose: Drives the state of the user's Schedule/Appointments screen by filtering and presenting
+/// a unified list of past and upcoming appointments, ensuring stale history is removed.
+///
+/// Data Source: Communicates with `appointmentRepositoryProvider` (`getMyAppointments()` API endpoint).
+///
+/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(myAppointmentsProvider)` 
+/// on pull-to-refresh, retry taps in GlobalErrorWidget, or immediately after a successful cancellation/booking mutation.
+///
+/// Error & Loading Annotations: Exceptions thrown by the API (like `DioException`) are caught by Riverpod 
+/// and translated into clean localized strings by the `GlobalErrorWidget` wrapped around this provider's `error` state.
 final myAppointmentsProvider =
     FutureProvider.autoDispose<List<Appointment>>((ref) async {
   final repo = ref.watch(appointmentRepositoryProvider);
@@ -58,7 +69,10 @@ class ScheduleScreen extends ConsumerWidget {
       ),
       body: appointmentsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (err, stack) => Center(child: Text('Error: $err')),
+        error: (err, stack) => GlobalErrorWidget(
+              error: err,
+              onRetry: () => ref.invalidate(myAppointmentsProvider),
+            ),
         data: (appointments) {
           if (appointments.isEmpty) {
             return const Center(child: Text("No appointments yet"));
@@ -158,10 +172,20 @@ class _AppointmentCard extends ConsumerWidget {
     final isCompleted = appointment.status == 'completed';
     final isUnpaid = appointment.paymentStatus == 'unpaid';
 
-    Color statusColor = Colors.orange;
-    if (isConfirmed) statusColor = Colors.green;
-    if (isCompleted) statusColor = Colors.blue;
-    if (appointment.status == 'cancelled') statusColor = Colors.red;
+    Color statusBgColor = Colors.orange.withOpacity(0.1);
+    Color statusTextColor = Colors.orange;
+    if (isConfirmed) {
+      statusBgColor = Colors.green.withOpacity(0.1);
+      statusTextColor = Colors.green;
+    }
+    if (isCompleted) {
+      statusBgColor = Colors.blue.withOpacity(0.1);
+      statusTextColor = Colors.blue;
+    }
+    if (appointment.status == 'cancelled') {
+      statusBgColor = Colors.grey.shade200;
+      statusTextColor = Colors.grey.shade700;
+    }
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -216,11 +240,11 @@ class _AppointmentCard extends ConsumerWidget {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
-                            color: statusColor.withOpacity(0.1),
+                            color: statusBgColor,
                             borderRadius: BorderRadius.circular(8)),
                         child: Text(appointment.status.toUpperCase(),
                             style: TextStyle(
-                                color: statusColor,
+                                color: statusTextColor,
                                 fontSize: 10,
                                 fontWeight: FontWeight.bold)),
                       ),
@@ -230,85 +254,87 @@ class _AppointmentCard extends ConsumerWidget {
           ),
           if (appointment.status != 'cancelled') ...[
             const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                if (appointment.status == 'pending' || isConfirmed)
-                  TextButton(
-                      onPressed: () async {
-                        try {
-                          await ref
-                              .read(appointmentRepositoryProvider)
-                              .cancelMyAppointment(appointment.id);
-                          ref.refresh(myAppointmentsProvider);
-                        } catch (e) {}
-                      },
-                      child: const Text("Cancel",
-                          style: TextStyle(color: Colors.redAccent))),
-                if (isConfirmed) ...[
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                      onPressed: () => context.push('/chat', extra: {
-                            'title': appointment.doctorName,
-                            'isAi': false,
-                            'appointmentId': appointment.id,
-                            'doctorId': appointment.doctorId,
-                            'isCompleted': appointment.status == 'completed'
-                          }),
-                      icon: const Icon(Icons.chat_bubble_outline, size: 16),
-                      label: const Text("Chat"),
-                      style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          minimumSize: const Size(0, 36))),
-                  const SizedBox(width: 8),
-                  ElevatedButton(
-                      onPressed: () => context.push('/video_call?type=voice',
-                          extra: appointment.id),
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          minimumSize: const Size(0, 36)),
-                      child: const Icon(Icons.phone, size: 18)),
-                  const SizedBox(width: 8),
-                  ElevatedButton.icon(
-                      onPressed: () =>
-                          context.push('/video_call', extra: appointment.id),
-                      icon: const Icon(Icons.videocam, size: 16),
-                      label: const Text("Video"),
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blueAccent,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          minimumSize: const Size(0, 36))),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  if (appointment.status == 'pending' || isConfirmed)
+                    TextButton(
+                        onPressed: () async {
+                          try {
+                            await ref
+                                .read(appointmentRepositoryProvider)
+                                .cancelMyAppointment(appointment.id);
+                            ref.refresh(myAppointmentsProvider);
+                          } catch (e) {}
+                        },
+                        child: Text("Cancel",
+                            style: TextStyle(color: theme.colorScheme.error))),
+                  if (isConfirmed) ...[
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
+                        onPressed: () => context.push('/chat', extra: {
+                              'title': appointment.doctorName,
+                              'isAi': false,
+                              'appointmentId': appointment.id,
+                              'doctorId': appointment.doctorId,
+                              'isCompleted': appointment.status == 'completed'
+                            }),
+                        icon: const Icon(Icons.chat_bubble_outline, size: 18),
+                        style: IconButton.styleFrom(
+                            backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                            foregroundColor: theme.colorScheme.primary,
+                        )),
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
+                        onPressed: () => context.push('/video_call?type=voice',
+                            extra: appointment.id),
+                        icon: const Icon(Icons.phone, size: 18),
+                        style: IconButton.styleFrom(
+                            backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                            foregroundColor: theme.colorScheme.primary,
+                        )),
+                    const SizedBox(width: 8),
+                    FilledButton.tonalIcon(
+                        onPressed: () =>
+                            context.push('/video_call', extra: appointment.id),
+                        icon: const Icon(Icons.videocam, size: 16),
+                        label: const Text("Video"),
+                        style: FilledButton.styleFrom(
+                            backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                            foregroundColor: theme.colorScheme.primary,
+                            elevation: 0,
+                        )),
+                  ],
+                  if (isUnpaid) ...[
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                        onPressed: () => context.push('/payment', extra: {
+                              'transactionType': 'specialist_consult', // Works for both GP and Specialist backend logic
+                              'baseAmount': appointment.amount,
+                              'title': 'Consultation Payment',
+                              'appointmentId': appointment.id,
+                              'userId': appointment.patientId,
+                              'paystackReference': appointment.paystackReference,
+                            }),
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                            foregroundColor: Colors.white),
+                        child: const Text("Pay Now")),
+                  ],
+                  if (isCompleted && !appointment.hasReview) ...[
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                        onPressed: () => _showRatingSheet(context, ref),
+                        icon: const Icon(Icons.star, size: 16),
+                        label: const Text("Review"),
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.amber,
+                            foregroundColor: Colors.black)),
+                  ],
                 ],
-                if (isUnpaid) ...[
-                  const SizedBox(width: 8),
-                  ElevatedButton(
-                      onPressed: () => context.push('/payment', extra: {
-                            'transactionType': 'specialist_consult', // Works for both GP and Specialist backend logic
-                            'baseAmount': appointment.amount,
-                            'title': 'Consultation Payment',
-                            'appointmentId': appointment.id,
-                            'userId': appointment.patientId,
-                            'paystackReference': appointment.paystackReference,
-                          }),
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white),
-                      child: const Text("Pay Now")),
-                ],
-                if (isCompleted && !appointment.hasReview) ...[
-                  const SizedBox(width: 8),
-                  ElevatedButton.icon(
-                      onPressed: () => _showRatingSheet(context, ref),
-                      icon: const Icon(Icons.star, size: 16),
-                      label: const Text("Review"),
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.amber,
-                          foregroundColor: Colors.black)),
-                ],
-              ],
+              ),
             ),
           ],
         ],

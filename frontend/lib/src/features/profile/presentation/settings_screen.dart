@@ -215,10 +215,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF4A90E2), Color(0xFF1565C0)],
-                    begin: Alignment.centerLeft, end: Alignment.centerRight,
-                  ),
+                  color: const Color(0xFF1E293B),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Row(children: [

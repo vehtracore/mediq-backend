@@ -1,72 +1,99 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_model.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_repository.dart';
 
-// --- NEW: Tab State Management (Notifier instead of StateProvider) ---
+// ---------------------------------------------------------------------------
+// Tab state — tracks which tab the user is viewing (0 = Requests, 1 = Queue)
+// ---------------------------------------------------------------------------
 final requestTabProvider = NotifierProvider<RequestTabNotifier, int>(
   RequestTabNotifier.new,
 );
 
 class RequestTabNotifier extends Notifier<int> {
   @override
-  int build() {
-    return 0; // Default to Tab 0 (Direct Requests)
-  }
+  int build() => 0; // Default to Tab 0 (Direct Requests)
 
-  void setTab(int index) {
-    state = index;
-  }
+  void setTab(int index) => state = index;
 }
 
-// --- Requests Controller ---
-final requestsControllerProvider =
-    AsyncNotifierProvider<RequestsController, List<Appointment>>(
-      RequestsController.new,
+// ---------------------------------------------------------------------------
+// FIX: Each tab now has its own independent provider so both lists can be
+// fetched and cached concurrently. The old design shared one provider for
+// both tabs, which meant one tab always saw stale/mismatched data.
+// ---------------------------------------------------------------------------
+
+/// Provider for Tab 0: Direct appointment requests directed at this doctor.
+final doctorRequestsProvider =
+    FutureProvider.autoDispose<List<Appointment>>((ref) async {
+  final repo = ref.watch(appointmentRepositoryProvider);
+
+  if (kDebugMode) {
+    debugPrint('📋 [requestsProvider] Fetching doctor direct requests...');
+  }
+
+  final result = await repo.getDoctorRequests();
+
+  if (kDebugMode) {
+    debugPrint(
+      '📋 [requestsProvider] Got ${result.length} direct request(s).',
     );
+  }
 
-class RequestsController extends AsyncNotifier<List<Appointment>> {
+  return result;
+});
+
+/// Provider for Tab 1: Unclaimed general-queue GP consultations.
+final generalQueueProvider =
+    FutureProvider.autoDispose<List<Appointment>>((ref) async {
+  final repo = ref.watch(appointmentRepositoryProvider);
+
+  if (kDebugMode) {
+    debugPrint('🏥 [queueProvider] Fetching general queue...');
+  }
+
+  final result = await repo.getGeneralQueue();
+
+  if (kDebugMode) {
+    debugPrint('🏥 [queueProvider] Got ${result.length} queue item(s).');
+  }
+
+  return result;
+});
+
+// ---------------------------------------------------------------------------
+// Mutation controller — wraps accept/decline/claim and invalidates the correct
+// provider after each mutation so the list refreshes automatically.
+// ---------------------------------------------------------------------------
+final requestsControllerProvider =
+    AsyncNotifierProvider<RequestsController, void>(RequestsController.new);
+
+class RequestsController extends AsyncNotifier<void> {
   @override
-  FutureOr<List<Appointment>> build() async {
-    // Watch tab to auto-refresh when switching
-    final tab = ref.watch(requestTabProvider);
-    return _fetchData(tab);
-  }
-
-  Future<List<Appointment>> _fetchData(int tabIndex) async {
-    final repo = ref.watch(appointmentRepositoryProvider);
-    // 0 = Direct Requests, 1 = General Queue
-    if (tabIndex == 0) {
-      return await repo.getDoctorRequests();
-    } else {
-      return await repo.getGeneralQueue();
-    }
-  }
+  FutureOr<void> build() {}
 
   Future<void> accept(int id) async {
-    final repo = ref.read(appointmentRepositoryProvider);
     state = const AsyncLoading();
     state = await AsyncValue.guard(() async {
-      await repo.acceptAppointment(id);
-      return _fetchData(ref.read(requestTabProvider));
+      await ref.read(appointmentRepositoryProvider).acceptAppointment(id);
+      ref.invalidate(doctorRequestsProvider);
     });
   }
 
   Future<void> decline(int id) async {
-    final repo = ref.read(appointmentRepositoryProvider);
     state = const AsyncLoading();
     state = await AsyncValue.guard(() async {
-      await repo.declineAppointment(id);
-      return _fetchData(ref.read(requestTabProvider));
+      await ref.read(appointmentRepositoryProvider).declineAppointment(id);
+      ref.invalidate(doctorRequestsProvider);
     });
   }
 
   Future<void> claim(int id) async {
-    final repo = ref.read(appointmentRepositoryProvider);
     state = const AsyncLoading();
     state = await AsyncValue.guard(() async {
-      await repo.claimAppointment(id);
-      return _fetchData(ref.read(requestTabProvider));
+      await ref.read(appointmentRepositoryProvider).claimAppointment(id);
+      ref.invalidate(generalQueueProvider);
     });
   }
 }

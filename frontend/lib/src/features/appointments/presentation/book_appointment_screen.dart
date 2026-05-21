@@ -5,7 +5,19 @@ import 'package:intl/intl.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_model.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_repository.dart';
 import 'package:mediq_app/src/features/appointments/data/slot_model.dart';
+import 'package:mediq_app/src/shared/presentation/widgets/doctor_avatar.dart';
 
+/// Purpose: Drives the calendar and time selection grid on the Book Appointment screen,
+/// providing real-time availability for a specific doctor.
+///
+/// Data Source: Communicates with `appointmentRepositoryProvider` (`getSlots(doctorId)` API endpoint).
+///
+/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(slotsProvider(doctorId))` 
+/// after a slot is successfully booked (to prevent double-booking) or on pull-to-refresh.
+/// AutoDispose handles cleanup when the user navigates away from the booking screen.
+///
+/// Error & Loading Annotations: Exceptions thrown by the API (like `DioException`) are caught by Riverpod 
+/// and translated into localized strings directly within the UI's `error` state block.
 final slotsProvider = FutureProvider.family
     .autoDispose<List<DoctorSlot>, int>((ref, doctorId) async {
   final repo = ref.watch(appointmentRepositoryProvider);
@@ -120,21 +132,10 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
               children: [
                 Row(
                   children: [
-                    CircleAvatar(
+                    DoctorAvatar(
+                      imageUrl: widget.doctor.imageUrl,
+                      fullName: widget.doctor.fullName,
                       radius: 30,
-                      backgroundColor: Colors.grey[200],
-                      child: ClipOval(
-                        child: widget.doctor.imageUrl.isNotEmpty
-                            ? Image.network(
-                                widget.doctor.imageUrl,
-                                width: 60,
-                                height: 60,
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) =>
-                                    const Icon(Icons.person, size: 35, color: Colors.grey),
-                              )
-                            : const Icon(Icons.person, size: 35, color: Colors.grey),
-                      ),
                     ),
                     const SizedBox(width: 16),
                     Column(

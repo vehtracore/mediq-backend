@@ -22,7 +22,14 @@ class DoctorDetailScreen extends StatelessWidget {
             foregroundColor: theme.appBarTheme.foregroundColor,
             flexibleSpace: FlexibleSpaceBar(
                 background: doctor.imageUrl.isNotEmpty
-                    ? Image.network(doctor.imageUrl, fit: BoxFit.cover)
+                    ? Image.network(
+                        doctor.imageUrl, 
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) => Container(
+                          color: const Color(0xFF4A90E2),
+                          child: const Icon(Icons.person, color: Colors.white, size: 100),
+                        ),
+                      )
                     : Container(
                         color: const Color(0xFF4A90E2),
                         child: const Icon(Icons.person, color: Colors.white, size: 100),
