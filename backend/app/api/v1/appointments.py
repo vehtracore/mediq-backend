@@ -446,3 +446,38 @@ def acknowledge_appointment(appt_id: int, db: Session = Depends(get_db), current
     appt.is_acknowledged = True
     db.commit()
     return {"status": "success"}
+
+@router.patch("/{appt_id}/propose", response_model=AppointmentResponse)
+def propose_appointment_time(
+    appt_id: int,
+    payload: AppointmentProposeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user)
+):
+    appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
+    if not appt:
+        raise HTTPException(404, "Appointment not found")
+
+    # Update start time and status
+    appt.start_time = payload.proposed_time
+    appt.status = "awaiting_payment"
+    db.commit()
+    db.refresh(appt)
+
+    p_name = f"{appt.patient.first_name} {appt.patient.last_name}" if appt.patient else "Unknown"
+    
+    return AppointmentResponse(
+        id=appt.id,
+        doctor_id=appt.doctor_id,
+        patient_id=appt.patient_id,
+        doctor_name=p_name,
+        patient_name=p_name,
+        status=appt.status,
+        payment_status=appt.payment_status,
+        is_acknowledged=getattr(appt, 'is_acknowledged', False),
+        start_time=appt.start_time,
+        notes=appt.notes,
+        has_review=False,
+        amount=getattr(appt, 'amount', 0.0),
+        paystack_reference=getattr(appt, 'paystack_reference', None)
+    )

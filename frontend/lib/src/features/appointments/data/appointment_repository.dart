@@ -247,4 +247,18 @@ class AppointmentRepository {
       throw Exception('Failed to acknowledge appointment: $e');
     }
   }
+
+  Future<void> proposeAppointmentTime(int appointmentId, DateTime proposedTime) async {
+    final ep = 'PATCH /api/v1/appointments/$appointmentId/propose';
+    _logAuthHandshake(ep);
+    try {
+      final response = await _dio.patch(
+        '/api/v1/appointments/$appointmentId/propose',
+        data: {'proposed_time': proposedTime.toUtc().toIso8601String()},
+      );
+      _logResponse(ep, response.data);
+    } catch (e) {
+      throw Exception('Failed to propose appointment time: $e');
+    }
+  }
 }

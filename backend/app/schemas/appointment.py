@@ -22,6 +22,10 @@ class AppointmentCreate(BaseModel):
     notes: Optional[str] = None
 
 
+class AppointmentProposeRequest(BaseModel):
+    proposed_time: datetime
+
+
 class AppointmentResponse(BaseModel):
     id: int
     # --- IDs (integer, relational DB PKs) ---
