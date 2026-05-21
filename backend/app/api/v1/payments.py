@@ -369,7 +369,8 @@ def _apply_db_update(
             )
 
         appt.payment_status = "paid"
-        appt.status = "confirmed"
+        # FIX: Leave status as "pending" so it stays in the doctor's queue.
+        # Doctors must manually accept/claim the appointment to confirm it.
         db.commit()
         db.refresh(appt)
 
