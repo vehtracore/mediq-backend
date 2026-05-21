@@ -44,7 +44,7 @@ class Appointment {
     }
 
     // Safe int parsing: handles both int and string representations gracefully.
-    int? _safeInt(dynamic v) {
+    int? safeInt(dynamic v) {
       if (v == null) return null;
       if (v is int) return v;
       if (v is String) return int.tryParse(v);
@@ -52,10 +52,10 @@ class Appointment {
     }
 
     return Appointment(
-      id: _safeInt(json['id']) ?? 0,
-      doctorId: _safeInt(json['doctor_id']),
+      id: safeInt(json['id']) ?? 0,
+      doctorId: safeInt(json['doctor_id']),
       doctorName: (json['doctor_name'] as String?) ?? 'Doctor',
-      patientId: _safeInt(json['patient_id']),
+      patientId: safeInt(json['patient_id']),
       patientName: (json['patient_name'] as String?) ?? 'Patient',
       startTime: DateTime.parse(json['start_time'] as String),
       status: (json['status'] as String?) ?? 'pending',

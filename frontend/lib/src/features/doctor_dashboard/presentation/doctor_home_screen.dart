@@ -7,9 +7,6 @@ import 'package:mediq_app/src/features/doctor_dashboard/presentation/doctor_prof
 import 'package:mediq_app/src/features/doctor_dashboard/presentation/doctor_schedule_screen.dart';
 import 'package:mediq_app/src/features/doctor_dashboard/presentation/requests_controller.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_repository.dart';
-import 'package:mediq_app/src/shared/presentation/widgets/error_state_widget.dart';
-import 'package:mediq_app/src/core/api/app_exception.dart';
-import 'package:dio/dio.dart';
 import '../../../../presentation/widgets/global_error_widget.dart';
 
 /// Purpose: Drives the overview statistics (Earnings, Rating) on the Doctor Dashboard 
@@ -55,7 +52,7 @@ class _DoctorHomeScreenState extends ConsumerState<DoctorHomeScreen> {
         backgroundColor: theme.cardTheme.color, // ✅ Dynamic Nav Bar
         selectedItemColor: const Color(0xFF4A90E2),
         unselectedItemColor:
-            theme.iconTheme.color?.withOpacity(0.5), // ✅ Dynamic Icon Color
+            theme.iconTheme.color?.withValues(alpha: 0.5), // ✅ Dynamic Icon Color
         items: const [
           BottomNavigationBarItem(
               icon: Icon(Icons.dashboard_outlined), label: 'Overview'),
@@ -169,7 +166,7 @@ class _DoctorDashboardTab extends ConsumerWidget {
                 ? [] // No shadow in dark mode
                 : [
                     BoxShadow(
-                        color: Colors.grey.withOpacity(0.1), blurRadius: 10)
+                        color: Colors.grey.withValues(alpha: 0.1), blurRadius: 10)
                   ]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Icon(icon, color: color, size: 24),

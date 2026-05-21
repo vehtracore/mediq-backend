@@ -210,13 +210,13 @@ class _RequestCard extends ConsumerWidget {
             ? []
             : [
                 BoxShadow(
-                  color: Colors.grey.withOpacity(0.08),
+                  color: Colors.grey.withValues(alpha: 0.08),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 )
               ],
         border: isGeneral
-            ? Border.all(color: Colors.orange.withOpacity(0.3))
+            ? Border.all(color: Colors.orange.withValues(alpha: 0.3))
             : null,
       ),
       child: Column(
@@ -227,8 +227,8 @@ class _RequestCard extends ConsumerWidget {
             children: [
               CircleAvatar(
                 backgroundColor: isGeneral
-                    ? Colors.orange.withOpacity(0.1)
-                    : const Color(0xFF4A90E2).withOpacity(0.1),
+                    ? Colors.orange.withValues(alpha: 0.1)
+                    : const Color(0xFF4A90E2).withValues(alpha: 0.1),
                 child: Icon(
                   isGeneral ? Icons.flash_on : Icons.person,
                   color: isGeneral ? Colors.orange : const Color(0xFF4A90E2),
@@ -259,8 +259,8 @@ class _RequestCard extends ConsumerWidget {
                     const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: appointment.paymentStatus == 'paid'
-                      ? Colors.green.withOpacity(0.1)
-                      : Colors.amber.withOpacity(0.1),
+                      ? Colors.green.withValues(alpha: 0.1)
+                      : Colors.amber.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
