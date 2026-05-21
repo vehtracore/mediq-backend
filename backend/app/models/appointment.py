@@ -22,6 +22,7 @@ class Appointment(Base):
     start_time = Column(DateTime, default=datetime.utcnow, index=True)
     status = Column(String, default="pending", index=True)
     payment_status = Column(String, default="unpaid")
+    is_acknowledged = Column(Boolean, default=False)
     notes = Column(String, nullable=True)
     related_appointment_id = Column(Integer, nullable=True)
     amount = Column(Float, default=0.0)

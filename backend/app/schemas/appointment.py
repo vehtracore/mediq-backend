@@ -38,6 +38,7 @@ class AppointmentResponse(BaseModel):
 
     status: str
     payment_status: str
+    is_acknowledged: bool = False
     start_time: datetime
     notes: Optional[str] = None
     amount: float = 0.0

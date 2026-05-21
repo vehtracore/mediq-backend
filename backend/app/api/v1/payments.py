@@ -369,8 +369,15 @@ def _apply_db_update(
             )
 
         appt.payment_status = "paid"
-        # FIX: Leave status as "pending" so it stays in the doctor's queue.
-        # Doctors must manually accept/claim the appointment to confirm it.
+        
+        # Dual-pipeline confirmation:
+        # Scheduled bookings (doctor_id is set) auto-confirm upon payment.
+        # General Queue bookings (doctor_id is None) remain pending for manual claiming.
+        if appt.doctor_id is not None:
+            appt.status = "confirmed"
+        else:
+            appt.status = "pending"
+
         db.commit()
         db.refresh(appt)
 

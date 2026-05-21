@@ -236,4 +236,15 @@ class AppointmentRepository {
       throw Exception('Failed to claim appointment');
     }
   }
+
+  Future<void> acknowledgeAppointment(int appointmentId) async {
+    final ep = 'PATCH /api/v1/appointments/$appointmentId/acknowledge';
+    _logAuthHandshake(ep);
+    try {
+      final response = await _dio.patch('/api/v1/appointments/$appointmentId/acknowledge');
+      _logResponse(ep, response.data);
+    } catch (e) {
+      throw Exception('Failed to acknowledge appointment: $e');
+    }
+  }
 }

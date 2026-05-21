@@ -12,6 +12,7 @@ class Appointment {
   final DateTime startTime;
   final String status;
   final String paymentStatus;
+  final bool isAcknowledged;
   final double amount;
   final String? notes;
   final bool hasReview;
@@ -26,7 +27,8 @@ class Appointment {
     required this.startTime,
     required this.status,
     required this.paymentStatus,
-    required this.amount,
+    this.isAcknowledged = false,
+    this.amount = 0.0,
     this.notes,
     this.hasReview = false,
     this.paystackReference,
@@ -60,6 +62,7 @@ class Appointment {
       startTime: DateTime.parse(json['start_time'] as String),
       status: (json['status'] as String?) ?? 'pending',
       paymentStatus: (json['payment_status'] as String?) ?? 'unpaid',
+      isAcknowledged: json['is_acknowledged'] == true,
       amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
       notes: json['notes'] as String?,
       hasReview: (json['has_review'] as bool?) ?? false,

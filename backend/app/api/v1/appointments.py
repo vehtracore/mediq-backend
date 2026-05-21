@@ -53,6 +53,7 @@ def map_appt(a, doc_name=None, patient_name=None):
         patient_name=patient_name,
         status=a.status,
         payment_status=a.payment_status,
+        is_acknowledged=getattr(a, 'is_acknowledged', False),
         start_time=s_time,
         notes=a.notes,
         amount=getattr(a, 'amount', 0.0),
@@ -261,6 +262,7 @@ def get_doctor_requests(db: Session = Depends(get_db), current_user: User = Depe
             patient_name=p_name,
             status=a.status,
             payment_status=a.payment_status,
+            is_acknowledged=getattr(a, 'is_acknowledged', False),
             start_time=a.slot.start_time if a.slot else a.start_time,
             notes=a.notes,
             has_review=False,
@@ -305,6 +307,7 @@ def get_general_queue(db: Session = Depends(get_db), current_user: User = Depend
             patient_name=p_name,
             status=a.status,
             payment_status=a.payment_status,
+            is_acknowledged=getattr(a, 'is_acknowledged', False),
             start_time=a.start_time,
             notes=a.notes,
             has_review=False,
@@ -431,6 +434,15 @@ def get_doctor_confirmed_appointments(db: Session = Depends(get_db), current_use
     for a in scheduled + general:
         p_name = f"{a.patient.first_name} {a.patient.last_name}" if a.patient else "Unknown"
         start = a.slot.start_time if a.slot else a.start_time
-        results.append(AppointmentResponse(id=a.id, doctor_name=p_name, status=a.status, payment_status=a.payment_status, start_time=start, notes=a.notes, has_review=False))
+        results.append(AppointmentResponse(id=a.id, doctor_name=p_name, status=a.status, payment_status=a.payment_status, is_acknowledged=getattr(a, 'is_acknowledged', False), start_time=start, notes=a.notes, has_review=False))
     results.sort(key=lambda x: x.start_time)
     return results
+
+@router.patch("/{appt_id}/acknowledge")
+def acknowledge_appointment(appt_id: int, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
+    appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
+    if not appt:
+        raise HTTPException(404, "Appointment not found")
+    appt.is_acknowledged = True
+    db.commit()
+    return {"status": "success"}
