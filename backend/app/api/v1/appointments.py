@@ -12,7 +12,7 @@ from app.models.appointment import Appointment, DoctorSlot
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.review import Review
-from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, GeneralBookRequest, ReferralRequest, ReferralResponse
+from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, GeneralBookRequest, ReferralRequest, ReferralResponse, AppointmentProposeRequest
 from app.api import deps
 
 logger = logging.getLogger(__name__)
