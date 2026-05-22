@@ -224,6 +224,8 @@ def _parse_reference(reference: str) -> tuple[str, str | None, str | None]:
         transaction_type = "gp_consult"
     elif "specialist" in reference:
         transaction_type = "specialist_consult"
+    elif "vip_request" in reference:           # VIP propose-and-pay flow
+        transaction_type = "vip_request"
     elif "family_subscription" in reference:   # must precede plain "sub" check
         transaction_type = "family_subscription"
     elif "sub" in reference:
@@ -349,7 +351,8 @@ def _apply_db_update(
         }
 
     # ── Flow B: Appointment payment confirmation ───────────────────────────────
-    elif transaction_type in ("gp_consult", "specialist_consult"):
+    # Covers: gp_consult, specialist_consult, and vip_request (propose-and-pay).
+    elif transaction_type in ("gp_consult", "specialist_consult", "vip_request"):
         from app.models.appointment import Appointment  # local import → no circular dep
 
         if not ref_appointment_id:
@@ -369,10 +372,12 @@ def _apply_db_update(
             )
 
         appt.payment_status = "paid"
-        
+
         # Dual-pipeline confirmation:
-        # Scheduled bookings (doctor_id is set) auto-confirm upon payment.
-        # General Queue bookings (doctor_id is None) remain pending for manual claiming.
+        # ┌─ doctor_id IS set: direct booking OR VIP (propose-and-pay) → confirm immediately.
+        #    This covers both 'pending' (specialist direct) and 'awaiting_payment' (VIP after
+        #    doctor proposed a time), so no status guard is needed here.
+        # └─ doctor_id IS NULL: General Queue → stays 'pending' for manual doctor claiming.
         if appt.doctor_id is not None:
             appt.status = "confirmed"
         else:
