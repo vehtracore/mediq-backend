@@ -12,7 +12,7 @@ from app.models.appointment import Appointment, DoctorSlot
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.review import Review
-from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, GeneralBookRequest, ReferralRequest, ReferralResponse, AppointmentProposeRequest
+from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, GeneralBookRequest, ReferralRequest, ReferralResponse, AppointmentProposeRequest, VIPBookRequest
 from app.api import deps
 
 logger = logging.getLogger(__name__)
@@ -24,11 +24,12 @@ router = APIRouter()
 def map_appt(a, doc_name=None, patient_name=None):
     d_name = doc_name if doc_name else (a.doctor.full_name if a.doctor else "Waiting...")
 
-    # Guard slot access — slot may not be lazy-loaded in all contexts
+    # Guard slot access — slot may not be lazy-loaded in all contexts.
+    # VIP requests have no slot, so start_time may be None.
     try:
-        s_time = a.slot.start_time if a.slot else a.start_time
+        s_time = a.slot.start_time if (a.slot and a.slot_id) else getattr(a, 'start_time', None)
     except Exception:
-        s_time = a.start_time
+        s_time = getattr(a, 'start_time', None)
 
     # Resolve patient name from relationship if not supplied directly
     if patient_name is None and getattr(a, 'patient', None):
@@ -192,6 +193,67 @@ def book_general_consultation(req: GeneralBookRequest, db: Session = Depends(get
     db.refresh(new_appointment)
 
     return map_appt(new_appointment, "General Practitioner")
+
+
+@router.post("/request", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
+def request_vip_appointment(
+    req: VIPBookRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user)
+):
+    """Creates a direct VIP request from a patient to a specific doctor.
+    The appointment starts as pending/unpaid with no start_time, waiting
+    for the doctor to propose a time via PATCH /propose.
+    """
+    # Verify the target doctor exists
+    doctor = db.query(Doctor).filter(Doctor.id == req.doctor_id).first()
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    # Pricing: same as specialist consult
+    doctor_payout = 3500.0
+    patient_price = 5000.0 if current_user.plan == "premium" else 7500.0
+    platform_commission = patient_price - doctor_payout
+
+    new_appt = Appointment(
+        patient_id=current_user.id,
+        doctor_id=req.doctor_id,
+        slot_id=None,
+        start_time=None,       # No time yet — doctor will propose via /propose
+        status="pending",
+        payment_status="unpaid",
+        notes=f"[{req.preferred_time}] {req.notes}",
+        amount=patient_price,
+        commission=platform_commission,
+        payout=doctor_payout,
+    )
+    db.add(new_appt)
+    db.commit()
+    db.refresh(new_appt)
+
+    # Generate Paystack reference now so checkout is ready once doctor proposes time
+    epoch_ms = int(time.time() * 1000)
+    new_appt.paystack_reference = (
+        f"MDQ-vip_request-{new_appt.id}-{current_user.id}-{epoch_ms}"
+    )
+    db.commit()
+
+    # Re-fetch with relationships for map_appt
+    new_appt = (
+        db.query(Appointment)
+        .options(
+            joinedload(Appointment.doctor),
+            joinedload(Appointment.review),
+        )
+        .filter(Appointment.id == new_appt.id)
+        .first()
+    )
+
+    logger.info(
+        "[VIP Request] patient_id=%s -> doctor_id=%s appt_id=%s",
+        current_user.id, req.doctor_id, new_appt.id
+    )
+    return map_appt(new_appt)
 
 @router.get("/my", response_model=List[AppointmentResponse])
 def get_my_appointments(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):

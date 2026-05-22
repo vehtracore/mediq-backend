@@ -43,7 +43,7 @@ class AppointmentResponse(BaseModel):
     status: str
     payment_status: str
     is_acknowledged: bool = False
-    start_time: datetime
+    start_time: Optional[datetime] = None
     notes: Optional[str] = None
     amount: float = 0.0
     has_review: bool = False
@@ -54,6 +54,12 @@ class AppointmentResponse(BaseModel):
 
 class GeneralBookRequest(BaseModel):
     notes: str
+
+
+class VIPBookRequest(BaseModel):
+    doctor_id: int
+    notes: str
+    preferred_time: str = "Morning"  # Morning / Afternoon / Evening
 
 
 # --- Continuity of Care: Referral Schemas ---
