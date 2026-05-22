@@ -38,6 +38,19 @@ class DoctorRepository {
     await _dio.post('/api/v1/appointments/slots', data: {"doctor_id": doctorId, "start_time": startTime.toIso8601String()});
   }
 
+  Future<void> deleteSlot(int slotId) async {
+    try {
+      await _dio.delete('/api/v1/appointments/slots/$slotId');
+    } on DioException catch (e) {
+      final detail = e.response?.data is Map
+          ? e.response?.data['detail'] ?? e.message
+          : e.message;
+      throw Exception(detail ?? 'Failed to delete slot');
+    } catch (e) {
+      throw Exception('Failed to delete slot: $e');
+    }
+  }
+
   /// Links a bank account to the doctor's Paystack subaccount.
   /// Throws [DioException] on failure — the error message from Paystack is
   /// forwarded verbatim inside [DioException.response.data['detail']].

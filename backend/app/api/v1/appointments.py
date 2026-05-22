@@ -77,6 +77,48 @@ def create_slot(slot: SlotCreate, db: Session = Depends(get_db)):
 def get_doctor_slots(doctor_id: int, db: Session = Depends(get_db)):
     return db.query(DoctorSlot).filter(DoctorSlot.doctor_id == doctor_id, DoctorSlot.is_booked == False).order_by(DoctorSlot.start_time).all()
 
+@router.delete("/slots/{slot_id}", status_code=200)
+def delete_doctor_slot(
+    slot_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """Delete an unbooked availability slot.
+
+    Guardrails (in order):
+      1. Slot must exist.
+      2. Slot must belong to the authenticated doctor (ownership check).
+      3. Slot must not be booked — booked slots must be cancelled via the
+         appointment flow to preserve audit history.
+    """
+    slot = db.query(DoctorSlot).filter(DoctorSlot.id == slot_id).first()
+    if not slot:
+        raise HTTPException(status_code=404, detail="Slot not found.")
+
+    # Ownership: resolve doctor row from the authenticated user
+    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+    if not doctor or slot.doctor_id != doctor.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to delete this slot.",
+        )
+
+    # Safety: refuse to delete a slot that already has a booking
+    if slot.is_booked:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete a slot that is already booked. "
+                   "Please cancel the appointment instead.",
+        )
+
+    db.delete(slot)
+    db.commit()
+    logger.info(
+        "[Slot Delete] slot_id=%s deleted by doctor_id=%s (user_id=%s)",
+        slot_id, doctor.id, current_user.id,
+    )
+    return {"status": "success", "message": f"Slot {slot_id} deleted."}
+
 @router.post("/book", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
 def book_appointment(
     appt_data: AppointmentCreate,

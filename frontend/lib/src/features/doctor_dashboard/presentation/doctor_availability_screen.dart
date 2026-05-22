@@ -3,12 +3,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../doctors/data/doctor_repository.dart';
 import '../../auth/data/auth_repository.dart';
+import '../../appointments/data/appointment_repository.dart';
 import '../../../shared/presentation/widgets/skeleton_loader.dart';
 import '../../../../presentation/widgets/global_error_widget.dart';
 
 // Provider to get current doctor ID
 final myDoctorProfileProvider = FutureProvider.autoDispose((ref) async {
   return await ref.watch(authRepositoryProvider).getMyDoctorProfile();
+});
+
+// Provider for the doctor's own upcoming (unbooked) slots.
+// Invalidated after every create or delete so the list stays in sync.
+final myDoctorSlotsProvider =
+    FutureProvider.autoDispose<List<dynamic>>((ref) async {
+  final doctor = await ref.watch(myDoctorProfileProvider.future);
+  // Re-use the existing GET endpoint — only returns unbooked slots.
+  final repo = ref.watch(appointmentRepositoryProvider);
+  return await repo.getSlots(doctor.id);
 });
 
 class DoctorAvailabilityScreen extends ConsumerStatefulWidget {
@@ -52,7 +63,6 @@ class _DoctorAvailabilityScreenState
   Future<void> _addSlot(int hour, int doctorId) async {
     setState(() => _isCreating = true);
     try {
-      // Create DateTime for the slot
       final slotTime = DateTime(
         _selectedDate.year,
         _selectedDate.month,
@@ -64,6 +74,9 @@ class _DoctorAvailabilityScreenState
       await ref
           .read(doctorRepositoryProvider)
           .createSlot(doctorId: doctorId, startTime: slotTime);
+
+      // Refresh slot list immediately after creation
+      ref.invalidate(myDoctorSlotsProvider);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -84,6 +97,50 @@ class _DoctorAvailabilityScreenState
       }
     } finally {
       if (mounted) setState(() => _isCreating = false);
+    }
+  }
+
+  Future<void> _deleteSlot(BuildContext context, int slotId, String label) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Slot?'),
+        content: Text('Remove the $label slot from your availability?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await ref.read(doctorRepositoryProvider).deleteSlot(slotId);
+      ref.invalidate(myDoctorSlotsProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Slot removed.'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -216,7 +273,85 @@ class _DoctorAvailabilityScreenState
                     ),
     
                     const SizedBox(height: 40),
-    
+
+                    // --- Upcoming Slots List (with delete) ---
+                    const Text(
+                      'Your Upcoming Slots:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    ref.watch(myDoctorSlotsProvider).when(
+                      loading: () => const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8),
+                        child: LinearProgressIndicator(),
+                      ),
+                      error: (e, _) => Text(
+                        'Could not load slots: $e',
+                        style: const TextStyle(
+                            color: Colors.red, fontSize: 12),
+                      ),
+                      data: (slots) {
+                        if (slots.isEmpty) {
+                          return Padding(
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 12),
+                            child: Text(
+                              'No upcoming slots. Add some above.',
+                              style: TextStyle(
+                                  color: Colors.grey[500], fontSize: 13),
+                            ),
+                          );
+                        }
+                        return Column(
+                          children: slots.map((slot) {
+                            final label = DateFormat('EEE, MMM d • h:mm a')
+                                .format(slot.startTime);
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: theme.cardColor,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                    color: theme.brightness == Brightness.dark
+                                        ? Colors.grey.shade800
+                                        : Colors.grey.shade200),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.schedule,
+                                      size: 16, color: Color(0xFF4A90E2)),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(label,
+                                        style: theme.textTheme.bodyMedium
+                                            ?.copyWith(
+                                                fontWeight: FontWeight.w500)),
+                                  ),
+                                  // Only allow deletion of unbooked slots
+                                  // (the endpoint returns only unbooked ones,
+                                  // but we guard explicitly for clarity).
+                                  if (!slot.isBooked)
+                                    IconButton(
+                                      icon: const Icon(
+                                          Icons.delete_outline,
+                                          color: Colors.red,
+                                          size: 20),
+                                      tooltip: 'Delete slot',
+                                      onPressed: () => _deleteSlot(
+                                          context, slot.id, label),
+                                    ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                        );
+                      },
+                    ),
+
+                    const SizedBox(height: 24),
+
                     // --- Explanation ---
                     Container(
                       padding: const EdgeInsets.all(16),
