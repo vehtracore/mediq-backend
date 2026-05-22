@@ -261,7 +261,7 @@ def get_my_appointments(db: Session = Depends(get_db), current_user: User = Depe
     scheduled = db.query(Appointment).options(joinedload(Appointment.review), joinedload(Appointment.slot)).join(DoctorSlot, Appointment.slot_id == DoctorSlot.id).filter(Appointment.patient_id == current_user.id).all()
     general = db.query(Appointment).options(joinedload(Appointment.review)).filter(Appointment.patient_id == current_user.id, Appointment.slot_id == None).all()
     results = [map_appt(a) for a in scheduled + general]
-    results.sort(key=lambda x: x.start_time, reverse=True)
+    results.sort(key=lambda x: x.start_time or datetime.min, reverse=True)
     return results
 
 @router.put("/{appt_id}/pay", response_model=AppointmentResponse)
@@ -302,7 +302,6 @@ def get_doctor_requests(db: Session = Depends(get_db), current_user: User = Depe
     appts = (
         db.query(Appointment)
         .options(joinedload(Appointment.patient), joinedload(Appointment.slot))
-        .join(DoctorSlot)
         .filter(
             Appointment.doctor_id == doctor.id,
             Appointment.status == "pending",
@@ -497,7 +496,7 @@ def get_doctor_confirmed_appointments(db: Session = Depends(get_db), current_use
         p_name = f"{a.patient.first_name} {a.patient.last_name}" if a.patient else "Unknown"
         start = a.slot.start_time if a.slot else a.start_time
         results.append(AppointmentResponse(id=a.id, doctor_name=p_name, status=a.status, payment_status=a.payment_status, is_acknowledged=getattr(a, 'is_acknowledged', False), start_time=start, notes=a.notes, has_review=False))
-    results.sort(key=lambda x: x.start_time)
+    results.sort(key=lambda x: x.start_time or datetime.min)
     return results
 
 @router.patch("/{appt_id}/acknowledge")
