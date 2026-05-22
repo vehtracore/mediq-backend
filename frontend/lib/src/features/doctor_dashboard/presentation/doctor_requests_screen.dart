@@ -189,7 +189,7 @@ class _RequestCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.read(requestsControllerProvider.notifier);
-    final timeStr = DateFormat('jm').format(appointment.startTime);
+    final timeStr = appointment.startTime != null ? DateFormat('jm').format(appointment.startTime!) : 'Pending';
     final theme = Theme.of(context);
 
     // In doctor-side views the backend encodes the *patient* name in the
@@ -247,7 +247,7 @@ class _RequestCard extends ConsumerWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                     Text(
-                      '${isGeneral ? "GP Queue" : "Direct Request"} · $timeStr',
+                      isGeneral ? 'GP Queue · $timeStr' : 'Direct VIP Request',
                       style: theme.textTheme.bodySmall,
                     ),
                   ],
@@ -317,12 +317,35 @@ class _RequestCard extends ConsumerWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: () => controller.accept(appointment.id),
+                    onPressed: () async {
+                      final selectedDate = await showDatePicker(
+                        context: context,
+                        initialDate: DateTime.now(),
+                        firstDate: DateTime.now(),
+                        lastDate: DateTime.now().add(const Duration(days: 30)),
+                      );
+                      if (selectedDate != null && context.mounted) {
+                        final selectedTime = await showTimePicker(
+                          context: context,
+                          initialTime: TimeOfDay.now(),
+                        );
+                        if (selectedTime != null) {
+                          final dt = DateTime(
+                            selectedDate.year,
+                            selectedDate.month,
+                            selectedDate.day,
+                            selectedTime.hour,
+                            selectedTime.minute,
+                          );
+                          controller.proposeTime(appointment.id, dt);
+                        }
+                      }
+                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
                     ),
-                    child: const Text('Accept'),
+                    child: const Text('Accept (Propose Time)'),
                   ),
                 ),
               ],

@@ -210,10 +210,17 @@ def request_vip_appointment(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
+    # Guardrail: refuse VIP requests for doctors who haven't configured their rate.
+    # This prevents ₦0 appointments and confusing zero-value Paystack checkouts.
+    if not doctor.hourly_rate or doctor.hourly_rate <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Doctor has not set a consultation rate. Please try again later.",
+        )
+
     # Pricing: derive from the doctor's actual rate, matching the /book endpoint
     # commission model (30% platform / 70% doctor payout).
-    # Guard: if the doctor hasn't set a rate yet, default to 0.0 rather than crash.
-    patient_price: float = doctor.hourly_rate or 0.0
+    patient_price: float = doctor.hourly_rate
     commission: float = round(patient_price * 0.30, 2)
     doctor_payout: float = round(patient_price - commission, 2)
 
@@ -527,6 +534,20 @@ def propose_appointment_time(
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
     if not appt:
         raise HTTPException(404, "Appointment not found")
+
+    # Guardrail: proposed time must not exceed 30 days from now.
+    # Use UTC-aware comparison to avoid naive/aware datetime mixing.
+    from datetime import timezone
+    _max_date = datetime.now(timezone.utc) + timedelta(days=30)
+    _proposed_utc = payload.proposed_time
+    if _proposed_utc.tzinfo is None:
+        # Treat naive datetimes (from older clients) as UTC
+        _proposed_utc = _proposed_utc.replace(tzinfo=timezone.utc)
+    if _proposed_utc > _max_date:
+        raise HTTPException(
+            status_code=400,
+            detail="Proposed time cannot exceed 30 days from today.",
+        )
 
     # Update start time and status
     appt.start_time = payload.proposed_time

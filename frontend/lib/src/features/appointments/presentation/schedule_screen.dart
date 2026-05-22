@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mediq_app/src/features/reviews/data/review_repository.dart';
+import 'package:mediq_app/src/features/patient_dashboard/presentation/widgets/home_widgets.dart';
 import '../data/appointment_model.dart';
 import '../data/appointment_repository.dart';
 import 'package:mediq_app/presentation/widgets/global_error_widget.dart';
@@ -32,20 +33,23 @@ final myAppointmentsProvider =
 
   final filtered = allAppointments.where((appt) {
     // Is it in the future? Keep it.
-    if (appt.startTime.isAfter(now)) return true;
+    if (appt.startTime != null && appt.startTime!.isAfter(now)) return true;
 
     // Is it active/unfinished? Keep it.
-    if (appt.status == 'pending' || appt.status == 'confirmed') return true;
+    // 'awaiting_payment' = VIP where doctor proposed a time but patient hasn't paid yet.
+    if (appt.status == 'pending' ||
+        appt.status == 'confirmed' ||
+        appt.status == 'awaiting_payment') return true;
 
     // Is it a recent history item (less than 30 days old)? Keep it.
-    if (appt.startTime.isAfter(thirtyDaysAgo)) return true;
+    if (appt.startTime != null && appt.startTime!.isAfter(thirtyDaysAgo)) return true;
 
     // Otherwise, hide it.
     return false;
   }).toList();
 
   // Sort by date (Newest at the top)
-  filtered.sort((a, b) => b.startTime.compareTo(a.startTime));
+  filtered.sort((a, b) => (b.startTime ?? DateTime(2099)).compareTo(a.startTime ?? DateTime(2099)));
 
   return filtered;
 });
@@ -166,8 +170,8 @@ class _AppointmentCard extends ConsumerWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    final dayMonth = DateFormat('MMM dd').format(appointment.startTime);
-    final time = DateFormat('jm').format(appointment.startTime);
+    final dayMonth = appointment.startTime != null ? DateFormat('MMM dd').format(appointment.startTime!) : 'Pending Date';
+    final time = appointment.startTime != null ? DateFormat('jm').format(appointment.startTime!) : 'Pending Time';
     final isConfirmed = appointment.status == 'confirmed';
     final isCompleted = appointment.status == 'completed';
     final isUnpaid = appointment.paymentStatus == 'unpaid';
@@ -185,6 +189,11 @@ class _AppointmentCard extends ConsumerWidget {
     if (appointment.status == 'cancelled') {
       statusBgColor = Colors.grey.shade200;
       statusTextColor = Colors.grey.shade700;
+    }
+    // VIP: doctor proposed a time, patient needs to pay
+    if (appointment.status == 'awaiting_payment') {
+      statusBgColor = const Color(0xFF7C3AED).withOpacity(0.1);
+      statusTextColor = const Color(0xFF7C3AED);
     }
 
     return Container(
@@ -309,15 +318,58 @@ class _AppointmentCard extends ConsumerWidget {
                   ],
                   if (isUnpaid) ...[
                     const SizedBox(width: 8),
+                    // Cancel Request — lets the patient reject the doctor's
+                    // proposed time. Only meaningful for awaiting_payment VIP cards.
+                    if (appointment.status == 'awaiting_payment')
+                      OutlinedButton(
+                          onPressed: () async {
+                            try {
+                              await ref
+                                  .read(appointmentRepositoryProvider)
+                                  .cancelMyAppointment(appointment.id);
+                              if (context.mounted) {
+                                ref.invalidate(myAppointmentsProvider);
+                                ref.invalidate(nextAppointmentProvider);
+                              }
+                            } catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Could not cancel: $e'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
+                            }
+                          },
+                          style: OutlinedButton.styleFrom(
+                              foregroundColor: theme.colorScheme.error,
+                              side: BorderSide(
+                                  color: theme.colorScheme.error.withOpacity(0.5)),
+                          ),
+                          child: const Text('Cancel Request')),
+                    const SizedBox(width: 8),
                     ElevatedButton(
-                        onPressed: () => context.push('/payment', extra: {
-                              'transactionType': 'specialist_consult', // Works for both GP and Specialist backend logic
-                              'baseAmount': appointment.amount,
-                              'title': 'Consultation Payment',
-                              'appointmentId': appointment.id,
-                              'userId': appointment.patientId,
-                              'paystackReference': appointment.paystackReference,
-                            }),
+                        onPressed: () async {
+                          // Navigate to PaymentScreen and await result.
+                          // On return, invalidate patient-side providers so the
+                          // confirmed appointment appears immediately without a
+                          // manual pull-to-refresh.
+                          final result = await context.push('/payment', extra: {
+                            'transactionType': 'specialist_consult', // Works for both GP and Specialist backend logic
+                            'baseAmount': appointment.amount,
+                            'title': 'Consultation Payment',
+                            'appointmentId': appointment.id,
+                            'userId': appointment.patientId,
+                            'paystackReference': appointment.paystackReference,
+                          });
+                          // Refresh regardless of whether the reference was
+                          // returned — the webhook may have already fired.
+                          if (context.mounted) {
+                            ref.invalidate(myAppointmentsProvider);
+                            ref.invalidate(nextAppointmentProvider);
+                          }
+                        },
                         style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.green,
                             foregroundColor: Colors.white),
