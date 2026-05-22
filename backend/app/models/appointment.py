@@ -19,7 +19,7 @@ class Appointment(Base):
     patient_id = Column(Integer, ForeignKey("users.id"), index=True)
     doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=True, index=True)
     slot_id = Column(Integer, ForeignKey("doctor_slots.id"), unique=True, nullable=True)
-    start_time = Column(DateTime, default=datetime.utcnow, index=True)
+    start_time = Column(DateTime, default=datetime.utcnow, nullable=True, index=True)
     status = Column(String, default="pending", index=True)
     payment_status = Column(String, default="unpaid")
     is_acknowledged = Column(Boolean, default=False)

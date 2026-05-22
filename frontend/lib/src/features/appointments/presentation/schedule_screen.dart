@@ -316,55 +316,48 @@ class _AppointmentCard extends ConsumerWidget {
                             elevation: 0,
                         )),
                   ],
-                  if (isUnpaid) ...[
+                  // ── VIP: Doctor has proposed a time → patient must pay ──────
+                  if (appointment.status == 'awaiting_payment') ...[
                     const SizedBox(width: 8),
-                    // Cancel Request — lets the patient reject the doctor's
-                    // proposed time. Only meaningful for awaiting_payment VIP cards.
-                    if (appointment.status == 'awaiting_payment')
-                      OutlinedButton(
-                          onPressed: () async {
-                            try {
-                              await ref
-                                  .read(appointmentRepositoryProvider)
-                                  .cancelMyAppointment(appointment.id);
-                              if (context.mounted) {
-                                ref.invalidate(myAppointmentsProvider);
-                                ref.invalidate(nextAppointmentProvider);
-                              }
-                            } catch (e) {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Could not cancel: $e'),
-                                    backgroundColor: Colors.red,
-                                  ),
-                                );
-                              }
+                    // Cancel Request — patient rejects the proposed time
+                    OutlinedButton(
+                        onPressed: () async {
+                          try {
+                            await ref
+                                .read(appointmentRepositoryProvider)
+                                .cancelMyAppointment(appointment.id);
+                            if (context.mounted) {
+                              ref.invalidate(myAppointmentsProvider);
+                              ref.invalidate(nextAppointmentProvider);
                             }
-                          },
-                          style: OutlinedButton.styleFrom(
-                              foregroundColor: theme.colorScheme.error,
-                              side: BorderSide(
-                                  color: theme.colorScheme.error.withOpacity(0.5)),
-                          ),
-                          child: const Text('Cancel Request')),
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Could not cancel: $e'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          }
+                        },
+                        style: OutlinedButton.styleFrom(
+                            foregroundColor: theme.colorScheme.error,
+                            side: BorderSide(
+                                color: theme.colorScheme.error.withOpacity(0.5)),
+                        ),
+                        child: const Text('Cancel Request')),
                     const SizedBox(width: 8),
                     ElevatedButton(
                         onPressed: () async {
-                          // Navigate to PaymentScreen and await result.
-                          // On return, invalidate patient-side providers so the
-                          // confirmed appointment appears immediately without a
-                          // manual pull-to-refresh.
                           final result = await context.push('/payment', extra: {
-                            'transactionType': 'specialist_consult', // Works for both GP and Specialist backend logic
+                            'transactionType': 'specialist_consult',
                             'baseAmount': appointment.amount,
                             'title': 'Consultation Payment',
                             'appointmentId': appointment.id,
                             'userId': appointment.patientId,
                             'paystackReference': appointment.paystackReference,
                           });
-                          // Refresh regardless of whether the reference was
-                          // returned — the webhook may have already fired.
                           if (context.mounted) {
                             ref.invalidate(myAppointmentsProvider);
                             ref.invalidate(nextAppointmentProvider);
@@ -374,6 +367,20 @@ class _AppointmentCard extends ConsumerWidget {
                             backgroundColor: Colors.green,
                             foregroundColor: Colors.white),
                         child: const Text("Pay Now")),
+                  ],
+                  // ── VIP pending: doctor hasn't proposed a time yet ──────────
+                  if (appointment.status == 'pending' && isUnpaid) ...[
+                    const SizedBox(width: 8),
+                    Chip(
+                      label: const Text(
+                        'Awaiting Doctor\'s Proposal',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                      avatar: const Icon(Icons.hourglass_top, size: 14),
+                      backgroundColor: Colors.grey.withOpacity(0.12),
+                      labelStyle: TextStyle(color: Colors.grey.shade600),
+                      side: BorderSide.none,
+                    ),
                   ],
                   if (isCompleted && !appointment.hasReview) ...[
                     const SizedBox(width: 8),
