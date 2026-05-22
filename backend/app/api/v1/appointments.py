@@ -553,7 +553,21 @@ def get_doctor_confirmed_appointments(db: Session = Depends(get_db), current_use
     for a in scheduled + general:
         p_name = f"{a.patient.first_name} {a.patient.last_name}" if a.patient else "Unknown"
         start = a.slot.start_time if a.slot else a.start_time
-        results.append(AppointmentResponse(id=a.id, doctor_name=p_name, status=a.status, payment_status=a.payment_status, is_acknowledged=getattr(a, 'is_acknowledged', False), start_time=start, notes=a.notes, has_review=False))
+        results.append(AppointmentResponse(
+            id=a.id,
+            doctor_id=a.doctor_id,
+            patient_id=a.patient_id,
+            doctor_name=p_name,      # repurposed: carries patient name for doctor-side view
+            patient_name=p_name,
+            status=a.status,
+            payment_status=a.payment_status,
+            is_acknowledged=getattr(a, 'is_acknowledged', False),
+            start_time=start,
+            notes=a.notes,
+            has_review=False,
+            amount=getattr(a, 'amount', 0.0),
+            paystack_reference=getattr(a, 'paystack_reference', None),
+        ))
     results.sort(key=lambda x: x.start_time or datetime.min)
     return results
 

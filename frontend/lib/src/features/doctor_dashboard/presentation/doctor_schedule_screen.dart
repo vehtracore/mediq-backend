@@ -305,7 +305,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
 
   @override
   Widget build(BuildContext context) {
-    final timeStr = DateFormat('jm').format(widget.appointment.startTime);
+    final timeStr = widget.appointment.startTime != null ? DateFormat('jm').format(widget.appointment.startTime!) : 'Pending Time';
     String timeNum = timeStr.split(' ')[0];
     String timeAmPm = timeStr.contains(' ') ? timeStr.split(' ')[1] : "";
     final theme = Theme.of(context);
@@ -326,7 +326,9 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
       statusTextColor = Colors.grey.shade700;
     }
 
-    return Container(
+    return GestureDetector(
+      onTap: () => context.push('/appointment/${widget.appointment.id}'),
+      child: Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: theme.cardTheme.color,
@@ -390,7 +392,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                             color: theme.iconTheme.color?.withOpacity(0.7)),
                         const SizedBox(width: 4),
                         Text(
-                          DateFormat('MMM dd').format(widget.appointment.startTime),
+                          widget.appointment.startTime != null ? DateFormat('MMM dd').format(widget.appointment.startTime!) : 'Pending Date',
                           style: theme.textTheme.bodyMedium
                               ?.copyWith(fontSize: 13),
                         ),
@@ -473,48 +475,115 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
 
           // Action Buttons
           if (widget.appointment.status != 'cancelled' && isConfirmed)
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  IconButton.filledTonal(
-                      onPressed: () => context.push('/chat', extra: {
-                            'title': widget.appointment.patientName,
-                            'isAi': false,
-                            'appointmentId': widget.appointment.id,
-                            'isCompleted': widget.appointment.status == 'completed'
-                          }),
-                      icon: const Icon(Icons.chat_bubble_outline, size: 18),
-                      style: IconButton.styleFrom(
-                          backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
-                          foregroundColor: theme.colorScheme.primary,
-                      )),
-                  const SizedBox(width: 8),
-                  IconButton.filledTonal(
-                      onPressed: () => context.push('/video_call?type=voice',
-                          extra: widget.appointment.id),
-                      icon: const Icon(Icons.phone, size: 18),
-                      style: IconButton.styleFrom(
-                          backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
-                          foregroundColor: theme.colorScheme.primary,
-                      )),
-                  const SizedBox(width: 8),
-                  FilledButton.tonalIcon(
-                      onPressed: () =>
-                          context.push('/video_call', extra: widget.appointment.id),
-                      icon: const Icon(Icons.videocam, size: 16),
-                      label: const Text("Video"),
-                      style: FilledButton.styleFrom(
-                          backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
-                          foregroundColor: theme.colorScheme.primary,
-                          elevation: 0,
-                      )),
-                ],
-              ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Builder(builder: (context) {
+                  // 10-minute unlock gate:
+                  // Unlocked if startTime is null (e.g. VIP with no fixed time)
+                  // OR if now is within 10 minutes of (or past) the start time.
+                  final st = widget.appointment.startTime;
+                  final bool isUnlocked = st == null ||
+                      DateTime.now().isAfter(
+                          st.subtract(const Duration(minutes: 10)));
+
+                  return Column(
+                    children: [
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            IconButton.filledTonal(
+                                onPressed: isUnlocked
+                                    ? () => context.push('/chat', extra: {
+                                          'title': widget.appointment.patientName,
+                                          'isAi': false,
+                                          'appointmentId': widget.appointment.id,
+                                          'isCompleted': widget.appointment.status == 'completed'
+                                        })
+                                    : null,
+                                icon: Icon(
+                                  isUnlocked
+                                      ? Icons.chat_bubble_outline
+                                      : Icons.lock_outline,
+                                  size: 18,
+                                ),
+                                style: IconButton.styleFrom(
+                                    backgroundColor: isUnlocked
+                                        ? theme.colorScheme.primary.withOpacity(0.15)
+                                        : Colors.grey.withOpacity(0.12),
+                                    foregroundColor: isUnlocked
+                                        ? theme.colorScheme.primary
+                                        : Colors.grey,
+                                )),
+                            const SizedBox(width: 8),
+                            IconButton.filledTonal(
+                                onPressed: isUnlocked
+                                    ? () => context.push('/video_call?type=voice',
+                                        extra: widget.appointment.id)
+                                    : null,
+                                icon: Icon(
+                                  isUnlocked
+                                      ? Icons.phone
+                                      : Icons.lock_outline,
+                                  size: 18,
+                                ),
+                                style: IconButton.styleFrom(
+                                    backgroundColor: isUnlocked
+                                        ? theme.colorScheme.primary.withOpacity(0.15)
+                                        : Colors.grey.withOpacity(0.12),
+                                    foregroundColor: isUnlocked
+                                        ? theme.colorScheme.primary
+                                        : Colors.grey,
+                                )),
+                            const SizedBox(width: 8),
+                            FilledButton.tonalIcon(
+                                onPressed: isUnlocked
+                                    ? () => context.push(
+                                        '/video_call', extra: widget.appointment.id)
+                                    : null,
+                                icon: Icon(
+                                  isUnlocked
+                                      ? Icons.videocam
+                                      : Icons.lock_outline,
+                                  size: 16,
+                                ),
+                                label: const Text("Video"),
+                                style: FilledButton.styleFrom(
+                                    backgroundColor: isUnlocked
+                                        ? theme.colorScheme.primary.withOpacity(0.15)
+                                        : Colors.grey.withOpacity(0.12),
+                                    foregroundColor: isUnlocked
+                                        ? theme.colorScheme.primary
+                                        : Colors.grey,
+                                    elevation: 0,
+                                )),
+                          ],
+                        ),
+                      ),
+                      if (!isUnlocked) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Icon(Icons.schedule, size: 12, color: Colors.grey.shade500),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Unlocks 10 min before start',
+                              style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  );
+                }),
+              ],
             ),
         ],
       ),
+    ),
     );
   }
 }

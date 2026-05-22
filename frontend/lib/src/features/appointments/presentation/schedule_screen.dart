@@ -282,39 +282,105 @@ class _AppointmentCard extends ConsumerWidget {
                             style: TextStyle(color: theme.colorScheme.error))),
                   if (isConfirmed) ...[
                     const SizedBox(width: 8),
-                    IconButton.filledTonal(
-                        onPressed: () => context.push('/chat', extra: {
-                              'title': appointment.doctorName,
-                              'isAi': false,
-                              'appointmentId': appointment.id,
-                              'doctorId': appointment.doctorId,
-                              'isCompleted': appointment.status == 'completed'
-                            }),
-                        icon: const Icon(Icons.chat_bubble_outline, size: 18),
-                        style: IconButton.styleFrom(
-                            backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
-                            foregroundColor: theme.colorScheme.primary,
-                        )),
-                    const SizedBox(width: 8),
-                    IconButton.filledTonal(
-                        onPressed: () => context.push('/video_call?type=voice',
-                            extra: appointment.id),
-                        icon: const Icon(Icons.phone, size: 18),
-                        style: IconButton.styleFrom(
-                            backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
-                            foregroundColor: theme.colorScheme.primary,
-                        )),
-                    const SizedBox(width: 8),
-                    FilledButton.tonalIcon(
-                        onPressed: () =>
-                            context.push('/video_call', extra: appointment.id),
-                        icon: const Icon(Icons.videocam, size: 16),
-                        label: const Text("Video"),
-                        style: FilledButton.styleFrom(
-                            backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
-                            foregroundColor: theme.colorScheme.primary,
-                            elevation: 0,
-                        )),
+                    Builder(builder: (context) {
+                      final st = appointment.startTime;
+                      final bool isUnlocked = st == null ||
+                          DateTime.now().isAfter(
+                              st.subtract(const Duration(minutes: 10)));
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton.filledTonal(
+                                  onPressed: isUnlocked
+                                      ? () => context.push('/chat', extra: {
+                                            'title': appointment.doctorName,
+                                            'isAi': false,
+                                            'appointmentId': appointment.id,
+                                            'doctorId': appointment.doctorId,
+                                            'isCompleted': appointment.status == 'completed'
+                                          })
+                                      : null,
+                                  icon: Icon(
+                                    isUnlocked
+                                        ? Icons.chat_bubble_outline
+                                        : Icons.lock_outline,
+                                    size: 18,
+                                  ),
+                                  style: IconButton.styleFrom(
+                                      backgroundColor: isUnlocked
+                                          ? theme.colorScheme.primary.withOpacity(0.15)
+                                          : Colors.grey.withOpacity(0.12),
+                                      foregroundColor: isUnlocked
+                                          ? theme.colorScheme.primary
+                                          : Colors.grey,
+                                  )),
+                              const SizedBox(width: 8),
+                              IconButton.filledTonal(
+                                  onPressed: isUnlocked
+                                      ? () => context.push('/video_call?type=voice',
+                                          extra: appointment.id)
+                                      : null,
+                                  icon: Icon(
+                                    isUnlocked
+                                        ? Icons.phone
+                                        : Icons.lock_outline,
+                                    size: 18,
+                                  ),
+                                  style: IconButton.styleFrom(
+                                      backgroundColor: isUnlocked
+                                          ? theme.colorScheme.primary.withOpacity(0.15)
+                                          : Colors.grey.withOpacity(0.12),
+                                      foregroundColor: isUnlocked
+                                          ? theme.colorScheme.primary
+                                          : Colors.grey,
+                                  )),
+                              const SizedBox(width: 8),
+                              FilledButton.tonalIcon(
+                                  onPressed: isUnlocked
+                                      ? () => context.push(
+                                          '/video_call', extra: appointment.id)
+                                      : null,
+                                  icon: Icon(
+                                    isUnlocked
+                                        ? Icons.videocam
+                                        : Icons.lock_outline,
+                                    size: 16,
+                                  ),
+                                  label: const Text("Video"),
+                                  style: FilledButton.styleFrom(
+                                      backgroundColor: isUnlocked
+                                          ? theme.colorScheme.primary.withOpacity(0.15)
+                                          : Colors.grey.withOpacity(0.12),
+                                      foregroundColor: isUnlocked
+                                          ? theme.colorScheme.primary
+                                          : Colors.grey,
+                                      elevation: 0,
+                                  )),
+                            ],
+                          ),
+                          if (!isUnlocked) ...[
+                            const SizedBox(height: 4),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.schedule,
+                                    size: 12, color: Colors.grey.shade500),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Unlocks 10 min before start',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.grey.shade500),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      );
+                    }),
                   ],
                   // ── VIP: Doctor has proposed a time → patient must pay ──────
                   if (appointment.status == 'awaiting_payment') ...[
