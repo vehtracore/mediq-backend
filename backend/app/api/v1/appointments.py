@@ -210,10 +210,19 @@ def request_vip_appointment(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
-    # Pricing: same as specialist consult
-    doctor_payout = 3500.0
-    patient_price = 5000.0 if current_user.plan == "premium" else 7500.0
-    platform_commission = patient_price - doctor_payout
+    # Pricing: derive from the doctor's actual rate, matching the /book endpoint
+    # commission model (30% platform / 70% doctor payout).
+    # Guard: if the doctor hasn't set a rate yet, default to 0.0 rather than crash.
+    patient_price: float = doctor.hourly_rate or 0.0
+    commission: float = round(patient_price * 0.30, 2)
+    doctor_payout: float = round(patient_price - commission, 2)
+
+    logger.info(
+        "[VIP Request] Pricing resolved — doctor_id=%s hourly_rate=%.2f "
+        "patient_price=%.2f commission=%.2f payout=%.2f",
+        doctor.id, doctor.hourly_rate or 0.0,
+        patient_price, commission, doctor_payout,
+    )
 
     new_appt = Appointment(
         patient_id=current_user.id,
@@ -224,7 +233,7 @@ def request_vip_appointment(
         payment_status="unpaid",
         notes=f"[{req.preferred_time}] {req.notes}",
         amount=patient_price,
-        commission=platform_commission,
+        commission=commission,
         payout=doctor_payout,
     )
     db.add(new_appt)
