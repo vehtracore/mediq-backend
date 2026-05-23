@@ -84,7 +84,7 @@ async def analyze_symptoms(
 
     # ── 5. Persist updated counters ──────────────────────────────────────────
     current_user.daily_chat_count += 1
-    current_user.burst_chat_count += 1
+    current_user.burst_chat_count = (current_user.burst_chat_count or 0) + 1
 
     db.add(current_user)
     db.commit()
