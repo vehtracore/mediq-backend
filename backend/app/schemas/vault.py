@@ -15,6 +15,11 @@ class AISummaryCreate(BaseModel):
     summary_text: str
 
 
+class VaultExportRequest(BaseModel):
+    """Payload for the PDF export endpoint — a list of vault record UUIDs."""
+    record_ids: list[UUID]
+
+
 # ---------------------------------------------------------------------------
 # Response schemas
 # ---------------------------------------------------------------------------
