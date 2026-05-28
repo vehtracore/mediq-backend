@@ -22,6 +22,7 @@ from app.api.v1 import payments
 from app.api.v1 import family
 from app.api.v1.auth import scrub_expired_accounts
 from app.services.watchdog_service import sweep_pending_transactions
+from app.core.scheduler import cleanup_expired_slots
 
 Base.metadata.create_all(bind=engine)
 
@@ -194,10 +195,21 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
+    # Job 3: Doctor-slot cleanup — nightly at 00:00 UTC
+    scheduler.add_job(
+        cleanup_expired_slots,
+        trigger=CronTrigger(hour=0, minute=0, timezone="UTC"),
+        id="doctor_slot_cleanup",
+        name="Nightly expired-slot cleaner",
+        replace_existing=True,
+    )
+
     scheduler.start()
     _sched_log.info(
         "[SCHEDULER] AsyncIOScheduler started. "
-        "NDPA scrubber @ 02:00 UTC daily | Payment watchdog every 5 min."
+        "NDPA scrubber @ 02:00 UTC daily | "
+        "Payment watchdog every 5 min | "
+        "Doctor-slot cleanup @ 00:00 UTC daily."
     )
 
     yield  # ← application runs here
