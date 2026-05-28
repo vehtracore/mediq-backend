@@ -74,3 +74,23 @@ class ReferralResponse(AppointmentResponse):
     """Extends the standard appointment response with the generated referral note."""
     referred_hospital: Optional[str] = None
     referral_note: Optional[str] = None
+
+
+class ReferralCreate(BaseModel):
+    """
+    Payload for POST /api/v1/appointments/referral.
+
+    Triggers PDF generation and email dispatch of a clinical specialist referral
+    on behalf of the authenticated doctor.
+
+    Fields
+    ------
+    appointment_id   : The appointment this referral is attached to.
+    recipient_email  : The specialist / clinic email that will receive the PDF.
+    specialist_type  : E.g. 'Cardiologist', 'Neurologist', etc.
+    clinical_notes   : The body text of the referral letter.
+    """
+    appointment_id: int
+    recipient_email: str
+    specialist_type: str
+    clinical_notes: str

@@ -12,7 +12,7 @@ from app.models.appointment import Appointment, DoctorSlot
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.review import Review
-from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, GeneralBookRequest, ReferralRequest, ReferralResponse, AppointmentProposeRequest, VIPBookRequest
+from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, GeneralBookRequest, ReferralRequest, ReferralResponse, AppointmentProposeRequest, VIPBookRequest, ReferralCreate
 from app.api import deps
 
 logger = logging.getLogger(__name__)
@@ -628,3 +628,243 @@ def propose_appointment_time(
         amount=getattr(appt, 'amount', 0.0),
         paystack_reference=getattr(appt, 'paystack_reference', None)
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /referral  — Clinical PDF Referral Generation + Email Dispatch
+# ---------------------------------------------------------------------------
+
+@router.post("/referral", status_code=200)
+async def send_specialist_referral(
+    payload: ReferralCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    POST /api/v1/appointments/referral
+
+    Authenticated doctors only.  Generates a professional clinical referral
+    PDF (via fpdf2) and emails it directly to a specialist or clinic using
+    the Resend API with a base64-encoded attachment.
+
+    Guards:
+      1. Caller must be an active doctor (doctors row must exist).
+      2. The referenced appointment must exist and belong to that doctor.
+
+    Returns:
+      200 {"status": "sent", "recipient": "...", "appointment_id": ...}
+    """
+    import base64
+    import asyncio
+    from fpdf import FPDF
+    import resend as _resend
+    import os
+
+    # ── 1. Verify caller is a doctor ──────────────────────────────────────────
+    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+    if not doctor:
+        raise HTTPException(
+            status_code=403,
+            detail="Only verified doctors can issue clinical referrals.",
+        )
+
+    # ── 2. Fetch & verify appointment ownership ───────────────────────────────
+    appt = (
+        db.query(Appointment)
+        .options(joinedload(Appointment.patient))
+        .filter(Appointment.id == payload.appointment_id)
+        .first()
+    )
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found.")
+    if appt.doctor_id != doctor.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not the doctor for this appointment.",
+        )
+
+    patient = appt.patient
+    patient_name = (
+        f"{patient.first_name} {patient.last_name}" if patient else "Unknown Patient"
+    )
+    today_str = datetime.utcnow().strftime("%d %B %Y")
+    doctor_name = f"Dr. {doctor.full_name}"
+
+    # ── 3. Build PDF in memory ────────────────────────────────────────────────
+    pdf = FPDF()
+    pdf.set_margins(left=20, top=20, right=20)
+    pdf.add_page()
+
+    # Header bar
+    pdf.set_fill_color(30, 115, 190)        # MDQ+ blue
+    pdf.rect(0, 0, 210, 28, style="F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Arial", "B", 18)
+    pdf.set_xy(20, 8)
+    pdf.cell(0, 10, "MDQ+ Clinical Referral", ln=True)
+
+    # Reset colour for body
+    pdf.set_text_color(30, 30, 30)
+    pdf.ln(12)
+
+    # Meta block
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(45, 7, "Date:", border=0)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, today_str, ln=True)
+
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(45, 7, "Referring Doctor:", border=0)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, f"{doctor_name}  ({doctor.specialty})", ln=True)
+
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(45, 7, "Patient:", border=0)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, patient_name, ln=True)
+
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(45, 7, "Appointment Ref:", border=0)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, f"#{appt.id}", ln=True)
+
+    pdf.ln(6)
+
+    # Divider
+    pdf.set_draw_color(180, 180, 180)
+    pdf.line(20, pdf.get_y(), 190, pdf.get_y())
+    pdf.ln(6)
+
+    # Salutation
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, "To Whom It May Concern:", ln=True)
+    pdf.ln(2)
+
+    # Referral body
+    pdf.set_font("Arial", "", 11)
+    intro = (
+        f"I am writing to refer {patient_name} for evaluation and management "
+        f"by a {payload.specialist_type}. Please find the relevant clinical "
+        f"information below."
+    )
+    pdf.multi_cell(0, 7, intro)
+    pdf.ln(4)
+
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, "Clinical Notes:", ln=True)
+    pdf.set_font("Arial", "", 11)
+    pdf.multi_cell(0, 7, payload.clinical_notes)
+    pdf.ln(6)
+
+    # Closing
+    pdf.set_font("Arial", "", 11)
+    pdf.multi_cell(
+        0, 7,
+        "Please do not hesitate to contact us should you require additional "
+        "information regarding this patient.",
+    )
+    pdf.ln(8)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 7, f"Yours sincerely,", ln=True)
+    pdf.ln(2)
+    pdf.cell(0, 7, doctor_name, ln=True)
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(0, 6, doctor.specialty, ln=True)
+    pdf.cell(0, 6, "MDQ+ Telemedicine Platform", ln=True)
+
+    # Footer watermark
+    pdf.set_y(-18)
+    pdf.set_font("Arial", "I", 8)
+    pdf.set_text_color(150, 150, 150)
+    pdf.cell(
+        0, 6,
+        f"This referral was generated on {today_str} by MDQ+ | www.mdqplus.app",
+        align="C",
+    )
+
+    # Serialise to bytes (fpdf2 returns bytearray from output())
+    pdf_bytes: bytes = bytes(pdf.output())
+    pdf_b64: str = base64.b64encode(pdf_bytes).decode("utf-8")
+
+    # ── 4. Send email with PDF attachment via Resend ──────────────────────────
+    resend_api_key: str = os.environ.get("RESEND_API_KEY", "")
+    email_from: str = os.environ.get("EMAIL_FROM", "MDQ+ Health <noreply@mdqplus.app>")
+
+    if not resend_api_key:
+        logger.warning(
+            "[REFERRAL] RESEND_API_KEY not set — PDF generated but email not sent "
+            "(appointment_id=%s recipient=%s)",
+            appt.id,
+            payload.recipient_email,
+        )
+        return {
+            "status": "pdf_generated_no_email",
+            "detail": "RESEND_API_KEY not configured — email skipped.",
+            "appointment_id": appt.id,
+            "recipient": payload.recipient_email,
+        }
+
+    _resend.api_key = resend_api_key
+
+    html_body = f"""
+    <div style="font-family:sans-serif;max-width:560px;margin:auto;">
+      <h2 style="color:#1E73BE;">Clinical Referral — MDQ+</h2>
+      <p>Dear Specialist,</p>
+      <p>
+        Please find attached a clinical referral for
+        <strong>{patient_name}</strong> from
+        <strong>{doctor_name}</strong> ({doctor.specialty}).
+      </p>
+      <p>
+        The referral has been issued for evaluation by a
+        <strong>{payload.specialist_type}</strong>.
+        Full clinical notes are contained in the attached PDF.
+      </p>
+      <p style="color:#555;font-size:13px;">— The MDQ+ Team | www.mdqplus.app</p>
+    </div>
+    """
+
+    filename = f"MDQ_Referral_{patient_name.replace(' ', '_')}_{appt.id}.pdf"
+
+    params: _resend.Emails.SendParams = {
+        "from": email_from,
+        "to": [payload.recipient_email],
+        "subject": f"Clinical Referral for {patient_name} from MDQ+",
+        "html": html_body,
+        "attachments": [
+            {
+                "filename": filename,
+                "content": pdf_b64,
+            }
+        ],
+    }
+
+    def _send_with_attachment() -> None:
+        _resend.Emails.send(params)
+
+    try:
+        await asyncio.to_thread(_send_with_attachment)
+        logger.info(
+            "[REFERRAL] PDF referral emailed — appointment_id=%s recipient=%s",
+            appt.id,
+            payload.recipient_email,
+        )
+    except Exception as exc:
+        logger.error(
+            "[REFERRAL] Resend delivery failed — appointment_id=%s recipient=%s error=%s",
+            appt.id,
+            payload.recipient_email,
+            exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"PDF generated but email delivery failed: {exc}",
+        )
+
+    return {
+        "status": "sent",
+        "recipient": payload.recipient_email,
+        "appointment_id": appt.id,
+        "patient_name": patient_name,
+        "specialist_type": payload.specialist_type,
+    }
