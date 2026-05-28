@@ -5,12 +5,13 @@ from datetime import datetime, timezone
 from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from fpdf import FPDF
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.user import User
 from app.models.doctor import Doctor
 from app.models.vault import AIChatSummary, ConsultationRecord
@@ -176,7 +177,9 @@ def get_vault_history(
     summary="Export selected Health Vault records as a PDF",
     response_class=StreamingResponse,
 )
+@limiter.limit("5/minute")
 def export_vault_records(
+    request: Request,
     payload: VaultExportRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
@@ -305,3 +308,52 @@ def export_vault_records(
         media_type="application/pdf",
         headers={"Content-Disposition": "attachment; filename=vehtr_records.pdf"},
     )
+
+
+# ---------------------------------------------------------------------------
+# DELETE /vault/ai-summary/{summary_id}
+# ---------------------------------------------------------------------------
+
+@router.delete(
+    "/ai-summary/{summary_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete an AI chat summary from the patient's Health Vault",
+)
+def delete_ai_summary(
+    summary_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> dict:
+    """
+    Permanently removes a single AI chat summary that belongs to the
+    authenticated patient.
+
+    Security: the query filters on both ``id`` and ``patient_id`` so a
+    patient can never delete another patient's record even if they know
+    the UUID.
+    """
+    record = (
+        db.query(AIChatSummary)
+        .filter(
+            AIChatSummary.id == summary_id,
+            AIChatSummary.patient_id == current_user.id,
+        )
+        .first()
+    )
+
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Record not found.",
+        )
+
+    db.delete(record)
+    db.commit()
+
+    logger.info(
+        "[Vault] AI summary deleted — patient_id=%s summary_id=%s",
+        current_user.id,
+        summary_id,
+    )
+
+    return {"detail": "Summary deleted successfully."}
