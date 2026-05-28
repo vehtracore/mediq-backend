@@ -1,16 +1,20 @@
 
+import io
 import logging
 from datetime import datetime, timezone
 from typing import List
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
+from fpdf import FPDF
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.user import User
 from app.models.doctor import Doctor
 from app.models.vault import AIChatSummary, ConsultationRecord
-from app.schemas.vault import AISummaryCreate, VaultHistoryResponse
+from app.schemas.vault import AISummaryCreate, VaultExportRequest, VaultHistoryResponse
 from app.api import deps
 
 logger = logging.getLogger(__name__)
@@ -161,3 +165,143 @@ def get_vault_history(
     )
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# POST /vault/export
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/export",
+    summary="Export selected Health Vault records as a PDF",
+    response_class=StreamingResponse,
+)
+def export_vault_records(
+    payload: VaultExportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> StreamingResponse:
+    """
+    Generates an on-the-fly PDF containing the requested vault records.
+
+    Security: only records that belong to the authenticated patient are
+    included — records owned by other patients are silently excluded even
+    if their IDs are supplied in the request body.
+
+    Returns a downloadable PDF file named ``vehtr_records.pdf``.
+    """
+    patient_id = current_user.id
+    requested_ids = payload.record_ids  # list[UUID]
+
+    # ── 1. Fetch AI chat summaries that belong to this patient ───────────────
+    ai_summaries = (
+        db.query(AIChatSummary)
+        .filter(
+            AIChatSummary.id.in_(requested_ids),
+            AIChatSummary.patient_id == patient_id,
+        )
+        .all()
+    )
+
+    # ── 2. Fetch consultation records that belong to this patient ────────────
+    consultations = (
+        db.query(ConsultationRecord)
+        .filter(
+            ConsultationRecord.id.in_(requested_ids),
+            ConsultationRecord.patient_id == patient_id,
+        )
+        .all()
+    )
+
+    if not ai_summaries and not consultations:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No matching vault records found for the provided IDs.",
+        )
+
+    # ── 3. Build a unified, time-sorted list of records ──────────────────────
+    # Each entry: (created_at, title, date_str, body)
+    entries: list[tuple] = []
+
+    for s in ai_summaries:
+        title = f"AI Health Summary — {s.topic}"
+        date_str = s.created_at.strftime("%d %b %Y, %H:%M UTC")
+        body = s.summary_text or ""
+        entries.append((s.created_at, title, date_str, body))
+
+    for c in consultations:
+        title = "Consultation Record"
+        date_str = c.created_at.strftime("%d %b %Y, %H:%M UTC")
+        body_parts = []
+        if c.clinical_notes:
+            body_parts.append(f"Clinical Notes:\n{c.clinical_notes}")
+        if c.prescriptions:
+            body_parts.append(f"Prescriptions:\n{c.prescriptions}")
+        if c.referrals:
+            body_parts.append(f"Referrals:\n{c.referrals}")
+        body = "\n\n".join(body_parts) if body_parts else "No clinical details recorded."
+        entries.append((c.created_at, title, date_str, body))
+
+    # Sort newest-first
+    entries.sort(key=lambda e: e[0], reverse=True)
+
+    # ── 4. Build the PDF ─────────────────────────────────────────────────────
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    for idx, (_, title, date_str, body) in enumerate(entries):
+        pdf.add_page()
+
+        # ── Header bar ──────────────────────────────────────────────────────
+        pdf.set_fill_color(30, 90, 180)
+        pdf.rect(0, 0, 210, 18, style="F")
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_xy(10, 4)
+        pdf.cell(0, 10, "VehtraCore — Health Vault Export", ln=False)
+
+        # ── Record title ─────────────────────────────────────────────────────
+        pdf.set_xy(10, 25)
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.set_text_color(20, 20, 60)
+        pdf.multi_cell(0, 8, title)
+
+        # ── Date ─────────────────────────────────────────────────────────────
+        pdf.set_font("Helvetica", "I", 10)
+        pdf.set_text_color(100, 100, 120)
+        pdf.cell(0, 6, date_str, ln=True)
+
+        # ── Divider ──────────────────────────────────────────────────────────
+        pdf.set_draw_color(200, 200, 220)
+        pdf.ln(2)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(4)
+
+        # ── Body text ─────────────────────────────────────────────────────────
+        pdf.set_font("Helvetica", "", 11)
+        pdf.set_text_color(30, 30, 50)
+        safe_body = body.encode("latin-1", "replace").decode("latin-1")
+        pdf.multi_cell(0, 6, safe_body)
+
+        # ── Footer ───────────────────────────────────────────────────────────
+        pdf.set_y(-15)
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.set_text_color(150, 150, 160)
+        pdf.cell(0, 8, f"Page {idx + 1} of {len(entries)}  |  Confidential — VehtraCore MediQ", align="C")
+
+    # ── 5. Serialise to bytes and stream back ─────────────────────────────────
+    pdf_bytes = pdf.output()  # returns bytearray in fpdf2
+    buffer = io.BytesIO(bytes(pdf_bytes))
+    buffer.seek(0)
+
+    logger.info(
+        "[Vault] PDF export — patient_id=%s records=%d",
+        patient_id,
+        len(entries),
+    )
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=vehtr_records.pdf"},
+    )
