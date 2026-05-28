@@ -47,6 +47,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.failed_webhook import FailedWebhook
 from app.models.user import User
+from app.models.doctor import Doctor
 from app.services.email_service import send_transactional_email
 
 logger = logging.getLogger(__name__)
@@ -488,6 +489,96 @@ def _write_dlq(
 
 # ─── Webhook ──────────────────────────────────────────────────────────────────
 
+
+def _handle_charge_success(data: dict, db: Session) -> dict:
+    """
+    Handle charge.success events that carry a user_id in data.metadata.
+    Upgrades the user plan to "premium", sets a 30-day expiry, and resets
+    burst_chat_count so the user gets a clean AI-chat allowance immediately.
+
+    Raises ValueError when metadata is absent or the user is not found.
+    """
+    metadata: dict = data.get("metadata") or {}
+    user_id_raw = metadata.get("user_id")
+
+    if not user_id_raw:
+        raise ValueError(
+            "charge.success: metadata.user_id is absent — cannot upgrade subscription."
+        )
+
+    user: User | None = db.query(User).filter(User.id == int(user_id_raw)).first()
+    if not user:
+        raise ValueError(f"charge.success: user id={user_id_raw} not found.")
+
+    user.plan = "premium"
+    user.subscription_expiry = datetime.utcnow() + timedelta(days=30)
+    user.burst_chat_count = 0
+    db.commit()
+    db.refresh(user)
+
+    logger.info(
+        "[WEBHOOK] charge.success — upgraded user_id=%s to premium | expiry=%s",
+        user.id,
+        user.subscription_expiry,
+    )
+    return {
+        "action": "subscription_upgraded_via_charge",
+        "user_id": user.id,
+        "plan": "premium",
+        "expiry": str(user.subscription_expiry),
+    }
+
+
+def _handle_transfer_success(data: dict, db: Session) -> dict:
+    """
+    Handle transfer.success events to credit a doctor's earnings.
+
+    Paystack sends the amount in kobo; we divide by 100 before storing.
+    doctor_id is read from data.recipient.metadata.doctor_id first, then
+    falls back to data.metadata.doctor_id.
+
+    Raises ValueError when required fields are missing or the doctor is not found.
+    """
+    recipient: dict = data.get("recipient") or {}
+    recipient_meta: dict = recipient.get("metadata") or {}
+    top_meta: dict = data.get("metadata") or {}
+
+    doctor_id_raw = recipient_meta.get("doctor_id") or top_meta.get("doctor_id")
+    if not doctor_id_raw:
+        raise ValueError(
+            "transfer.success: doctor_id not found in data.recipient.metadata "
+            "or data.metadata."
+        )
+
+    amount_kobo: int = int(data.get("amount") or 0)
+    amount_naira: float = amount_kobo / 100.0
+
+    doctor: Doctor | None = (
+        db.query(Doctor).filter(Doctor.id == int(doctor_id_raw)).first()
+    )
+    if not doctor:
+        raise ValueError(f"transfer.success: doctor id={doctor_id_raw} not found.")
+
+    current_earnings: float = float(getattr(doctor, "total_earnings", None) or 0.0)
+    doctor.total_earnings = current_earnings + amount_naira  # type: ignore[attr-defined]
+    db.commit()
+    db.refresh(doctor)
+
+    logger.info(
+        "[WEBHOOK] transfer.success — credited doctor_id=%s | amount=%.2f NGN "
+        "| new total_earnings=%.2f",
+        doctor.id,
+        amount_naira,
+        doctor.total_earnings,
+    )
+    return {
+        "action": "doctor_earnings_credited",
+        "doctor_id": doctor.id,
+        "amount_credited": amount_naira,
+        "total_earnings": doctor.total_earnings,
+    }
+
+
 @router.post("/webhook", status_code=200)
 async def paystack_webhook(
     request: Request,
@@ -552,16 +643,28 @@ async def paystack_webhook(
         ref_user_id,
     )
 
-    # ── 7. Database update — wrapped in DLQ fallback ──────────────────────────
+    # -- 7. Event-level dispatch then reference-based routing -----------------
+    #
+    # charge.success  -> subscription upgrade via metadata.user_id
+    # transfer.success -> doctor earnings credit via metadata/recipient.metadata
+    # everything else -> existing reference-based router (_apply_db_update)
+    #
+    # All three paths share the same DLQ fallback below.
+    # -------------------------------------------------------------------------
     try:
-        result = _apply_db_update(
-            transaction_type=transaction_type,
-            ref_appointment_id=ref_appointment_id,
-            ref_user_id=ref_user_id,
-            reference=reference,
-            db=db,
-            background_tasks=background_tasks,
-        )
+        if raw_event == "charge.success" and (data.get("metadata") or {}).get("user_id"):
+            result = _handle_charge_success(data=data, db=db)
+        elif raw_event == "transfer.success":
+            result = _handle_transfer_success(data=data, db=db)
+        else:
+            result = _apply_db_update(
+                transaction_type=transaction_type,
+                ref_appointment_id=ref_appointment_id,
+                ref_user_id=ref_user_id,
+                reference=reference,
+                db=db,
+                background_tasks=background_tasks,
+            )
     except Exception as exc:
         db.rollback()  # ensure the session is clean before the DLQ write
         _write_dlq(

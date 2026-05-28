@@ -136,6 +136,13 @@ def _apply_schema_patches():
         ON users (primary_account_id)
         WHERE primary_account_id IS NOT NULL;
         """,
+        # ── Doctor earnings ledger (added 2026-05-28) ─────────────────────────
+        # Accumulated from Paystack transfer.success webhook events.
+        # Stored in NGN (kobo ÷ 100).  Never decremented by the platform.
+        """
+        ALTER TABLE doctors
+        ADD COLUMN IF NOT EXISTS total_earnings NUMERIC(14,2) NOT NULL DEFAULT 0.00;
+        """,
     ]
     with engine.connect() as conn:
         from sqlalchemy import text
