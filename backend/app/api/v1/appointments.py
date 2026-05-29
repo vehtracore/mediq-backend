@@ -12,6 +12,7 @@ from app.models.appointment import Appointment, DoctorSlot
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.review import Review
+from app.models.vault import ConsultationRecord
 from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, GeneralBookRequest, ReferralRequest, ReferralResponse, AppointmentProposeRequest, VIPBookRequest, ReferralCreate
 from app.api import deps
 
@@ -487,6 +488,31 @@ def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_us
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
     if not appt: raise HTTPException(404)
     appt.status = "completed"
+
+    # ── Auto-create a ConsultationRecord in the Health Vault ─────────────
+    # patient_id is sourced from the appointment row (NOT current_user,
+    # which is the doctor) to guarantee correct ownership attribution.
+    existing = (
+        db.query(ConsultationRecord)
+        .filter(ConsultationRecord.appointment_id == appt.id)
+        .first()
+    )
+    if existing is None:
+        vault_record = ConsultationRecord(
+            appointment_id=appt.id,
+            patient_id=appt.patient_id,
+            doctor_id=doctor.id,
+            clinical_notes=appt.notes,
+            prescriptions=None,
+            referrals=None,
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(vault_record)
+        logger.info(
+            "[Vault] ConsultationRecord created — appt_id=%s patient_id=%s doctor_id=%s",
+            appt.id, appt.patient_id, doctor.id,
+        )
+
     db.commit()
     db.refresh(appt)
     return map_appt(appt, doctor.full_name)
