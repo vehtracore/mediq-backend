@@ -15,7 +15,7 @@ from app.core.limiter import limiter
 from app.core.database import engine, Base, SessionLocal
 
 # ✅ KEEP "app." prefix because your main.py is inside the app folder
-from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab, vault
+from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab, vault, voice
 
 from app.api.v1 import emergency
 from app.api.v1 import payments
@@ -293,6 +293,7 @@ app.include_router(emergency.router, prefix="/api/v1/emergency", tags=["Emergenc
 app.include_router(payments.router, prefix="/api/v1/payments", tags=["Payments"])
 app.include_router(family.router, prefix="/api/v1/family", tags=["Family Plan"])
 app.include_router(vault.router, prefix="/api/v1/vault", tags=["Vault"])
+app.include_router(voice.router, prefix="/api/v1/voice", tags=["Voice"])
 
 # --- STATIC FILES ---
 static_dir = "static"
