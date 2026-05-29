@@ -33,18 +33,18 @@ final notificationsProvider =
   final List<Map<String, dynamic>> notifs = [];
 
   // Sort: Newest first
-  appointments.sort((a, b) => b.startTime.compareTo(a.startTime));
+  appointments.sort((a, b) => (b.startTime ?? DateTime(2099)).compareTo(a.startTime ?? DateTime(2099)));
 
   for (var appt in appointments) {
     // Dynamic Text based on Role
-    final otherPartyName = isDoctor ? "Patient ${appt.patientName}" : "Dr. ${appt.doctorName}";
+    final otherPartyName = isDoctor ? "Patient ${appt.patientName}" : "${appt.doctorName}";
     
     if (appt.status == 'confirmed') {
       notifs.add({
         'id': 'appt_${appt.id}',
         'title': 'Appointment Confirmed',
-        'body': 'Video session with $otherPartyName at ${DateFormat('h:mm a').format(appt.startTime)}.',
-        'time': DateFormat('MMM d').format(appt.startTime),
+        'body': 'Video session with $otherPartyName at ${appt.startTime != null ? DateFormat('h:mm a').format(appt.startTime!) : 'Pending time'}.',
+        'time': appt.startTime != null ? DateFormat('MMM d').format(appt.startTime!) : 'Pending',
         'icon': Icons.event_available,
         'color': Colors.blue,
         'is_system': false,
@@ -54,7 +54,7 @@ final notificationsProvider =
         'id': 'appt_${appt.id}_cancel',
         'title': 'Appointment Cancelled',
         'body': 'Session with $otherPartyName was cancelled.',
-        'time': DateFormat('MMM d').format(appt.startTime),
+        'time': appt.startTime != null ? DateFormat('MMM d').format(appt.startTime!) : 'Pending',
         'icon': Icons.cancel,
         'color': Colors.red,
         'is_system': false,
@@ -65,7 +65,7 @@ final notificationsProvider =
         'id': 'appt_${appt.id}_req',
         'title': 'New Request',
         'body': '$otherPartyName has requested an appointment.',
-        'time': DateFormat('MMM d').format(appt.startTime),
+        'time': appt.startTime != null ? DateFormat('MMM d').format(appt.startTime!) : 'Pending',
         'icon': Icons.info_outline,
         'color': Colors.orange,
         'is_system': false,
