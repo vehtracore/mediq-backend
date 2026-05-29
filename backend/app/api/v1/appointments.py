@@ -401,14 +401,18 @@ def get_general_queue(db: Session = Depends(get_db), current_user: User = Depend
         doctor.id, current_user.id,
     )
 
-    # NOTE: payment_status filter removed temporarily to surface all pending GP
-    # consultations regardless of Paystack webhook status. Re-add once webhooks confirmed.
+    # SECURITY FIX: Only surface GP appointments to doctors after Paystack payment
+    # is confirmed (payment_status == 'paid'). Unpaid GP bookings must NOT be
+    # visible in the queue — the patient still needs to complete Paystack checkout.
+    # NOTE: VIP appointments (doctor/requests) remain unpaid by design — the doctor
+    # proposes a time BEFORE the patient pays, so that filter is intentionally absent there.
     appts = (
         db.query(Appointment)
         .options(joinedload(Appointment.patient))
         .filter(
             Appointment.doctor_id == None,  # noqa: E711
             Appointment.status == "pending",
+            Appointment.payment_status == "paid",
         )
         .all()
     )
