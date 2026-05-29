@@ -186,7 +186,7 @@ def get_vault_history(
 
     logger.info(
         "[Vault] History fetched — patient_id=%s total=%d (summaries=%d, consultations=%d)",
-        patient_id,
+        current_user.id,
         len(results),
         len(summaries),
         len(consultations),
