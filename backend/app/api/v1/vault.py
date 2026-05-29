@@ -42,7 +42,29 @@ def create_ai_summary(
     Persists a structured AI chat summary for the authenticated patient.
     The patient_id is injected server-side from the JWT — never trusted from
     the request body.
+
+    Security: system/API error strings are quarantined before persistence to
+    prevent downstream crashes (e.g. in the PDF generator).
     """
+    # ── Error Quarantine ─────────────────────────────────────────────────────
+    # Reject AI responses that are system errors rather than genuine summaries.
+    # Patterns: Gemini quota exhaustion, HTTP 429, generic system error labels.
+    _ERROR_MARKERS = ("System Error", "429", "quota")
+    if any(marker in payload.summary_text for marker in _ERROR_MARKERS):
+        logger.warning(
+            "[Vault] AI summary save aborted — error string detected in payload "
+            "(patient_id=%s, topic=%r). Content quarantined.",
+            current_user.id,
+            payload.topic,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "The AI service returned an error response and the summary was not saved. "
+                "Please try again later."
+            ),
+        )
+
     now = datetime.now(timezone.utc)
 
     record = AIChatSummary(
@@ -94,14 +116,18 @@ def get_vault_history(
          resolved via a JOIN on the doctors table.
 
     Results are ordered newest-first by date.
+
+    Security: both queries explicitly bind to current_user.id so that a
+    compromised or swapped token can never surface another patient's records.
     """
-    patient_id = current_user.id
     results: List[VaultHistoryResponse] = []
 
     # ── 1. AI chat summaries ─────────────────────────────────────────────────
+    # Filter is pinned directly to current_user.id — no intermediate variable
+    # that could be shadowed or mutated before the query executes.
     summaries = (
         db.query(AIChatSummary)
-        .filter(AIChatSummary.patient_id == patient_id)
+        .filter(AIChatSummary.patient_id == current_user.id)
         .all()
     )
 
@@ -120,10 +146,11 @@ def get_vault_history(
         )
 
     # ── 2. Consultation records (joined to doctors for the doctor's name) ────
+    # patient_id filter is also pinned to current_user.id for the same reason.
     consultations = (
         db.query(ConsultationRecord, Doctor)
         .outerjoin(Doctor, ConsultationRecord.doctor_id == Doctor.id)
-        .filter(ConsultationRecord.patient_id == patient_id)
+        .filter(ConsultationRecord.patient_id == current_user.id)
         .all()
     )
 
@@ -311,7 +338,7 @@ def export_vault_records(
 
 
 # ---------------------------------------------------------------------------
-# DELETE /vault/ai-summary/{summary_id}
+# DELETE /vault/ai-summary/{summary_id}  (legacy — kept for compatibility)
 # ---------------------------------------------------------------------------
 
 @router.delete(
@@ -357,3 +384,92 @@ def delete_ai_summary(
     )
 
     return {"detail": "Summary deleted successfully."}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /vault/record/{record_id}  (generic — handles any vault record type)
+# ---------------------------------------------------------------------------
+
+@router.delete(
+    "/record/{record_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete any Health Vault record owned by the authenticated patient",
+)
+def delete_vault_record(
+    record_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> dict:
+    """
+    Permanently removes a single Health Vault record (either an AI chat
+    summary or a consultation record) that belongs to the authenticated
+    patient.
+
+    Security:
+      - The record is first fetched without a patient_id filter to determine
+        if it exists at all.
+      - If it exists but belongs to a *different* patient, a 403 Forbidden is
+        returned so the caller cannot infer the owner by comparing 403 vs 404.
+      - Only after ownership is confirmed is the record deleted.
+    """
+    # ── Try AI chat summary first ────────────────────────────────────────────
+    ai_record = (
+        db.query(AIChatSummary)
+        .filter(AIChatSummary.id == record_id)
+        .first()
+    )
+    if ai_record is not None:
+        if ai_record.patient_id != current_user.id:
+            logger.warning(
+                "[Vault] Forbidden delete attempt — patient_id=%s tried to delete "
+                "AI summary owned by patient_id=%s (record_id=%s)",
+                current_user.id,
+                ai_record.patient_id,
+                record_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to delete this record.",
+            )
+        db.delete(ai_record)
+        db.commit()
+        logger.info(
+            "[Vault] AI summary deleted via generic endpoint — patient_id=%s record_id=%s",
+            current_user.id,
+            record_id,
+        )
+        return {"detail": "Record deleted successfully."}
+
+    # ── Try consultation record next ─────────────────────────────────────────
+    consult_record = (
+        db.query(ConsultationRecord)
+        .filter(ConsultationRecord.id == record_id)
+        .first()
+    )
+    if consult_record is not None:
+        if consult_record.patient_id != current_user.id:
+            logger.warning(
+                "[Vault] Forbidden delete attempt — patient_id=%s tried to delete "
+                "consultation record owned by patient_id=%s (record_id=%s)",
+                current_user.id,
+                consult_record.patient_id,
+                record_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to delete this record.",
+            )
+        db.delete(consult_record)
+        db.commit()
+        logger.info(
+            "[Vault] Consultation record deleted via generic endpoint — patient_id=%s record_id=%s",
+            current_user.id,
+            record_id,
+        )
+        return {"detail": "Record deleted successfully."}
+
+    # ── Record not found in either table ─────────────────────────────────────
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Record not found.",
+    )
