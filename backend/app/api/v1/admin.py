@@ -93,7 +93,7 @@ def verify_doctor(doctor_id: int, background_tasks: BackgroundTasks, db: Session
         send_email,
         user.email,
         "MDQ+: Your Application is Approved!",
-        f"Congratulations Dr. {doctor.full_name}!\n\nYour MDQ+ doctor account is now active. You can log in and start accepting patients."
+        f"Congratulations {doctor.full_name}!\n\nYour MDQ+ doctor account is now active. You can log in and start accepting patients."
     )
     
     return {"message": "Doctor verified and account activated."}
@@ -187,7 +187,7 @@ def reject_doctor(
             <p style="margin: 4px 0 0; color: #6c757d; font-size: 13px;">Medical Professional Verification</p>
         </div>
         <div style="padding: 24px 0;">
-            <p>Dear <strong>Dr. {doctor_name_snap}</strong>,</p>
+            <p>Dear <strong>{doctor_name_snap}</strong>,</p>
             <p>Thank you for your interest in joining the MDQ+ network. After careful review of your submitted
             credentials, we regret to inform you that your application <strong>could not be approved</strong>
             at this time.</p>

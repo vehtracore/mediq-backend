@@ -692,7 +692,7 @@ async def send_specialist_referral(
         f"{patient.first_name} {patient.last_name}" if patient else "Unknown Patient"
     )
     today_str = datetime.utcnow().strftime("%d %B %Y")
-    doctor_name = f"Dr. {doctor.full_name}"
+    doctor_name = doctor.full_name
 
     # ── 3. Build PDF in memory ────────────────────────────────────────────────
     pdf = FPDF()

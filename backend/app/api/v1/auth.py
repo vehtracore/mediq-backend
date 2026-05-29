@@ -231,7 +231,7 @@ async def register_doctor(
         send_email,
         email,
         "mdqplus: Application Received",
-        f"Hello Dr. {full_name},<br><br>"
+        f"Hello {full_name},<br><br>"
         f"Thank you for applying to join mdqplus!<br><br>"
         f"Your application is currently pending admin review based on your submitted documents. "
         f"You will receive another email once your account is approved.<br><br>"
@@ -244,7 +244,7 @@ async def register_doctor(
         send_email,
         admin_email,
         "mdqplus: New Doctor Application",
-        f"Dr. {full_name} has applied.\n\nEmail: {email}\nLicense: {license_number}\n\nPlease review in the Admin Dashboard."
+        f"{full_name} has applied.\n\nEmail: {email}\nLicense: {license_number}\n\nPlease review in the Admin Dashboard."
     )
 
     return new_user
