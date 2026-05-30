@@ -254,7 +254,7 @@ def export_vault_records(
     entries: list[tuple] = []
 
     for s in ai_summaries:
-        title = f"AI Health Summary — {s.topic}"
+        title = f"AI Health Summary - {s.topic}"
         date_str = s.created_at.strftime("%d %b %Y, %H:%M UTC")
         body = s.summary_text or ""
         entries.append((s.created_at, title, date_str, body))
@@ -317,7 +317,7 @@ def export_vault_records(
         pdf.set_y(-15)
         pdf.set_font("Helvetica", "I", 8)
         pdf.set_text_color(150, 150, 160)
-        pdf.cell(0, 8, f"Page {idx + 1} of {len(entries)}  |  Confidential — VehtraCore MediQ", align="C")
+        pdf.cell(0, 8, f"Page {idx + 1} of {len(entries)}  |  Confidential - VehtraCore MediQ", align="C")
 
     # ── 5. Serialise to bytes and stream back ─────────────────────────────────
     pdf_bytes = pdf.output()  # returns bytearray in fpdf2
