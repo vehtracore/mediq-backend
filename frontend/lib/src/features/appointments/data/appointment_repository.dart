@@ -261,4 +261,26 @@ class AppointmentRepository {
       throw Exception('Failed to propose appointment time: $e');
     }
   }
+
+  Future<void> requestVIPAppointment({
+    required int doctorId,
+    required String preferredTime,
+    required String notes,
+  }) async {
+    final ep = 'POST /api/v1/appointments/request';
+    _logAuthHandshake(ep);
+    try {
+      final response = await _dio.post(
+        '/api/v1/appointments/request',
+        data: {
+          'doctor_id': doctorId,
+          'preferred_time': preferredTime,
+          'notes': notes,
+        },
+      );
+      _logResponse(ep, response.data);
+    } catch (e) {
+      throw Exception('Failed to send VIP request: $e');
+    }
+  }
 }

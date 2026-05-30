@@ -322,6 +322,148 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                     fontSize: 16,
                                   ),
                                 ),
+
+  void _sendMessage({String? content}) {
+    final textToSend = content ?? _msgController.text.trim();
+    if (textToSend.isEmpty) return;
+    if (_channel == null) return;
+
+    try {
+      _channel!.sink.add(textToSend);
+      if (content == null) {
+        _msgController.clear();
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text("Failed to send")));
+    }
+  }
+
+  Future<void> _handleImageUpload() async {
+    final url = await ref.read(imageUploadServiceProvider).pickAndUploadImage();
+    if (url != null) {
+      _sendMessage(content: url);
+    }
+  }
+
+  @override
+  void dispose() {
+    _channel?.sink.close();
+    _msgController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    final baseUrl = ref.watch(dioProvider).options.baseUrl;
+    final cleanBaseUrl = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
+
+    return Scaffold(
+      backgroundColor: theme.colorScheme.surface,
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(widget.title, style: theme.textTheme.titleLarge),
+            if (_mdcnNumber != null && _mdcnNumber!.isNotEmpty)
+              Text("MDCN: $_mdcnNumber", style: const TextStyle(fontSize: 12, color: Colors.blue, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        backgroundColor: theme.appBarTheme.backgroundColor,
+        foregroundColor: theme.appBarTheme.foregroundColor,
+        elevation: 2,
+        shadowColor: Colors.black.withOpacity(0.1),
+        surfaceTintColor: Colors.transparent,
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : ListView.builder(
+                    controller: _scrollController,
+                    reverse: true, // ✅ Native chat layout (index 0 is bottom)
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _messages.length + (_isLoadingMore ? 1 : 0),
+                    itemBuilder: (context, index) {
+                      // Show loader at the end of the list (top of screen due to reverse)
+                      if (index == _messages.length) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 16.0),
+                          child: Center(child: CircularProgressIndicator()),
+                        );
+                      }
+                      
+                      final msg = _messages[index];
+                      final senderId =
+                          int.tryParse(msg['sender_id'].toString());
+                      final isMe = senderId == _myUserId;
+                      final content = msg['content'] ?? '';
+                      final isImage =
+                          content.toString().startsWith('/static/') ||
+                              content.toString().startsWith('http');
+
+                      return Align(
+                        alignment:
+                            isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                          constraints: BoxConstraints(
+                              maxWidth:
+                                  MediaQuery.of(context).size.width * 0.75),
+                          decoration: BoxDecoration(
+                            color: isMe
+                                ? Colors.blueAccent
+                                : theme.cardTheme.color,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: isImage
+                              ? GestureDetector(
+                                  onTap: () {
+                                    final fullUrl = content.startsWith('http')
+                                        ? content
+                                        : "$cleanBaseUrl$content";
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => FullScreenImageViewer(
+                                          imageUrl: fullUrl,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.network(
+                                      content.startsWith('http')
+                                          ? content
+                                          : "$cleanBaseUrl$content",
+                                      height: 200,
+                                      width: 200,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (c, e, s) => const Icon(
+                                          Icons.broken_image,
+                                          color: Colors.white),
+                                    ),
+                                  ),
+                                )
+                              : Text(
+                                  content,
+                                  style: TextStyle(
+                                    color: isMe
+                                        ? Colors.white
+                                        : theme.colorScheme.onSurface,
+                                    fontSize: 16,
+                                  ),
+                                ),
                         ),
                       );
                     },
@@ -356,10 +498,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           IconButton(
                             icon: Icon(Icons.add_photo_alternate, color: theme.colorScheme.onSurfaceVariant),
                             onPressed: _handleImageUpload,
-                          ),
-                          IconButton(
-                            icon: Icon(Icons.mic, color: theme.colorScheme.onSurfaceVariant),
-                            onPressed: () {},
                           ),
                           Expanded(
                             child: TextField(

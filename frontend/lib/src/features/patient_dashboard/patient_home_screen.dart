@@ -7,7 +7,7 @@ import 'package:mediq_app/src/features/patient_dashboard/presentation/widgets/ho
 import 'package:mediq_app/src/features/patient_dashboard/presentation/widgets/health_tips_sheet.dart';
 import 'package:mediq_app/src/features/appointments/presentation/schedule_screen.dart';
 import 'package:mediq_app/src/features/profile/presentation/profile_screen.dart';
-import 'package:mediq_app/src/features/chat/presentation/chat_list_screen.dart';
+import 'package:mediq_app/src/features/vault/presentation/vault_screen.dart';
 
 class PatientHomeScreen extends ConsumerStatefulWidget {
   const PatientHomeScreen({super.key});
@@ -15,8 +15,9 @@ class PatientHomeScreen extends ConsumerStatefulWidget {
   ConsumerState<PatientHomeScreen> createState() => _PatientHomeScreenState();
 }
 
+final homeTabIndexProvider = StateProvider<int>((ref) => 0);
+
 class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
-  int _selectedIndex = 0;
   final DraggableScrollableController _sheetController =
       DraggableScrollableController();
   bool _showFab = false;
@@ -28,25 +29,24 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
   }
 
   void _onItemTapped(int index) {
-    setState(() {
-      _selectedIndex = index;
-    });
+    ref.read(homeTabIndexProvider.notifier).state = index;
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final selectedIndex = ref.watch(homeTabIndexProvider);
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor, // ✅ Dynamic Background
       body: SafeArea(
         child: IndexedStack(
-          index: _selectedIndex,
+          index: selectedIndex,
           children: [
             _buildHomeTab(),
             const ScheduleScreen(),
-            const ChatListScreen(),
+            const VaultScreen(),
             const ProfileScreen(),
           ],
         ),
@@ -64,7 +64,7 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
                 ],
         ),
         child: BottomNavigationBar(
-          currentIndex: _selectedIndex,
+          currentIndex: selectedIndex,
           onTap: _onItemTapped,
           type: BottomNavigationBarType.fixed,
           backgroundColor: theme.cardTheme.color, // ✅ Dynamic Nav Bar
@@ -81,8 +81,8 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
               label: "Schedule",
             ),
             BottomNavigationBarItem(
-              icon: Icon(Icons.chat_bubble_outline),
-              label: "Chat",
+              icon: Icon(Icons.health_and_safety_outlined),
+              label: "Records",
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.person_outline),

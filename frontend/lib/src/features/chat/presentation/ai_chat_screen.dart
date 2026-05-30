@@ -1,10 +1,13 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter/foundation.dart' show kIsWeb; // 1. To detect Web
-
+import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:just_audio/just_audio.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:dio/dio.dart';
+import 'dart:math' as math;
 import 'package:mediq_app/src/features/chat/presentation/ai_chat_controller.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
@@ -31,7 +34,12 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   // --- VOICE STATE ---
   late stt.SpeechToText _speech;
   bool _isListening = false;
-  bool _speechEnabled = false; // Tracks if init succeeded
+  bool _speechEnabled = false;
+  String _preListenText = ''; // Snapshot of text before mic tap
+  bool _isManuallyStopped = true;
+
+  // --- TTS STATE ---
+  // (Per-message speak — no global auto-play toggle)
 
   // --- IMAGE STAGING STATE ---
   String? _stagedImageUrl; // Cloudinary URL after upload
@@ -55,14 +63,37 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
       bool available = await _speech.initialize(
         onStatus: (status) {
-          print('🎤 Status: $status');
+          debugPrint('🎤 Status: $status');
           if (status == 'notListening' || status == 'done') {
-            if (mounted) setState(() => _isListening = false);
+            if (!_isManuallyStopped) {
+              _speech.listen(
+                pauseFor: const Duration(hours: 1),
+                onResult: (result) {
+                  final recognized = result.recognizedWords;
+                  final appended = _preListenText.isEmpty
+                      ? recognized
+                      : '$_preListenText $recognized';
+                  if (mounted) {
+                    setState(() {
+                      _messageController.text = appended;
+                      _messageController.selection = TextSelection.fromPosition(
+                        TextPosition(offset: _messageController.text.length),
+                      );
+                    });
+                  }
+                },
+              );
+            } else {
+              if (mounted) setState(() => _isListening = false);
+            }
           }
         },
         onError: (e) {
-          print('❌ Voice Error: ${e.errorMsg}');
-          if (mounted) setState(() => _isListening = false);
+          debugPrint('❌ Voice Error: ${e.errorMsg}');
+          if (mounted) {
+            _isManuallyStopped = true;
+            setState(() => _isListening = false);
+          }
         },
         debugLogging: true,
       );
@@ -72,7 +103,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
       }
       return available;
     } catch (e) {
-      print("❌ Init Exception: $e");
+      debugPrint("❌ Init Exception: $e");
       return false;
     }
   }
@@ -91,14 +122,23 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     }
 
     if (_isListening) {
+      _isManuallyStopped = true;
       _speech.stop();
       setState(() => _isListening = false);
     } else {
+      // Snapshot the current text so we can append to it, not overwrite it
+      _isManuallyStopped = false;
+      _preListenText = _messageController.text.trim();
       setState(() => _isListening = true);
       _speech.listen(
+        pauseFor: const Duration(hours: 1),
         onResult: (result) {
+          final recognized = result.recognizedWords;
+          final appended = _preListenText.isEmpty
+              ? recognized
+              : '$_preListenText $recognized';
           setState(() {
-            _messageController.text = result.recognizedWords;
+            _messageController.text = appended;
             _messageController.selection = TextSelection.fromPosition(
               TextPosition(offset: _messageController.text.length),
             );
@@ -107,6 +147,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
       );
     }
   }
+
 
   @override
   void dispose() {
@@ -230,7 +271,62 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     );
   }
 
-  // Language selector removed in favor of PopupMenuButton in AppBar
+  /// Shows the "End Consultation" exit dialog with three options.
+  Future<void> _showExitDialog() async {
+    final shouldClose = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('End Consultation'),
+        content: const Text(
+          'This chat is ephemeral — all messages will be discarded when you leave.\n\n'
+          'Would you like to save a summary to your Health Vault before exiting?',
+        ),
+        actions: [
+          // ── Cancel ──────────────────────────────────────────────────────
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+
+          // ── Exit & Delete ────────────────────────────────────────────────
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Exit & Delete'),
+          ),
+
+          // ── Exit & Save ──────────────────────────────────────────────────
+          FilledButton.icon(
+            icon: const Icon(Icons.health_and_safety_outlined, size: 18),
+            label: const Text('Exit & Save'),
+            onPressed: () async {
+              Navigator.of(dialogContext).pop(false); // keep screen alive for now
+              final success = await ref
+                  .read(aiChatControllerProvider.notifier)
+                  .saveSummary();
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    success
+                        ? '✅ Summary saved to Health Vault!'
+                        : '⚠️ Summary save failed. Exiting anyway.',
+                  ),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+              if (mounted) Navigator.of(context).pop();
+            },
+          ),
+        ],
+      ),
+    );
+
+    if (shouldClose == true && mounted) {
+      Navigator.of(context).pop();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -242,47 +338,12 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     // Scroll to bottom when messages change
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
+
     return PopScope(
       canPop: false, // Prevent immediate close
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
-        
-        final shouldClose = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text("End Session & Clear History?"),
-            content: const Text(
-                "This chat is ephemeral. All data will be wiped when you leave.\n\nWould you like to save a medical summary first?"),
-            actions: [
-               TextButton(
-                onPressed: () => Navigator.of(context).pop(false), // Stay
-                child: const Text("Cancel"),
-              ),
-              TextButton(
-                onPressed: () {
-                   Navigator.of(context).pop(true);
-                },
-                style: TextButton.styleFrom(foregroundColor: Colors.red),
-                child: const Text("End & Delete"),
-              ),
-              FilledButton.icon(
-                icon: const Icon(Icons.download),
-                label: const Text("Save Summary"),
-                onPressed: () async {
-                  Navigator.of(context).pop(true);
-                  await ref.read(aiChatControllerProvider.notifier).summarizeSession();
-                  if (context.mounted) {
-                     Navigator.of(context).pop();
-                  }
-                },
-              ),
-            ],
-          ),
-        );
-
-        if (shouldClose == true) {
-           if (context.mounted) Navigator.of(context).pop();
-        }
+        _showExitDialog();
       },
       child: Scaffold(
       backgroundColor: theme.colorScheme.surface,
@@ -313,7 +374,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         backgroundColor: isDark ? theme.colorScheme.surface : Colors.grey.shade50,
         foregroundColor: theme.colorScheme.onSurface,
         elevation: 2,
-        shadowColor: Colors.black.withOpacity(0.1),
+        shadowColor: Colors.black.withValues(alpha: 0.1),
         surfaceTintColor: Colors.transparent,
         actions: [
           PopupMenuButton<String>(
@@ -445,9 +506,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
               decoration: BoxDecoration(
-                color: isDark ? Colors.white.withOpacity(0.1) : Colors.grey[100],
+                color: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.grey[100],
                 borderRadius: BorderRadius.circular(30),
-                border: Border.all(color: isDark ? Colors.white.withOpacity(0.05) : Colors.transparent),
+                border: Border.all(color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.transparent),
               ),
               child: Row(
                 children: [
@@ -532,66 +593,79 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.8,
-        ),
-        decoration: BoxDecoration(
-          color: isMe
-              ? Colors.blue
-              : (isDark ? const Color(0xFF2C2C2C) : Colors.grey[200]),
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: isMe ? const Radius.circular(16) : Radius.zero,
-            bottomRight: isMe ? Radius.zero : const Radius.circular(16),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (resolvedImageUrl != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8.0),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 200),
-                    child: Image.network(
-                      resolvedImageUrl,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                      loadingBuilder: (context, child, loadingProgress) {
-                        if (loadingProgress == null) return child;
-                        return Container(
-                          height: 120,
-                          color: Colors.grey[300],
-                          child: const Center(
-                            child: CircularProgressIndicator(strokeWidth: 2),
+      child: Column(
+        crossAxisAlignment:
+            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.8,
+            ),
+            decoration: BoxDecoration(
+              color: isMe
+                  ? Colors.blue
+                  : (isDark ? const Color(0xFF2C2C2C) : Colors.grey[200]),
+              borderRadius: BorderRadius.only(
+                topLeft: const Radius.circular(16),
+                topRight: const Radius.circular(16),
+                bottomLeft: isMe ? const Radius.circular(16) : Radius.zero,
+                bottomRight: isMe ? Radius.zero : const Radius.circular(16),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (resolvedImageUrl != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8.0),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 200),
+                        child: Image.network(
+                          resolvedImageUrl,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                          loadingBuilder: (context, child, loadingProgress) {
+                            if (loadingProgress == null) return child;
+                            return Container(
+                              height: 120,
+                              color: Colors.grey[300],
+                              child: const Center(
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            );
+                          },
+                          errorBuilder: (c, e, s) => Container(
+                            height: 120,
+                            color: Colors.grey[300],
+                            child: const Center(
+                              child: Icon(Icons.broken_image,
+                                  color: Colors.grey, size: 32),
+                            ),
                           ),
-                        );
-                      },
-                      errorBuilder: (c, e, s) => Container(
-                        height: 120,
-                        color: Colors.grey[300],
-                        child: const Center(
-                          child: Icon(Icons.broken_image,
-                              color: Colors.grey, size: 32),
                         ),
                       ),
                     ),
                   ),
+                MarkdownBubble(
+                  data: text,
+                  isMe: isMe,
+                  isDark: isDark,
                 ),
-              ),
-            MarkdownBubble(
-              data: text,
-              isMe: isMe,
-              isDark: isDark,
+              ],
             ),
-          ],
-        ),
+          ),
+          // ── Per-message TTS button (AI messages only) ────────────────────
+          if (!isMe)
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 2),
+              child: _PremiumVoiceButton(text: text, isDark: isDark),
+            ),
+        ],
       ),
     );
   }
@@ -604,17 +678,194 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
           Container(
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: Colors.blue.withOpacity(0.05),
+              color: Colors.blue.withValues(alpha: 0.05),
               shape: BoxShape.circle,
             ),
-            child: Icon(Icons.auto_awesome, size: 64, color: Colors.blue.withOpacity(0.8)),
+            child: Icon(Icons.auto_awesome, size: 64, color: Colors.blue.withValues(alpha: 0.8)),
           ),
           const SizedBox(height: 24),
           Text("Hello! I'm MDQ+.", style: TextStyle(color: theme.colorScheme.onSurfaceVariant, fontSize: 18)),
           const SizedBox(height: 8),
-          Text("I can help assess your symptoms.", style: TextStyle(color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7), fontSize: 14)),
+          Text("I can help assess your symptoms.", style: TextStyle(color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7), fontSize: 14)),
         ],
       ),
+    );
+  }
+}
+
+enum _VoiceState { idle, loading, playing }
+
+class _PremiumVoiceButton extends ConsumerStatefulWidget {
+  final String text;
+  final bool isDark;
+
+  const _PremiumVoiceButton({
+    required this.text,
+    required this.isDark,
+  });
+
+  @override
+  ConsumerState<_PremiumVoiceButton> createState() => _PremiumVoiceButtonState();
+}
+
+class _PremiumVoiceButtonState extends ConsumerState<_PremiumVoiceButton> {
+  _VoiceState _state = _VoiceState.idle;
+  late AudioPlayer _player;
+
+  @override
+  void initState() {
+    super.initState();
+    _player = AudioPlayer();
+    _player.playerStateStream.listen((state) {
+      if (state.processingState == ProcessingState.completed) {
+        if (mounted) setState(() => _state = _VoiceState.idle);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleTap() async {
+    if (_state == _VoiceState.playing) {
+      await _player.stop();
+      if (mounted) setState(() => _state = _VoiceState.idle);
+      return;
+    }
+
+    if (mounted) setState(() => _state = _VoiceState.loading);
+
+    try {
+      final dio = ref.read(dioProvider);
+      
+      final cleanText = widget.text
+        .replaceAll(RegExp(r'[*_`#>~]'), '')
+        .replaceAll(RegExp(r'\n+'), '. ')
+        .trim();
+
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/temp_voice_${cleanText.hashCode}.mp3');
+
+      if (file.existsSync()) {
+        await _player.setFilePath(file.path);
+        if (mounted) setState(() => _state = _VoiceState.playing);
+        _player.play();
+        return;
+      }
+
+      final response = await dio.post(
+        '/api/v1/voice/speak',
+        data: {'text': cleanText},
+        options: Options(responseType: ResponseType.bytes),
+      );
+
+      await file.writeAsBytes(response.data as List<int>);
+
+      await _player.setFilePath(file.path);
+      if (mounted) setState(() => _state = _VoiceState.playing);
+      _player.play();
+    } catch (e) {
+      debugPrint('Voice API Error: $e');
+      if (mounted) {
+        setState(() => _state = _VoiceState.idle);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load audio: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_state == _VoiceState.loading) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 10, bottom: 4, top: 4, right: 10),
+        child: SizedBox(
+          width: 24,
+          height: 12,
+          child: _BouncingDots(isDark: widget.isDark),
+        ),
+      );
+    }
+
+    return IconButton(
+      tooltip: _state == _VoiceState.playing ? 'Stop' : 'Read aloud',
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+      icon: Icon(
+        _state == _VoiceState.playing
+            ? Icons.stop_circle_outlined
+            : Icons.volume_up_outlined,
+        size: 16,
+        color: widget.isDark ? Colors.white30 : Colors.black26,
+      ),
+      onPressed: _handleTap,
+    );
+  }
+}
+
+class _BouncingDots extends StatefulWidget {
+  final bool isDark;
+  const _BouncingDots({required this.isDark});
+
+  @override
+  State<_BouncingDots> createState() => _BouncingDotsState();
+}
+
+class _BouncingDotsState extends State<_BouncingDots> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Widget _buildDot(int index) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final double phase = (_controller.value * 2 * math.pi) - (index * 1.0);
+        final double y = math.sin(phase) * 3;
+
+        return Transform.translate(
+          offset: Offset(0, y),
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            width: 4,
+            height: 4,
+            decoration: BoxDecoration(
+              color: widget.isDark ? Colors.white54 : Colors.black54,
+              shape: BoxShape.circle,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        _buildDot(0),
+        _buildDot(1),
+        _buildDot(2),
+      ],
     );
   }
 }

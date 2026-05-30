@@ -53,17 +53,7 @@ class DoctorAvatar extends StatelessWidget {
     return CircleAvatar(
       radius: radius,
       backgroundColor: backgroundColor,
-      child: ClipOval(
-        child: hasValidUrl
-            ? Image.network(
-                imageUrl,
-                width: radius * 2,
-                height: radius * 2,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) => fallbackWidget,
-              )
-            : fallbackWidget,
-      ),
+      child: Icon(Icons.person, color: primaryColor, size: radius * 1.2),
     );
   }
 }

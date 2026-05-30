@@ -43,6 +43,7 @@ class VaultScreen extends ConsumerStatefulWidget {
 
 class _VaultScreenState extends ConsumerState<VaultScreen> {
   bool _isExporting = false;
+  bool _isDeleting = false;
 
   // ── Derived helpers ────────────────────────────────────────────────────────
   Set<String> get _selectedIds => ref.read(_selectedIdsProvider);
@@ -119,9 +120,20 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
   }
 
   // ── Delete placeholder ─────────────────────────────────────────────────────
-  void _deleteRecord(String id) {
-    // TODO: Wire to DELETE /api/v1/vault/{id} when endpoint is ready.
-    _showSnack('Delete is not yet available.', isError: false);
+  Future<void> _deleteRecord(String id) async {
+    setState(() => _isDeleting = true);
+    try {
+      final dio = ref.read(dioProvider);
+      final response = await dio.delete('/api/v1/vault/record/$id');
+      if (response.statusCode == 200) {
+        ref.invalidate(vaultHistoryProvider);
+        _showSnack('Record deleted successfully.', isError: false);
+      }
+    } catch (e) {
+      _showSnack('Delete failed: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _isDeleting = false);
+    }
   }
 
   // ── Snack helper ───────────────────────────────────────────────────────────
@@ -151,9 +163,12 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
       children: [
         Scaffold(
           backgroundColor: theme.scaffoldBackgroundColor,
-          body: CustomScrollView(
-            slivers: [
-              // ── App Bar ────────────────────────────────────────────────────
+          body: RefreshIndicator(
+            onRefresh: () async => ref.refresh(vaultHistoryProvider.future),
+            color: _kBlue,
+            child: CustomScrollView(
+              slivers: [
+                // ── App Bar ────────────────────────────────────────────────────
               SliverAppBar(
                 floating: true,
                 snap: true,
@@ -183,11 +198,7 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
                           Container(
                             padding: const EdgeInsets.all(7),
                             decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [_kBlue, _kTeal],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
+                              color: _kBlue,
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: const Icon(Icons.health_and_safety_rounded,
@@ -211,14 +222,6 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
                       icon: const Icon(Icons.download_rounded, color: Colors.white),
                       tooltip: 'Export selected as PDF',
                       onPressed: () => _exportRecords(selectedIds),
-                    ),
-                    const SizedBox(width: 4),
-                  ] else ...[
-                    IconButton(
-                      icon: Icon(Icons.refresh_rounded,
-                          color: isDark ? Colors.white70 : Colors.grey[600]),
-                      tooltip: 'Refresh',
-                      onPressed: () => ref.invalidate(vaultHistoryProvider),
                     ),
                     const SizedBox(width: 4),
                   ],
@@ -301,12 +304,13 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
                   );
                 },
               ),
-            ],
+              ],
+            ),
           ),
         ),
 
         // ── Loading overlay ────────────────────────────────────────────────
-        if (_isExporting)
+        if (_isExporting || _isDeleting)
           Container(
             color: Colors.black54,
             child: Center(
@@ -328,7 +332,7 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
                     const CircularProgressIndicator(color: _kBlue),
                     const SizedBox(height: 16),
                     Text(
-                      'Generating PDF…',
+                      _isExporting ? 'Generating PDF…' : 'Deleting…',
                       style: GoogleFonts.poppins(
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
@@ -719,11 +723,7 @@ class AISummaryCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [_kAiFrom, _kAiTo],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
+                  color: _kAiFrom,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(Icons.auto_awesome_rounded,
@@ -739,11 +739,7 @@ class AISummaryCard extends StatelessWidget {
                       style: GoogleFonts.poppins(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
-                        foreground: Paint()
-                          ..shader = const LinearGradient(
-                            colors: [_kAiFrom, _kAiTo],
-                          ).createShader(
-                              const Rect.fromLTWH(0, 0, 160, 20)),
+                        color: _kAiFrom,
                       ),
                     ),
                     Text(

@@ -1,12 +1,9 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/lab/data/lab_result_model.dart';
-import 'package:mediq_app/src/features/chat/data/pdf_service.dart';
-import 'package:open_file/open_file.dart';
-import 'package:path_provider/path_provider.dart';
-import 'dart:io';
 
 // 1. STATE
 class AiChatState {
@@ -73,6 +70,7 @@ class AiChatController extends StateNotifier<AiChatState> {
           });
 
       final aiMsg = {'role': 'ai', 'message': response.data['response']};
+      if (!mounted) return;
       state = state
           .copyWith(messages: [...state.messages, aiMsg], isLoading: false);
     } on DioException catch (e) {
@@ -90,12 +88,14 @@ class AiChatController extends StateNotifier<AiChatState> {
         'role': 'system',
         'message': errorMessage
       };
+      if (!mounted) return;
       state = state.copyWith(messages: [...state.messages, errorMsg], isLoading: false);
     } catch (e) {
       final errorMsg = {
         'role': 'system',
         'message': "System Error: ${e.toString()}"
       };
+      if (!mounted) return;
       state = state.copyWith(messages: [...state.messages, errorMsg], isLoading: false);
     }
 
@@ -125,10 +125,12 @@ class AiChatController extends StateNotifier<AiChatState> {
           });
 
       final aiMsg = {'role': 'ai', 'message': response.data['response']};
+      if (!mounted) return;
       state = state.copyWith(messages: [...state.messages, aiMsg], isLoading: false);
       
     } catch (e) {
       final errorMsg = {'role': 'system', 'message': "AI Analysis Failed: $e"};
+      if (!mounted) return;
       state = state.copyWith(messages: [...state.messages, errorMsg], isLoading: false);
     }
   }
@@ -154,56 +156,44 @@ INSTRUCTION: Analyze these results. If any values are abnormal (Positive/High), 
 """;
   }
 
-  Future<void> summarizeSession() async {
+  /// Generates an AI summary of the session and saves it to the Health Vault.
+  /// Returns [true] if the save was successful, [false] otherwise.
+  Future<bool> saveSummary() async {
+    if (!mounted) return false;
     state = state.copyWith(isLoading: true);
-    
-    // 1. Identify if we have Lab Results in the chat
-    LabAnalysisResponse? lastLabResult;
-    try {
-      final labMsg = state.messages.lastWhere((m) => m['type'] == 'lab_result', orElse: () => {});
-      if (labMsg.isNotEmpty) {
-        lastLabResult = labMsg['lab_data'] as LabAnalysisResponse;
-      }
-    } catch (_) {}
 
-    // 2. Ask AI to Summarize the text conversation
-    String summaryText = "Consultation Summary unavailable.";
     try {
+      // 1. Ask the AI to produce a structured medical summary
       final response = await _dio.post('/api/v1/chat/analyze', data: {
-        "message": "Summarize this entire conversation into a structured medical note. Sections: 1. Patient Symptoms, 2. Lab Results (if any), 3. Recommended Actions. Keep it professional.",
-        "history": state.messages.map((m) => {
-          'role': m['role'] == 'user' ? 'user' : 'model',
-          'parts': [m['message']]
-        }).toList()
+        "message":
+            "Summarize this entire conversation into a structured medical note. "
+            "Sections: 1. Patient Symptoms, 2. Lab Results (if any), "
+            "3. Recommended Actions. Keep it professional.",
+        "history": state.messages
+            .where((m) => m['role'] != 'system') // skip error messages
+            .map((m) => {
+              'role': m['role'] == 'user' ? 'user' : 'model',
+              'parts': [m['message'] ?? '']
+            })
+            .toList(),
       });
-      summaryText = response.data['response'];
-    } catch (e) {
-      summaryText = "Could not generate AI summary due to error: $e";
-    }
 
-    // 3. Generate PDF
-    try {
-      final pdfBytes = await PdfService().generateMedicalNote(
-        messages: state.messages,
-        labResult: lastLabResult,
-        summary: summaryText,
-      );
+      final summaryText = response.data['response'] as String;
 
-      // 4. Save & Open
-      final output = await getApplicationDocumentsDirectory();
-      final file = File("${output.path}/mediq_summary_${DateTime.now().millisecondsSinceEpoch}.pdf");
-      await file.writeAsBytes(pdfBytes);
-      
+      // 2. POST to Health Vault
+      await _dio.post('/api/v1/vault/ai-summary', data: {
+        "topic": "AI Symptom Analysis",
+        "summary_text": summaryText,
+      });
+
+      if (!mounted) return false;
       state = state.copyWith(isLoading: false);
-      
-      // Open the file
-      await OpenFile.open(file.path);
-      
+      return true;
     } catch (e) {
+      debugPrint("[AiChatController] saveSummary error: $e");
+      if (!mounted) return false;
       state = state.copyWith(isLoading: false);
-      print("PDF Error: $e");
-      // Ideally show a snackbar here, but controller shouldn't handle UI. 
-      // We can rely on OpenFile throwing if it fails.
+      return false;
     }
   }
 }

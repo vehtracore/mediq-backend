@@ -4,6 +4,7 @@ import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
 import 'package:mediq_app/src/core/services/notification_service.dart';
+import 'package:mediq_app/src/features/vault/data/vault_repository.dart';
 
 final authControllerProvider = StateNotifierProvider<AuthController, AsyncValue<void>>((ref) {
   return AuthController(
@@ -61,6 +62,7 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
     await _authRepository.logout();
     state = const AsyncData(null);
     _ref.invalidate(userProvider);
+    _ref.invalidate(vaultHistoryProvider);
   }
 
   // Fix: Added settings parameters here to match Repository

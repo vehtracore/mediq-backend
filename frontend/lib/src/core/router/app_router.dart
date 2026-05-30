@@ -17,6 +17,7 @@ import '../../features/doctors/presentation/doctor_search_screen.dart';
 import '../../features/doctors/presentation/doctor_detail_screen.dart';
 import '../../features/doctors/data/doctor_model.dart';
 import '../../features/appointments/presentation/book_appointment_screen.dart';
+import '../../features/appointments/presentation/appointment_detail_screen.dart';
 
 // --- IMPORTS ---
 import '../../features/auth/data/user_model.dart';
@@ -224,6 +225,15 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) {
           final user = state.extra as User;
           return EditProfileScreen(user: user);
+        },
+      ),
+
+      GoRoute(
+        path: '/appointment/:id',
+        builder: (context, state) {
+          final idString = state.pathParameters['id'];
+          final appointmentId = int.tryParse(idString ?? '') ?? 0;
+          return AppointmentDetailScreen(appointmentId: appointmentId);
         },
       ),
 

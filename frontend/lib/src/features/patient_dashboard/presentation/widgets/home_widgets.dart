@@ -11,6 +11,7 @@ import 'package:mediq_app/src/shared/presentation/widgets/error_state_widget.dar
 import 'package:mediq_app/src/core/api/app_exception.dart';
 import 'package:dio/dio.dart';
 import 'package:mediq_app/presentation/widgets/global_error_widget.dart';
+import 'package:mediq_app/src/features/patient_dashboard/patient_home_screen.dart';
 import 'dart:ui';
 
 /// Purpose: Drives the top 'Dark Frosted Glass' Appointment Card on the Patient Dashboard,
@@ -31,10 +32,10 @@ final nextAppointmentProvider =
       await ref.watch(appointmentRepositoryProvider).getMyAppointments();
   final upcoming = appointments
       .where(
-          (a) => a.status == 'confirmed' && a.startTime.isAfter(DateTime.now()))
+          (a) => a.status == 'confirmed' && a.startTime != null && a.startTime!.isAfter(DateTime.now()))
       .toList();
   if (upcoming.isEmpty) return null;
-  upcoming.sort((a, b) => a.startTime.compareTo(b.startTime));
+  upcoming.sort((a, b) => (a.startTime ?? DateTime(2099)).compareTo(b.startTime ?? DateTime(2099)));
   return upcoming.first;
 });
 
@@ -186,12 +187,11 @@ class AppointmentCard extends ConsumerWidget {
         }
 
         // 2. ACTIVE STATE (Show Appointment)
-        final dateStr =
-            DateFormat('MMM dd, yyyy').format(appointment.startTime);
-        final timeStr = DateFormat('jm').format(appointment.startTime);
+        final dateStr = appointment.startTime != null ? DateFormat('MMM dd, yyyy').format(appointment.startTime!) : 'Pending Date';
+        final timeStr = appointment.startTime != null ? DateFormat('jm').format(appointment.startTime!) : 'Pending Time';
 
         return GestureDetector(
-          onTap: () => context.go('/schedule'),
+          onTap: () => ref.read(homeTabIndexProvider.notifier).state = 1,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(32),
             child: BackdropFilter(

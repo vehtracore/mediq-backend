@@ -103,7 +103,19 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
         data: (allSlots) {
           final availableSlots = allSlots.where((s) => !s.isBooked).toList();
           if (availableSlots.isEmpty) {
-            return const Center(child: Text("No available slots found."));
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text("No available slots found."),
+                  const SizedBox(height: 16),
+                  FilledButton.tonal(
+                    onPressed: () => _showVIPRequestSheet(context, ref, widget.doctor.id),
+                    child: const Text("Request an Appointment"),
+                  ),
+                ],
+              ),
+            );
           }
 
           final availableDates = availableSlots
@@ -195,17 +207,24 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                                       fontSize: 12)),
                               const SizedBox(height: 4),
                               Text(DateFormat('d').format(date),
-                                  style: TextStyle(
+                                    style: TextStyle(
                                       color: isSelected
                                           ? Colors.white
-                                          : theme.textTheme.bodyLarge?.color,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 18)),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
+                                          : theme.textTheme.bodyMedium?.color,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                const SizedBox(height: 32),
+                Center(
+                  child: FilledButton.tonal(
+                    onPressed: () => _showVIPRequestSheet(context, ref, widget.doctor.id),
+                    child: const Text("None of these times work? Request an Appointment"),
                   ),
                 ),
                 const SizedBox(height: 32),
@@ -280,4 +299,107 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
       ),
     );
   }
+
+  void _showVIPRequestSheet(BuildContext context, WidgetRef ref, int doctorId) {
+    final reasonController = TextEditingController();
+    String preferredTime = "Morning";
+    bool isSubmitting = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom,
+            left: 24,
+            right: 24,
+            top: 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text("Request VIP Appointment",
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                value: preferredTime,
+                decoration: const InputDecoration(
+                  labelText: "Preferred Time",
+                  border: OutlineInputBorder(),
+                ),
+                items: ["Morning", "Afternoon", "Evening"]
+                    .map((time) => DropdownMenuItem(value: time, child: Text(time)))
+                    .toList(),
+                onChanged: (val) {
+                  if (val != null) setModalState(() => preferredTime = val);
+                },
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: reasonController,
+                maxLines: 3,
+                maxLength: 500,
+                decoration: const InputDecoration(
+                  labelText: "Reason for Visit / Symptoms",
+                  border: OutlineInputBorder(),
+                  alignLabelWithHint: true,
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: FilledButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          setModalState(() => isSubmitting = true);
+                          try {
+                            await ref
+                                .read(appointmentRepositoryProvider)
+                                .requestVIPAppointment(
+                                  doctorId: doctorId,
+                                  preferredTime: preferredTime,
+                                  notes: reasonController.text,
+                                );
+                            if (ctx.mounted) {
+                              Navigator.pop(ctx);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text(
+                                        "Request sent! Your doctor will propose a time shortly.")),
+                              );
+                              context.go('/');
+                            }
+                          } catch (e) {
+                            if (ctx.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                    content: Text("Error: $e"),
+                                    backgroundColor: Colors.red),
+                              );
+                            }
+                          } finally {
+                            if (ctx.mounted)
+                              setModalState(() => isSubmitting = false);
+                          }
+                        },
+                  child: isSubmitting
+                      ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Text("Send Request"),
+                ),
+              ),
+              const SizedBox(height: 24),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
+

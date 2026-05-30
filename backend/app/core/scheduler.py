@@ -1,10 +1,10 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 
 from app.core.database import SessionLocal
-from app.models.appointment import DoctorSlot
+from app.models.appointment import Appointment, DoctorSlot
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -38,5 +38,63 @@ async def cleanup_expired_slots() -> None:
     except Exception as exc:
         db.rollback()
         logger.exception("[SLOT CLEANUP] Error during nightly sweep: %s", exc)
+    finally:
+        db.close()
+
+
+async def sweep_stale_appointments() -> None:
+    """
+    Hourly cron job — resolves two categories of stale appointments.
+
+    Sweep 1 (Liability — auto-close):
+        Appointments with status == 'active' whose start_time is older than
+        24 hours are marked 'completed'.  This prevents consultations from
+        hanging open indefinitely when a doctor forgets to close them.
+
+    Sweep 2 (Limbo — unclaimed cancellation):
+        Appointments with status == 'pending' whose start_time is older than
+        24 hours are marked 'cancelled'.  These are bookings that were never
+        accepted by a doctor and have now expired.
+
+    Both queries operate on naive UTC timestamps to match the column storage
+    convention used throughout the project (datetime.utcnow, no tzinfo).
+    """
+    # DB columns are stored as naive UTC — strip tzinfo before comparing.
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
+
+    db = SessionLocal()
+    try:
+        # -- Sweep 1: active → completed (24-hour auto-close) -----------------
+        stmt_active = (
+            update(Appointment)
+            .where(Appointment.status == "active")
+            .where(Appointment.start_time < cutoff)
+            .values(status="completed")
+        )
+        result_active = db.execute(stmt_active)
+
+        # -- Sweep 2: pending → cancelled (unclaimed / expired) ---------------
+        stmt_pending = (
+            update(Appointment)
+            .where(Appointment.status == "pending")
+            .where(Appointment.start_time < cutoff)
+            .values(status="cancelled")
+        )
+        result_pending = db.execute(stmt_pending)
+
+        db.commit()
+
+        closed = result_active.rowcount
+        cancelled = result_pending.rowcount
+        logger.info(
+            "[APPT SWEEP] Cron Sweep complete — "
+            "Closed %d active appointment(s) | "
+            "Cancelled %d pending appointment(s).",
+            closed,
+            cancelled,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.exception("[APPT SWEEP] Error during stale-appointment sweep: %s", exc)
     finally:
         db.close()

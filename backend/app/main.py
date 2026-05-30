@@ -22,7 +22,7 @@ from app.api.v1 import payments
 from app.api.v1 import family
 from app.api.v1.auth import scrub_expired_accounts
 from app.services.watchdog_service import sweep_pending_transactions
-from app.core.scheduler import cleanup_expired_slots
+from app.core.scheduler import cleanup_expired_slots, sweep_stale_appointments
 
 Base.metadata.create_all(bind=engine)
 
@@ -211,12 +211,22 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
+    # Job 4: Stale-appointment sweep — every hour
+    scheduler.add_job(
+        sweep_stale_appointments,
+        trigger=IntervalTrigger(hours=1),
+        id="stale_appointment_sweep",
+        name="Hourly stale-appointment sweep (auto-close & cancel)",
+        replace_existing=True,
+    )
+
     scheduler.start()
     _sched_log.info(
         "[SCHEDULER] AsyncIOScheduler started. "
         "NDPA scrubber @ 02:00 UTC daily | "
         "Payment watchdog every 5 min | "
-        "Doctor-slot cleanup @ 00:00 UTC daily."
+        "Doctor-slot cleanup @ 00:00 UTC daily | "
+        "Stale-appointment sweep every 1 hour."
     )
 
     yield  # ← application runs here

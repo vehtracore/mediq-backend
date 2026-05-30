@@ -271,6 +271,19 @@ class _AppointmentCard extends ConsumerWidget {
                   if (appointment.status == 'pending' || isConfirmed)
                     TextButton(
                         onPressed: () async {
+                          final confirm = await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              title: const Text("Cancel Consultation"),
+                              content: const Text("Are you sure you want to cancel this consultation?"),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Keep")),
+                                TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Cancel", style: TextStyle(color: Colors.red))),
+                              ],
+                            ),
+                          );
+                          if (confirm != true) return;
+                          
                           try {
                             await ref
                                 .read(appointmentRepositoryProvider)
@@ -388,6 +401,19 @@ class _AppointmentCard extends ConsumerWidget {
                     // Cancel Request — patient rejects the proposed time
                     OutlinedButton(
                         onPressed: () async {
+                          final confirm = await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              title: const Text("Cancel Request"),
+                              content: const Text("Are you sure you want to cancel this appointment request?"),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Keep")),
+                                TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Cancel", style: TextStyle(color: Colors.red))),
+                              ],
+                            ),
+                          );
+                          if (confirm != true) return;
+
                           try {
                             await ref
                                 .read(appointmentRepositoryProvider)

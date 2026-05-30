@@ -148,9 +148,9 @@ class _DoctorChatTile extends StatelessWidget {
     final theme = Theme.of(context);
     final now = DateTime.now();
     final unlockTime =
-        appointment.startTime.subtract(const Duration(minutes: 10));
+        appointment.startTime != null ? appointment.startTime!.subtract(const Duration(minutes: 10)) : DateTime(2099);
     final isUnlocked = now.isAfter(unlockTime);
-    final timeStr = DateFormat('MMM dd, h:mm a').format(appointment.startTime);
+    final timeStr = appointment.startTime != null ? DateFormat('MMM dd, h:mm a').format(appointment.startTime!) : 'Pending';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),

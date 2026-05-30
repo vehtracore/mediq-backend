@@ -20,20 +20,10 @@ class DoctorDetailScreen extends StatelessWidget {
             pinned: true,
             backgroundColor: theme.appBarTheme.backgroundColor,
             foregroundColor: theme.appBarTheme.foregroundColor,
-            flexibleSpace: FlexibleSpaceBar(
-                background: doctor.imageUrl.isNotEmpty
-                    ? Image.network(
-                        doctor.imageUrl, 
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) => Container(
-                          color: const Color(0xFF4A90E2),
-                          child: const Icon(Icons.person, color: Colors.white, size: 100),
-                        ),
-                      )
-                    : Container(
-                        color: const Color(0xFF4A90E2),
-                        child: const Icon(Icons.person, color: Colors.white, size: 100),
-                      ))),
+            flexibleSpace: const FlexibleSpaceBar(
+                background: CircleAvatar(
+                  child: Icon(Icons.person, size: 80),
+                ))),
         SliverToBoxAdapter(
             child: Padding(
                 padding: const EdgeInsets.all(24),

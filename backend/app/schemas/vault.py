@@ -54,3 +54,4 @@ class VaultHistoryResponse(BaseModel):
     referrals: Optional[Any] = None
 
     model_config = ConfigDict(from_attributes=True)
+

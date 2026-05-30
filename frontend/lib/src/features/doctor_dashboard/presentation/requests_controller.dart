@@ -41,7 +41,7 @@ final doctorRequestsProvider =
     );
   }
 
-  return result;
+  return result.where((a) => a.doctorId != null && a.status == 'pending').toList();
 });
 
 /// Provider for Tab 1: Unclaimed general-queue GP consultations.
@@ -59,7 +59,7 @@ final generalQueueProvider =
     debugPrint('🏥 [queueProvider] Got ${result.length} queue item(s).');
   }
 
-  return result;
+  return result.where((a) => a.doctorId == null && a.status == 'pending').toList();
 });
 
 // ---------------------------------------------------------------------------
@@ -94,6 +94,14 @@ class RequestsController extends AsyncNotifier<void> {
     state = await AsyncValue.guard(() async {
       await ref.read(appointmentRepositoryProvider).claimAppointment(id);
       ref.invalidate(generalQueueProvider);
+    });
+  }
+
+  Future<void> proposeTime(int id, DateTime time) async {
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(() async {
+      await ref.read(appointmentRepositoryProvider).proposeAppointmentTime(id, time);
+      ref.invalidate(doctorRequestsProvider);
     });
   }
 }

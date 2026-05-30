@@ -38,12 +38,15 @@ dependencies:
   flutter_image_compress: ^2.4.0
   pdf: ^3.10.0
   printing: ^5.11.0
-  path_provider: ^2.1.2
+  path_provider: ^2.1.5
   open_file: ^3.3.2
   image_gallery_saver_plus: ^4.0.1
   flutter_dotenv: ^6.0.1
   supabase_flutter: ^2.12.4
   shimmer: ^3.0.0
+  share_plus: ^10.1.4
+  flutter_tts: ^4.2.5
+  just_audio: ^0.10.5
 dev_dependencies:
   flutter_test:
     sdk: flutter

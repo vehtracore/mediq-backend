@@ -42,11 +42,21 @@ class ConnectionManager:
         self.active_connections[appointment_id].append(websocket)
         self.connected_users[appointment_id].add(user_id)
 
-    def disconnect(self, websocket: WebSocket, appointment_id: str, user_id: int):
+        # Broadcast presence: notify everyone in the room that this user is online
+        presence_online = {"type": "presence", "status": "online", "user_id": user_id}
+        await self.broadcast(presence_online, appointment_id)
+
+    async def disconnect(self, websocket: WebSocket, appointment_id: str, user_id: int):
         if appointment_id in self.active_connections:
             if websocket in self.active_connections[appointment_id]:
                 self.active_connections[appointment_id].remove(websocket)
             self.connected_users[appointment_id].discard(user_id)
+
+            # Broadcast presence: notify remaining users that this user is offline
+            if self.active_connections[appointment_id]:
+                presence_offline = {"type": "presence", "status": "offline", "user_id": user_id}
+                await self.broadcast(presence_offline, appointment_id)
+
             if not self.active_connections[appointment_id]:
                 del self.active_connections[appointment_id]
                 del self.connected_users[appointment_id]
@@ -63,7 +73,7 @@ class ConnectionManager:
                 except Exception as e:
                     print(f"DEBUG BROADCAST: send failed, removing dead socket: {e}", flush=True)
                     logger.warning(f"[WS] Broadcast send failed, removing dead socket: {e}")
-                    self.disconnect(connection, appointment_id, 0)
+                    await self.disconnect(connection, appointment_id, 0)
 
 manager = ConnectionManager()
 
@@ -285,13 +295,13 @@ async def websocket_endpoint(
 
     except WebSocketDisconnect:
         print(f"DEBUG WS: DISCONNECT — User {user_id}", flush=True)
-        manager.disconnect(websocket, appointment_id, user_id)
+        await manager.disconnect(websocket, appointment_id, user_id)
         logger.info(f"[WS] Disconnected: User {user_id} from appointment {appointment_id}")
     except Exception as e:
         print(f"DEBUG WS: UNEXPECTED EXCEPTION — {e}", flush=True)
         print(traceback.format_exc(), flush=True)
         logger.error(f"[WS] Unexpected error for user {user_id}: {e}\n{traceback.format_exc()}")
-        manager.disconnect(websocket, appointment_id, user_id)
+        await manager.disconnect(websocket, appointment_id, user_id)
         try:
             await websocket.close(code=1011, reason="Internal server error")
         except Exception:

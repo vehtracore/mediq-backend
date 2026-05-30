@@ -28,12 +28,15 @@ class DoctorProfileScreen extends ConsumerWidget {
               Center(
                 child: Column(
                   children: [
-                    CircleAvatar(
-                      radius: 50,
-                      backgroundImage: NetworkImage(doctor.imageUrl),
-                      onBackgroundImageError: (_, __) =>
-                          const Icon(Icons.person),
-                    ),
+                    doctor.imageUrl.isNotEmpty
+                        ? CircleAvatar(
+                            radius: 50,
+                            backgroundImage: NetworkImage(doctor.imageUrl),
+                          )
+                        : const CircleAvatar(
+                            radius: 50,
+                            child: Icon(Icons.person),
+                          ),
                     const SizedBox(height: 16),
                     Text(
                       doctor.fullName,

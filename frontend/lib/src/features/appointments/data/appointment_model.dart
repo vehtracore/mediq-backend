@@ -9,7 +9,7 @@ class Appointment {
   final String doctorName;
   final int? patientId;
   final String patientName;
-  final DateTime startTime;
+  final DateTime? startTime;  // null for VIP requests pending doctor's time proposal
   final String status;
   final String paymentStatus;
   final bool isAcknowledged;
@@ -24,7 +24,7 @@ class Appointment {
     required this.doctorName,
     this.patientId,
     required this.patientName,
-    required this.startTime,
+    this.startTime,
     required this.status,
     required this.paymentStatus,
     this.isAcknowledged = false,
@@ -59,7 +59,9 @@ class Appointment {
       doctorName: (json['doctor_name'] as String?) ?? 'Doctor',
       patientId: safeInt(json['patient_id']),
       patientName: (json['patient_name'] as String?) ?? 'Patient',
-      startTime: DateTime.parse(json['start_time'] as String),
+      startTime: json['start_time'] != null
+          ? DateTime.parse(json['start_time'] as String)
+          : null,
       status: (json['status'] as String?) ?? 'pending',
       paymentStatus: (json['payment_status'] as String?) ?? 'unpaid',
       isAcknowledged: json['is_acknowledged'] == true,

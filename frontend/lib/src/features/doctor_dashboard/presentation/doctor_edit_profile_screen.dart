@@ -118,7 +118,10 @@ class _DoctorEditProfileScreenState
                     backgroundColor: Colors.grey[200],
                     backgroundImage: backgroundImage,
                     child: (backgroundImage == null)
-                        ? const Icon(Icons.person, size: 50, color: Colors.grey)
+                        ? const CircleAvatar(
+                            backgroundColor: Colors.transparent,
+                            child: Icon(Icons.person),
+                          )
                         : null,
                   ),
                   Positioned(

@@ -108,9 +108,15 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
           TextButton(
             onPressed: () async {
               Navigator.pop(ctx);
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (c) => const Center(child: CircularProgressIndicator()),
+              );
               await ref
                   .read(appointmentRepositoryProvider)
                   .completeAppointment(widget.appointment.id);
+              if (context.mounted) Navigator.pop(context); // close loader
               if (context.mounted) ref.refresh(doctorScheduleProvider);
             },
             child: const Text("Confirm", style: TextStyle(color: Colors.green)),
@@ -124,11 +130,11 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("Cancel Appointment?"),
-        content: const Text("This cannot be undone."),
+        title: const Text("Cancel Consultation"),
+        content: const Text("Are you sure you want to cancel this consultation? This action cannot be undone and will alert administration."),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text("Back")),
+              onPressed: () => Navigator.pop(ctx), child: const Text("Keep Appointment")),
           TextButton(
             onPressed: () async {
               Navigator.pop(ctx);
@@ -137,7 +143,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                   .cancelMyAppointment(widget.appointment.id);
               if (context.mounted) ref.refresh(doctorScheduleProvider);
             },
-            child: const Text("Cancel Appointment",
+            child: const Text("Confirm Cancel",
                 style: TextStyle(color: Colors.red)),
           ),
         ],
@@ -211,6 +217,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                   TextField(
                     controller: notesCtrl,
                     maxLines: 4,
+                    maxLength: 1000,
                     textCapitalization: TextCapitalization.sentences,
                     decoration: InputDecoration(
                       hintText:
@@ -326,8 +333,21 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
       statusTextColor = Colors.grey.shade700;
     }
 
+    final st = widget.appointment.startTime;
+    final bool isUnlocked = st == null ||
+        DateTime.now().isAfter(st.subtract(const Duration(minutes: 10)));
+
     return GestureDetector(
-      onTap: () => context.push('/appointment/${widget.appointment.id}'),
+      onTap: () {
+
+        if (!isUnlocked) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Consultation room will unlock 10 minutes before appointment time."),
+            ),
+          );
+        }
+      },
       child: Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -436,27 +456,29 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                       Text('View Notes', style: theme.textTheme.bodyMedium)
                     ]),
                   ),
-                  PopupMenuItem<String>(
-                    value: 'refer',
-                    child: Row(children: [
-                      Icon(Icons.local_hospital_outlined, color: theme.colorScheme.primary),
-                      const SizedBox(width: 8),
-                      Text('Refer Patient', 
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.primary,
-                            fontWeight: FontWeight.w600,
-                          ))
-                    ]),
-                  ),
-                  const PopupMenuItem<String>(
-                    value: 'complete',
-                    child: Row(children: [
-                      Icon(Icons.check_circle_outline, color: Colors.green),
-                      SizedBox(width: 8),
-                      Text('Mark Complete',
-                          style: TextStyle(color: Colors.green))
-                    ]),
-                  ),
+                  if (isUnlocked)
+                    PopupMenuItem<String>(
+                      value: 'refer',
+                      child: Row(children: [
+                        Icon(Icons.local_hospital_outlined, color: theme.colorScheme.primary),
+                        const SizedBox(width: 8),
+                        Text('Refer Patient', 
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.w600,
+                            ))
+                      ]),
+                    ),
+                  if (isUnlocked)
+                    const PopupMenuItem<String>(
+                      value: 'complete',
+                      child: Row(children: [
+                        Icon(Icons.check_circle_outline, color: Colors.green),
+                        SizedBox(width: 8),
+                        Text('Mark Complete',
+                            style: TextStyle(color: Colors.green))
+                      ]),
+                    ),
                   const PopupMenuDivider(),
                   const PopupMenuItem<String>(
                     value: 'cancel',
@@ -482,11 +504,6 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                   // 10-minute unlock gate:
                   // Unlocked if startTime is null (e.g. VIP with no fixed time)
                   // OR if now is within 10 minutes of (or past) the start time.
-                  final st = widget.appointment.startTime;
-                  final bool isUnlocked = st == null ||
-                      DateTime.now().isAfter(
-                          st.subtract(const Duration(minutes: 10)));
-
                   return Column(
                     children: [
                       FittedBox(
