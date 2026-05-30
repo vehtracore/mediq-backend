@@ -288,7 +288,7 @@ def export_vault_records(
         pdf.set_font("Helvetica", "B", 11)
         pdf.set_text_color(255, 255, 255)
         pdf.set_xy(10, 4)
-        pdf.cell(0, 10, "VehtraCore — Health Vault Export", ln=False)
+        pdf.cell(0, 10, "VehtraCore - Health Vault Export", ln=False)
 
         # ── Record title ─────────────────────────────────────────────────────
         pdf.set_xy(10, 25)
