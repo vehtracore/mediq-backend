@@ -13,7 +13,7 @@ from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.review import Review
 from app.models.vault import ConsultationRecord
-from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, GeneralBookRequest, ReferralRequest, ReferralResponse, AppointmentProposeRequest, VIPBookRequest, ReferralCreate
+from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, AppointmentUpdate, GeneralBookRequest, ReferralRequest, ReferralResponse, AppointmentProposeRequest, VIPBookRequest, ReferralCreate
 from app.api import deps
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,78 @@ def map_appt(a, doc_name=None, patient_name=None):
         amount=getattr(a, 'amount', 0.0),
         has_review=has_rev,
         paystack_reference=getattr(a, 'paystack_reference', None),
+        prescription=getattr(a, 'prescription', None),
     )
+
+# ---------------------------------------------------------------------------
+# Historical Context: Fetch the last 3 completed consultations for a patient
+# ---------------------------------------------------------------------------
+def _build_patient_history_context(
+    db: Session,
+    patient_id: int,
+    *,
+    exclude_appointment_id: int | None = None,
+) -> str | None:
+    """
+    Queries the most recent 3 ConsultationRecords for *patient_id* from the
+    Health Vault and compiles them into a human-readable text block that is
+    appended to the notes the doctor sees.
+
+    Returns ``None`` when there is no prior history (first-time patient).
+    """
+    query = (
+        db.query(ConsultationRecord)
+        .filter(ConsultationRecord.patient_id == patient_id)
+    )
+    if exclude_appointment_id is not None:
+        query = query.filter(
+            ConsultationRecord.appointment_id != exclude_appointment_id
+        )
+    records = (
+        query
+        .order_by(ConsultationRecord.created_at.desc())
+        .limit(3)
+        .all()
+    )
+
+    if not records:
+        return None
+
+    lines: list[str] = []
+    lines.append("--- RECENT MEDICAL HISTORY (LAST 3 VISITS) ---")
+
+    for idx, rec in enumerate(records, start=1):
+        date_str = rec.created_at.strftime("%d %b %Y")
+
+        # Resolve doctor name from the relationship
+        doc_label = (
+            f"Dr. {rec.doctor.full_name}" if rec.doctor else "Doctor"
+        )
+
+        # Build a brief one-liner summary from notes + prescriptions
+        parts: list[str] = []
+        if rec.clinical_notes:
+            # Truncate long clinical notes to first 120 chars
+            snippet = rec.clinical_notes[:120]
+            if len(rec.clinical_notes) > 120:
+                snippet += "…"
+            parts.append(snippet)
+        if rec.prescriptions:
+            # prescriptions may be a JSON list or a plain string
+            if isinstance(rec.prescriptions, list):
+                rx_str = "; ".join(
+                    f"{item.get('drug', '?')} {item.get('dosage', '')}".strip()
+                    for item in rec.prescriptions
+                )
+            else:
+                rx_str = str(rec.prescriptions)[:120]
+            parts.append(f"Rx: {rx_str}")
+
+        summary = " | ".join(parts) if parts else "No details recorded."
+        lines.append(f"{idx}. [{date_str}] ({doc_label}): {summary}")
+
+    return "\n".join(lines)
+
 
 # ... (Slots & Booking - Standard) ...
 @router.post("/slots", response_model=SlotResponse, status_code=status.HTTP_201_CREATED)
@@ -370,9 +441,24 @@ def get_doctor_requests(db: Session = Depends(get_db), current_user: User = Depe
 
     logger.info("[doctor/requests] Found %d pending request(s).", len(appts))
 
+    # Pre-compute historical context per patient (cached per patient_id
+    # within this request to avoid repeated DB round-trips).
+    _history_cache: dict[int, str | None] = {}
+
     results = []
     for a in appts:
         p_name = f"{a.patient.first_name} {a.patient.last_name}" if a.patient else "Unknown"
+
+        # Inject historical context into notes (doctor-side only)
+        pid = a.patient_id
+        if pid not in _history_cache:
+            _history_cache[pid] = _build_patient_history_context(
+                db, pid, exclude_appointment_id=a.id
+            )
+        enriched_notes = a.notes or ""
+        if _history_cache[pid]:
+            enriched_notes = f"{enriched_notes}\n\n{_history_cache[pid]}" if enriched_notes else _history_cache[pid]
+
         # doctor_name field repurposed to carry patient name in doctor-side view
         results.append(AppointmentResponse(
             id=a.id,
@@ -384,7 +470,7 @@ def get_doctor_requests(db: Session = Depends(get_db), current_user: User = Depe
             payment_status=a.payment_status,
             is_acknowledged=getattr(a, 'is_acknowledged', False),
             start_time=a.slot.start_time if a.slot else a.start_time,
-            notes=a.notes,
+            notes=enriched_notes,
             has_review=False,
             amount=getattr(a, 'amount', 0.0),
         ))
@@ -420,9 +506,23 @@ def get_general_queue(db: Session = Depends(get_db), current_user: User = Depend
 
     logger.info("[doctor/queue] Found %d item(s) in general queue.", len(appts))
 
+    # Pre-compute historical context per patient
+    _history_cache: dict[int, str | None] = {}
+
     results = []
     for a in appts:
         p_name = f"{a.patient.first_name} {a.patient.last_name}" if a.patient else "Unknown"
+
+        # Inject historical context into notes (doctor-side only)
+        pid = a.patient_id
+        if pid not in _history_cache:
+            _history_cache[pid] = _build_patient_history_context(
+                db, pid, exclude_appointment_id=a.id
+            )
+        enriched_notes = a.notes or ""
+        if _history_cache[pid]:
+            enriched_notes = f"{enriched_notes}\n\n{_history_cache[pid]}" if enriched_notes else _history_cache[pid]
+
         results.append(AppointmentResponse(
             id=a.id,
             doctor_id=a.doctor_id,
@@ -433,7 +533,7 @@ def get_general_queue(db: Session = Depends(get_db), current_user: User = Depend
             payment_status=a.payment_status,
             is_acknowledged=getattr(a, 'is_acknowledged', False),
             start_time=a.start_time,
-            notes=a.notes,
+            notes=enriched_notes,
             has_review=False,
             amount=getattr(a, 'amount', 0.0),
         ))
@@ -503,18 +603,75 @@ def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_us
             patient_id=appt.patient_id,
             doctor_id=doctor.id,
             clinical_notes=appt.notes,
-            prescriptions=None,
+            # Propagate prescription written during the consultation
+            prescriptions=appt.prescription,
             referrals=None,
             created_at=datetime.now(timezone.utc),
         )
         db.add(vault_record)
         logger.info(
-            "[Vault] ConsultationRecord created — appt_id=%s patient_id=%s doctor_id=%s",
+            "[Vault] ConsultationRecord created — appt_id=%s patient_id=%s doctor_id=%s prescription=%s",
             appt.id, appt.patient_id, doctor.id,
+            bool(appt.prescription),
         )
+    else:
+        # Update existing record's prescription if it was written after completion
+        if appt.prescription:
+            existing.prescriptions = appt.prescription
+            logger.info(
+                "[Vault] ConsultationRecord prescription updated — appt_id=%s",
+                appt.id,
+            )
 
     db.commit()
     db.refresh(appt)
+    return map_appt(appt, doctor.full_name)
+
+
+# --- Doctor: Write/update a prescription for an appointment ---
+@router.put("/doctor/appointments/{appt_id}/prescribe", response_model=AppointmentResponse)
+def prescribe_appointment(
+    appt_id: int,
+    payload: AppointmentUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    Allows the assigned doctor to write or update a prescription / medication
+    plan for a specific appointment. The prescription text is stored on the
+    appointment row and propagated to the ConsultationRecord in the Health
+    Vault the next time the appointment is completed.
+    """
+    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+    if not doctor:
+        raise HTTPException(status_code=403, detail="Only doctors can prescribe.")
+
+    appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found.")
+    if appt.doctor_id != doctor.id:
+        raise HTTPException(status_code=403, detail="You are not the doctor for this appointment.")
+
+    if payload.prescription is not None:
+        appt.prescription = payload.prescription.strip() or None
+
+    # If a ConsultationRecord already exists (appointment already completed),
+    # update it immediately so the vault stays in sync.
+    existing_record = (
+        db.query(ConsultationRecord)
+        .filter(ConsultationRecord.appointment_id == appt.id)
+        .first()
+    )
+    if existing_record and appt.prescription:
+        existing_record.prescriptions = appt.prescription
+
+    db.commit()
+    db.refresh(appt)
+
+    logger.info(
+        "[Prescribe] doctor_id=%s wrote prescription for appt_id=%s",
+        doctor.id, appt.id,
+    )
     return map_appt(appt, doctor.full_name)
 
 
@@ -579,10 +736,24 @@ def get_doctor_confirmed_appointments(db: Session = Depends(get_db), current_use
     scheduled = db.query(Appointment).options(joinedload(Appointment.patient), joinedload(Appointment.slot)).join(DoctorSlot, Appointment.slot_id == DoctorSlot.id).filter(Appointment.doctor_id == doctor.id, Appointment.status == "confirmed").all()
     general = db.query(Appointment).options(joinedload(Appointment.patient)).filter(Appointment.doctor_id == doctor.id, Appointment.slot_id == None, Appointment.status == "confirmed").all()
     
+    # Pre-compute historical context per patient
+    _history_cache: dict[int, str | None] = {}
+
     results = []
     for a in scheduled + general:
         p_name = f"{a.patient.first_name} {a.patient.last_name}" if a.patient else "Unknown"
         start = a.slot.start_time if a.slot else a.start_time
+
+        # Inject historical context into notes (doctor-side only)
+        pid = a.patient_id
+        if pid not in _history_cache:
+            _history_cache[pid] = _build_patient_history_context(
+                db, pid, exclude_appointment_id=a.id
+            )
+        enriched_notes = a.notes or ""
+        if _history_cache[pid]:
+            enriched_notes = f"{enriched_notes}\n\n{_history_cache[pid]}" if enriched_notes else _history_cache[pid]
+
         results.append(AppointmentResponse(
             id=a.id,
             doctor_id=a.doctor_id,
@@ -593,7 +764,7 @@ def get_doctor_confirmed_appointments(db: Session = Depends(get_db), current_use
             payment_status=a.payment_status,
             is_acknowledged=getattr(a, 'is_acknowledged', False),
             start_time=start,
-            notes=a.notes,
+            notes=enriched_notes,
             has_review=False,
             amount=getattr(a, 'amount', 0.0),
             paystack_reference=getattr(a, 'paystack_reference', None),

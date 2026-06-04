@@ -17,6 +17,7 @@ class Appointment {
   final String? notes;
   final bool hasReview;
   final String? paystackReference;
+  final String? prescription;
 
   Appointment({
     required this.id,
@@ -32,6 +33,7 @@ class Appointment {
     this.notes,
     this.hasReview = false,
     this.paystackReference,
+    this.prescription,
   });
 
   factory Appointment.fromJson(Map<String, dynamic> json) {
@@ -69,6 +71,7 @@ class Appointment {
       notes: json['notes'] as String?,
       hasReview: (json['has_review'] as bool?) ?? false,
       paystackReference: json['paystack_reference'] as String?,
+      prescription: json['prescription'] as String?,
     );
   }
 }

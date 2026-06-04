@@ -151,7 +151,142 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
     );
   }
 
-  // ── NEW: Hospital Referral Dialog ──────────────────────────────────────────
+  // ── Prescription Dialog ─────────────────────────────────────────────────────
+  void _showPrescriptionDialog(BuildContext context) {
+    final prescriptionCtrl = TextEditingController(
+      text: widget.appointment.prescription ?? '',
+    );
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setDialogState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
+            title: const Row(
+              children: [
+                Icon(Icons.medical_services_outlined,
+                    color: Color(0xFF00806E), size: 22),
+                SizedBox(width: 8),
+                Text(
+                  "Write Prescription",
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    "Patient: ${widget.appointment.patientName}",
+                    style: const TextStyle(
+                        fontSize: 13, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text("Medication Plan / Prescription",
+                      style: TextStyle(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: prescriptionCtrl,
+                    maxLines: 4,
+                    maxLength: 2000,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: InputDecoration(
+                      hintText:
+                          "e.g. Amoxicillin 500mg TDS x 5 days.\nParacetamol 1g PRN for fever...",
+                      hintStyle: const TextStyle(
+                          fontSize: 12, color: Colors.grey),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed:
+                    isSubmitting ? null : () => Navigator.pop(ctx),
+                child: const Text("Cancel"),
+              ),
+              FilledButton.icon(
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        final text = prescriptionCtrl.text.trim();
+                        if (text.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                                content: Text(
+                                    "Please enter a prescription."),
+                                backgroundColor: Colors.orange),
+                          );
+                          return;
+                        }
+                        setDialogState(() => isSubmitting = true);
+                        try {
+                          await ref
+                              .read(appointmentRepositoryProvider)
+                              .prescribeAppointment(
+                                id: widget.appointment.id,
+                                prescription: text,
+                              );
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          if (context.mounted) {
+                            ref.refresh(doctorScheduleProvider);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                    "✅ Prescription saved for ${widget.appointment.patientName}."),
+                                backgroundColor: const Color(0xFF00806E),
+                                duration: const Duration(seconds: 3),
+                              ),
+                            );
+                          }
+                        } catch (e) {
+                          setDialogState(() => isSubmitting = false);
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(e.toString()),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
+                        }
+                      },
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF00806E),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                icon: isSubmitting
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.save_outlined, size: 16),
+                label: Text(isSubmitting ? "Saving..." : "Save Prescription"),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
+  // ── Hospital Referral Dialog ───────────────────────────────────────────────
   void _showReferralDialog(BuildContext context) {
     final hospitalCtrl = TextEditingController();
     final notesCtrl = TextEditingController();
@@ -438,6 +573,8 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                 onSelected: (value) {
                   if (value == 'notes') {
                     _showNotesDialog(context);
+                  } else if (value == 'prescribe') {
+                    _showPrescriptionDialog(context);
                   } else if (value == 'refer') {
                     _showReferralDialog(context);
                   } else if (value == 'complete') {
@@ -456,6 +593,25 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                       Text('View Notes', style: theme.textTheme.bodyMedium)
                     ]),
                   ),
+                  if (isUnlocked)
+                    PopupMenuItem<String>(
+                      value: 'prescribe',
+                      child: Row(children: [
+                        const Icon(Icons.medical_services_outlined,
+                            color: Color(0xFF00806E)),
+                        const SizedBox(width: 8),
+                        Text(
+                          widget.appointment.prescription != null &&
+                                  widget.appointment.prescription!.isNotEmpty
+                              ? 'Edit Prescription'
+                              : 'Write Prescription',
+                          style: const TextStyle(
+                            color: Color(0xFF00806E),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ]),
+                    ),
                   if (isUnlocked)
                     PopupMenuItem<String>(
                       value: 'refer',

@@ -257,20 +257,22 @@ def export_vault_records(
         title = f"AI Health Summary - {s.topic}"
         date_str = s.created_at.strftime("%d %b %Y, %H:%M UTC")
         body = s.summary_text or ""
-        entries.append((s.created_at, title, date_str, body))
+        entries.append((s.created_at, title, date_str, body, []))
 
     for c in consultations:
         title = "Consultation Record"
         date_str = c.created_at.strftime("%d %b %Y, %H:%M UTC")
+        # Each section is stored separately so the PDF renderer can style them
+        # independently (e.g. prescriptions get a dedicated header block).
         body_parts = []
         if c.clinical_notes:
-            body_parts.append(f"Clinical Notes:\n{c.clinical_notes}")
+            body_parts.append(("clinical", f"Clinical Notes:\n{c.clinical_notes}"))
         if c.prescriptions:
-            body_parts.append(f"Prescriptions:\n{c.prescriptions}")
+            body_parts.append(("prescription", c.prescriptions))
         if c.referrals:
-            body_parts.append(f"Referrals:\n{c.referrals}")
-        body = "\n\n".join(body_parts) if body_parts else "No clinical details recorded."
-        entries.append((c.created_at, title, date_str, body))
+            body_parts.append(("clinical", f"Referrals:\n{c.referrals}"))
+        body = "\n\n".join(text for _, text in body_parts) if body_parts else "No clinical details recorded."
+        entries.append((c.created_at, title, date_str, body, body_parts))
 
     # Sort newest-first
     entries.sort(key=lambda e: e[0], reverse=True)
@@ -279,7 +281,7 @@ def export_vault_records(
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
 
-    for idx, (_, title, date_str, body) in enumerate(entries):
+    for idx, (_, title, date_str, body, body_parts) in enumerate(entries):
         pdf.add_page()
 
         # ── Header bar ──────────────────────────────────────────────────────
@@ -308,18 +310,44 @@ def export_vault_records(
         pdf.ln(4)
 
         # ── Body text ─────────────────────────────────────────────────────────
-        pdf.set_font("Helvetica", "", 11)
-        pdf.set_text_color(30, 30, 50)
-        safe_body = body.encode("latin-1", "replace").decode("latin-1")
-        
-        # Clean the Markdown (The Asterisk Bug)
-        clean_body = safe_body.replace("**", "").replace("*", "")
-        
-        # Split into sections to add vertical spacing
-        for section in clean_body.split("\n\n"):
-            if section.strip():
-                pdf.multi_cell(0, 8, section.strip())
-                pdf.ln(4)
+        # Render prescription sections with a distinct labelled header; all
+        # other sections are rendered as plain paragraphs.
+        def _clean(raw: str) -> str:
+            safe = raw.encode("latin-1", "replace").decode("latin-1")
+            return safe.replace("**", "").replace("*", "")
+
+        if body_parts:
+            # Typed rendering (consultation records)
+            for section_type, section_text in body_parts:
+                if section_type == "prescription":
+                    # ── Prescription banner ──────────────────────────────────
+                    pdf.set_fill_color(0, 128, 110)          # teal accent
+                    pdf.set_text_color(255, 255, 255)
+                    pdf.set_font("Helvetica", "B", 10)
+                    pdf.cell(0, 7, "  Prescriptions & Medications", fill=True, ln=True)
+                    pdf.ln(2)
+                    pdf.set_text_color(30, 30, 50)
+                    pdf.set_font("Helvetica", "", 11)
+                    pdf.multi_cell(0, 8, _clean(section_text))
+                    pdf.ln(4)
+                else:
+                    # Plain clinical / referral section
+                    pdf.set_font("Helvetica", "", 11)
+                    pdf.set_text_color(30, 30, 50)
+                    for para in _clean(section_text).split("\n\n"):
+                        if para.strip():
+                            pdf.multi_cell(0, 8, para.strip())
+                            pdf.ln(4)
+        else:
+            # Plain rendering (AI summaries and legacy records)
+            pdf.set_font("Helvetica", "", 11)
+            pdf.set_text_color(30, 30, 50)
+            safe_body = body.encode("latin-1", "replace").decode("latin-1")
+            clean_body = safe_body.replace("**", "").replace("*", "")
+            for section in clean_body.split("\n\n"):
+                if section.strip():
+                    pdf.multi_cell(0, 8, section.strip())
+                    pdf.ln(4)
 
         # ── Footer ───────────────────────────────────────────────────────────
         pdf.set_y(-15)

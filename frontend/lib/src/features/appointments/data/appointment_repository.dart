@@ -197,6 +197,24 @@ class AppointmentRepository {
     }
   }
 
+  Future<void> prescribeAppointment({
+    required int id,
+    required String prescription,
+  }) async {
+    _logAuthHandshake('PUT /api/v1/appointments/doctor/appointments/:id/prescribe');
+    try {
+      await _dio.put(
+        '/api/v1/appointments/doctor/appointments/$id/prescribe',
+        data: {'prescription': prescription},
+      );
+    } on DioException catch (e) {
+      final detail = e.response?.data?['detail'];
+      throw Exception(detail ?? 'Failed to save prescription');
+    } catch (e) {
+      throw Exception('Failed to save prescription: $e');
+    }
+  }
+
   // --- GENERAL QUEUE METHODS ---
 
   Future<Appointment> bookGeneralConsultation(String notes) async {

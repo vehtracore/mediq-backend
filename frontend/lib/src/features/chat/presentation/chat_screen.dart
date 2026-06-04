@@ -5,7 +5,6 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
-import 'package:mediq_app/src/features/chat/presentation/full_screen_image_viewer.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_repository.dart';
 import 'package:go_router/go_router.dart';
 
@@ -420,10 +419,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                     final fullUrl = content.startsWith('http')
                                         ? content
                                         : "$cleanBaseUrl$content";
-                                    Navigator.of(context).push(
+                                    Navigator.push(
+                                      context,
                                       MaterialPageRoute(
-                                        builder: (_) => FullScreenImageViewer(
-                                          imageUrl: fullUrl,
+                                        builder: (_) => Scaffold(
+                                          backgroundColor: Colors.black,
+                                          appBar: AppBar(
+                                            backgroundColor: Colors.black,
+                                            iconTheme: const IconThemeData(color: Colors.white),
+                                          ),
+                                          body: Center(
+                                            child: InteractiveViewer(
+                                              child: Image.network(fullUrl),
+                                            ),
+                                          ),
                                         ),
                                       ),
                                     );

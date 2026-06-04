@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
@@ -33,6 +33,8 @@ class Appointment(Base):
     # --- Continuity of Care: Physical Referral ---
     referred_hospital = Column(String, nullable=True)   # e.g. "Lagos Island General Hospital A&E"
     referral_note = Column(String, nullable=True)        # Standardised referral string
+    # --- Doctor Prescription ---
+    prescription = Column(Text, nullable=True)           # Free-text prescription / medication plan
 
     patient = relationship("User")
     doctor = relationship("Doctor")

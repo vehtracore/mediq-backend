@@ -94,9 +94,16 @@ class ScheduleScreen extends ConsumerWidget {
   }
 }
 
-class _AppointmentCard extends ConsumerWidget {
+class _AppointmentCard extends ConsumerStatefulWidget {
   final Appointment appointment;
   const _AppointmentCard({required this.appointment});
+
+  @override
+  ConsumerState<_AppointmentCard> createState() => _AppointmentCardState();
+}
+
+class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
+  bool _isLoading = false;
 
   void _showRatingSheet(BuildContext context, WidgetRef ref) {
     int selectedRating = 5;
@@ -147,7 +154,7 @@ class _AppointmentCard extends ConsumerWidget {
                         Navigator.pop(ctx);
                         try {
                           await ref.read(reviewRepositoryProvider).submitReview(
-                              appointmentId: appointment.id,
+                              appointmentId: widget.appointment.id,
                               rating: selectedRating,
                               comment: commentCtrl.text);
                           ref.refresh(myAppointmentsProvider);
@@ -166,7 +173,8 @@ class _AppointmentCard extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
+    final appointment = widget.appointment;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
@@ -284,14 +292,17 @@ class _AppointmentCard extends ConsumerWidget {
                           );
                           if (confirm != true) return;
                           
+                          setState(() => _isLoading = true);
                           try {
                             await ref
                                 .read(appointmentRepositoryProvider)
                                 .cancelMyAppointment(appointment.id);
                             ref.refresh(myAppointmentsProvider);
-                          } catch (e) {}
+                          } catch (e) {} finally {
+                            if (mounted) setState(() => _isLoading = false);
+                          }
                         },
-                        child: Text("Cancel",
+                        child: _isLoading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : Text("Cancel",
                             style: TextStyle(color: theme.colorScheme.error))),
                   if (isConfirmed) ...[
                     const SizedBox(width: 8),
@@ -374,6 +385,7 @@ class _AppointmentCard extends ConsumerWidget {
                           );
                           if (confirm != true) return;
 
+                          setState(() => _isLoading = true);
                           try {
                             await ref
                                 .read(appointmentRepositoryProvider)
@@ -391,6 +403,8 @@ class _AppointmentCard extends ConsumerWidget {
                                 ),
                               );
                             }
+                          } finally {
+                            if (mounted) setState(() => _isLoading = false);
                           }
                         },
                         style: OutlinedButton.styleFrom(
@@ -398,7 +412,7 @@ class _AppointmentCard extends ConsumerWidget {
                             side: BorderSide(
                                 color: theme.colorScheme.error.withOpacity(0.5)),
                         ),
-                        child: const Text('Cancel Request')),
+                        child: _isLoading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Cancel Request')),
                     const SizedBox(width: 8),
                     ElevatedButton(
                         onPressed: () async {
