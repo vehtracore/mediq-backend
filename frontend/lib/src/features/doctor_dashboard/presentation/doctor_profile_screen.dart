@@ -28,7 +28,7 @@ class DoctorProfileScreen extends ConsumerWidget {
               Center(
                 child: Column(
                   children: [
-                    doctor.imageUrl.isNotEmpty
+                    doctor.imageUrl.isNotEmpty && doctor.imageUrl.startsWith('http')
                         ? CircleAvatar(
                             radius: 50,
                             backgroundImage: NetworkImage(doctor.imageUrl),

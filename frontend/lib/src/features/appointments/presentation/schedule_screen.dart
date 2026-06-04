@@ -303,10 +303,10 @@ class _AppointmentCard extends ConsumerWidget {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton.filledTonal(
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                FilledButton.icon(
                                   onPressed: isUnlocked
                                       ? () => context.push('/chat', extra: {
                                             'title': appointment.doctorName,
@@ -318,62 +318,22 @@ class _AppointmentCard extends ConsumerWidget {
                                       : null,
                                   icon: Icon(
                                     isUnlocked
-                                        ? Icons.chat_bubble_outline
+                                        ? Icons.meeting_room
                                         : Icons.lock_outline,
                                     size: 18,
                                   ),
-                                  style: IconButton.styleFrom(
-                                      backgroundColor: isUnlocked
-                                          ? theme.colorScheme.primary.withOpacity(0.15)
-                                          : Colors.grey.withOpacity(0.12),
-                                      foregroundColor: isUnlocked
-                                          ? theme.colorScheme.primary
-                                          : Colors.grey,
-                                  )),
-                              const SizedBox(width: 8),
-                              IconButton.filledTonal(
-                                  onPressed: isUnlocked
-                                      ? () => context.push('/video_call?type=voice',
-                                          extra: appointment.id)
-                                      : null,
-                                  icon: Icon(
-                                    isUnlocked
-                                        ? Icons.phone
-                                        : Icons.lock_outline,
-                                    size: 18,
-                                  ),
-                                  style: IconButton.styleFrom(
-                                      backgroundColor: isUnlocked
-                                          ? theme.colorScheme.primary.withOpacity(0.15)
-                                          : Colors.grey.withOpacity(0.12),
-                                      foregroundColor: isUnlocked
-                                          ? theme.colorScheme.primary
-                                          : Colors.grey,
-                                  )),
-                              const SizedBox(width: 8),
-                              FilledButton.tonalIcon(
-                                  onPressed: isUnlocked
-                                      ? () => context.push(
-                                          '/video_call', extra: appointment.id)
-                                      : null,
-                                  icon: Icon(
-                                    isUnlocked
-                                        ? Icons.videocam
-                                        : Icons.lock_outline,
-                                    size: 16,
-                                  ),
-                                  label: const Text("Video"),
+                                  label: const Text("Join Consultation Room"),
                                   style: FilledButton.styleFrom(
                                       backgroundColor: isUnlocked
-                                          ? theme.colorScheme.primary.withOpacity(0.15)
+                                          ? theme.colorScheme.primary
                                           : Colors.grey.withOpacity(0.12),
                                       foregroundColor: isUnlocked
-                                          ? theme.colorScheme.primary
+                                          ? theme.colorScheme.onPrimary
                                           : Colors.grey,
                                       elevation: 0,
                                   )),
-                            ],
-                          ),
+                              ],
+                            ),
                           if (!isUnlocked) ...[
                             const SizedBox(height: 4),
                             Row(

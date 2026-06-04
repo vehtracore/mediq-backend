@@ -121,6 +121,19 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
 
   // ── Delete placeholder ─────────────────────────────────────────────────────
   Future<void> _deleteRecord(String id) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Are you sure?"),
+        content: const Text("Do you really want to delete this item? This action cannot be undone."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("No, keep it")),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Yes, delete", style: TextStyle(color: Colors.red))),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
     setState(() => _isDeleting = true);
     try {
       final dio = ref.read(dioProvider);

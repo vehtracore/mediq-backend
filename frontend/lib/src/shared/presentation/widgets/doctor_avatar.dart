@@ -35,20 +35,18 @@ class DoctorAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasValidUrl = imageUrl.isNotEmpty && imageUrl.startsWith('http');
-    // For Material 3, surfaceContainerHighest is the new name, but we will use surfaceVariant if available, or just a generic color
-    final backgroundColor = Theme.of(context).colorScheme.surfaceVariant;
+    final backgroundColor = Theme.of(context).colorScheme.surfaceContainerHighest;
     final primaryColor = Theme.of(context).colorScheme.primary;
 
-    final Widget fallbackWidget = Center(
-      child: Text(
-        _getInitials(fullName),
-        style: TextStyle(
-          color: primaryColor,
-          fontWeight: FontWeight.bold,
-          fontSize: radius * 0.8,
-        ),
-      ),
-    );
+    if (hasValidUrl) {
+      return CircleAvatar(
+        radius: radius,
+        backgroundColor: backgroundColor,
+        backgroundImage: NetworkImage(imageUrl),
+        onBackgroundImageError: (_, __) {},
+        child: null,
+      );
+    }
 
     return CircleAvatar(
       radius: radius,

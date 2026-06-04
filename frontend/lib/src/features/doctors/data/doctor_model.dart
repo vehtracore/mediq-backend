@@ -32,7 +32,7 @@ class Doctor {
       id: json['id'],
       fullName: json['full_name'],
       specialty: json['specialty'],
-      imageUrl: json['image_url'] ?? 'https://i.pravatar.cc/150',
+      imageUrl: json['image_url'] ?? '',
       hourlyRate: (json['hourly_rate'] as num).toDouble(),
       rating: (json['rating'] as num).toDouble(),
       reviewCount: json['review_count'],

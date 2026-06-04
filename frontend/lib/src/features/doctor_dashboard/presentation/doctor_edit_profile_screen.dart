@@ -97,7 +97,7 @@ class _DoctorEditProfileScreenState
     ImageProvider? backgroundImage;
     if (_webImageBytes != null) {
       backgroundImage = MemoryImage(_webImageBytes!);
-    } else if (widget.doctor.imageUrl.isNotEmpty) {
+    } else if (widget.doctor.imageUrl.isNotEmpty && widget.doctor.imageUrl.startsWith('http')) {
       backgroundImage = NetworkImage(widget.doctor.imageUrl);
     }
 

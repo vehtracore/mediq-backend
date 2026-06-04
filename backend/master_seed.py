@@ -14,35 +14,35 @@ master_users = [
         "email": "house@mediq.com", "first_name": "Dr. Gregory", "last_name": "House", "dob": "1980-01-01", "location": "Lagos, Nigeria", "role": "doctor",
         "doctor_profile": {
             "full_name": "Dr. Gregory House", "specialty": "Diagnostician", "bio": "Specializes in infectious diseases and nephrology.",
-            "image_url": "https://i.pravatar.cc/150?u=house", "hourly_rate": 5000.0, "rating": 4.8, "review_count": 120, "license_number": "MDCN-001", "years_experience": 15
+            "image_url": None, "hourly_rate": 5000.0, "rating": 4.8, "review_count": 120, "license_number": "MDCN-001", "years_experience": 15
         }
     },
     {
         "email": "cuddy@mediq.com", "first_name": "Dr. Lisa", "last_name": "Cuddy", "dob": "1980-01-01", "location": "Lagos, Nigeria", "role": "doctor",
         "doctor_profile": {
             "full_name": "Dr. Lisa Cuddy", "specialty": "Endocrinologist", "bio": "Dean of Medicine. Expert in administrative medicine.",
-            "image_url": "https://i.pravatar.cc/150?u=cuddy", "hourly_rate": 4500.0, "rating": 4.9, "review_count": 95, "license_number": "MDCN-002", "years_experience": 12
+            "image_url": None, "hourly_rate": 4500.0, "rating": 4.9, "review_count": 95, "license_number": "MDCN-002", "years_experience": 12
         }
     },
     {
         "email": "wilson@mediq.com", "first_name": "Dr. James", "last_name": "Wilson", "dob": "1980-01-01", "location": "Lagos, Nigeria", "role": "doctor",
         "doctor_profile": {
             "full_name": "Dr. James Wilson", "specialty": "Oncologist", "bio": "Head of the Department of Oncology.",
-            "image_url": "https://i.pravatar.cc/150?u=wilson", "hourly_rate": 4800.0, "rating": 5.0, "review_count": 110, "license_number": "MDCN-003", "years_experience": 10
+            "image_url": None, "hourly_rate": 4800.0, "rating": 5.0, "review_count": 110, "license_number": "MDCN-003", "years_experience": 10
         }
     },
     {
         "email": "jd@mediq.com", "first_name": "Dr. John", "last_name": "Dorian", "dob": "1980-01-01", "location": "Lagos, Nigeria", "role": "doctor",
         "doctor_profile": {
             "full_name": "Dr. John Dorian", "specialty": "General Practitioner", "bio": "Friendly and approachable GP.",
-            "image_url": "https://i.pravatar.cc/150?u=jd", "hourly_rate": 3000.0, "rating": 4.7, "review_count": 60, "license_number": "MDCN-004", "years_experience": 5
+            "image_url": None, "hourly_rate": 3000.0, "rating": 4.7, "review_count": 60, "license_number": "MDCN-004", "years_experience": 5
         }
     },
     {
         "email": "elliot@mediq.com", "first_name": "Dr. Elliot", "last_name": "Reid", "dob": "1980-01-01", "location": "Lagos, Nigeria", "role": "doctor",
         "doctor_profile": {
             "full_name": "Dr. Elliot Reid", "specialty": "Endocrinologist", "bio": "Private practice specialist.",
-            "image_url": "https://i.pravatar.cc/150?u=elliot", "hourly_rate": 3500.0, "rating": 4.6, "review_count": 55, "license_number": "MDCN-005", "years_experience": 6
+            "image_url": None, "hourly_rate": 3500.0, "rating": 4.6, "review_count": 55, "license_number": "MDCN-005", "years_experience": 6
         }
     },
     {

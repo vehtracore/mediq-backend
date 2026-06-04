@@ -110,7 +110,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           state.matchedLocation == '/' ||
           state.matchedLocation == '/onboarding' ||
           state.matchedLocation == '/safety_disclaimer' ||
-          state.matchedLocation == '/update-password';
+          state.matchedLocation == '/update-password' ||
+          state.matchedLocation == '/doctor_register';
 
       // Not logged in and trying to access a protected route → kick to /auth
       if (!isLoggedIn && !isOnAuthPage) return '/auth';

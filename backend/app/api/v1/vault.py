@@ -285,21 +285,21 @@ def export_vault_records(
         # ── Header bar ──────────────────────────────────────────────────────
         pdf.set_fill_color(30, 90, 180)
         pdf.rect(0, 0, 210, 18, style="F")
-        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_font("Helvetica", "B", 12)
         pdf.set_text_color(255, 255, 255)
         pdf.set_xy(10, 4)
-        pdf.cell(0, 10, "VehtraCore - Health Vault Export", ln=False)
+        pdf.cell(0, 10, "MDQ+ Health Vault Export", ln=False)
 
         # ── Record title ─────────────────────────────────────────────────────
         pdf.set_xy(10, 25)
-        pdf.set_font("Helvetica", "B", 14)
+        pdf.set_font("Helvetica", "B", 16)
         pdf.set_text_color(20, 20, 60)
         pdf.multi_cell(0, 8, title)
 
         # ── Date ─────────────────────────────────────────────────────────────
         pdf.set_font("Helvetica", "I", 10)
         pdf.set_text_color(100, 100, 120)
-        pdf.cell(0, 6, date_str, ln=True)
+        pdf.cell(0, 6, date_str, align="R", ln=True)
 
         # ── Divider ──────────────────────────────────────────────────────────
         pdf.set_draw_color(200, 200, 220)
@@ -311,7 +311,15 @@ def export_vault_records(
         pdf.set_font("Helvetica", "", 11)
         pdf.set_text_color(30, 30, 50)
         safe_body = body.encode("latin-1", "replace").decode("latin-1")
-        pdf.multi_cell(0, 6, safe_body)
+        
+        # Clean the Markdown (The Asterisk Bug)
+        clean_body = safe_body.replace("**", "").replace("*", "")
+        
+        # Split into sections to add vertical spacing
+        for section in clean_body.split("\n\n"):
+            if section.strip():
+                pdf.multi_cell(0, 8, section.strip())
+                pdf.ln(4)
 
         # ── Footer ───────────────────────────────────────────────────────────
         pdf.set_y(-15)

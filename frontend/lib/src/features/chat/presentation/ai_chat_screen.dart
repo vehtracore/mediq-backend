@@ -36,7 +36,6 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   bool _isListening = false;
   bool _speechEnabled = false;
   String _preListenText = ''; // Snapshot of text before mic tap
-  bool _isManuallyStopped = true;
 
   // --- TTS STATE ---
   // (Per-message speak — no global auto-play toggle)
@@ -65,33 +64,12 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         onStatus: (status) {
           debugPrint('🎤 Status: $status');
           if (status == 'notListening' || status == 'done') {
-            if (!_isManuallyStopped) {
-              _speech.listen(
-                pauseFor: const Duration(hours: 1),
-                onResult: (result) {
-                  final recognized = result.recognizedWords;
-                  final appended = _preListenText.isEmpty
-                      ? recognized
-                      : '$_preListenText $recognized';
-                  if (mounted) {
-                    setState(() {
-                      _messageController.text = appended;
-                      _messageController.selection = TextSelection.fromPosition(
-                        TextPosition(offset: _messageController.text.length),
-                      );
-                    });
-                  }
-                },
-              );
-            } else {
-              if (mounted) setState(() => _isListening = false);
-            }
+            if (mounted) setState(() => _isListening = false);
           }
         },
         onError: (e) {
           debugPrint('❌ Voice Error: ${e.errorMsg}');
           if (mounted) {
-            _isManuallyStopped = true;
             setState(() => _isListening = false);
           }
         },
@@ -122,16 +100,13 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     }
 
     if (_isListening) {
-      _isManuallyStopped = true;
       _speech.stop();
       setState(() => _isListening = false);
     } else {
       // Snapshot the current text so we can append to it, not overwrite it
-      _isManuallyStopped = false;
       _preListenText = _messageController.text.trim();
       setState(() => _isListening = true);
       _speech.listen(
-        pauseFor: const Duration(hours: 1),
         onResult: (result) {
           final recognized = result.recognizedWords;
           final appended = _preListenText.isEmpty

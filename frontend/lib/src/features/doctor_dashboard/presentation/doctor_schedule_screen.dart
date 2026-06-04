@@ -506,78 +506,35 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                   // OR if now is within 10 minutes of (or past) the start time.
                   return Column(
                     children: [
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            IconButton.filledTonal(
-                                onPressed: isUnlocked
-                                    ? () => context.push('/chat', extra: {
-                                          'title': widget.appointment.patientName,
-                                          'isAi': false,
-                                          'appointmentId': widget.appointment.id,
-                                          'isCompleted': widget.appointment.status == 'completed'
-                                        })
-                                    : null,
-                                icon: Icon(
-                                  isUnlocked
-                                      ? Icons.chat_bubble_outline
-                                      : Icons.lock_outline,
-                                  size: 18,
-                                ),
-                                style: IconButton.styleFrom(
-                                    backgroundColor: isUnlocked
-                                        ? theme.colorScheme.primary.withOpacity(0.15)
-                                        : Colors.grey.withOpacity(0.12),
-                                    foregroundColor: isUnlocked
-                                        ? theme.colorScheme.primary
-                                        : Colors.grey,
-                                )),
-                            const SizedBox(width: 8),
-                            IconButton.filledTonal(
-                                onPressed: isUnlocked
-                                    ? () => context.push('/video_call?type=voice',
-                                        extra: widget.appointment.id)
-                                    : null,
-                                icon: Icon(
-                                  isUnlocked
-                                      ? Icons.phone
-                                      : Icons.lock_outline,
-                                  size: 18,
-                                ),
-                                style: IconButton.styleFrom(
-                                    backgroundColor: isUnlocked
-                                        ? theme.colorScheme.primary.withOpacity(0.15)
-                                        : Colors.grey.withOpacity(0.12),
-                                    foregroundColor: isUnlocked
-                                        ? theme.colorScheme.primary
-                                        : Colors.grey,
-                                )),
-                            const SizedBox(width: 8),
-                            FilledButton.tonalIcon(
-                                onPressed: isUnlocked
-                                    ? () => context.push(
-                                        '/video_call', extra: widget.appointment.id)
-                                    : null,
-                                icon: Icon(
-                                  isUnlocked
-                                      ? Icons.videocam
-                                      : Icons.lock_outline,
-                                  size: 16,
-                                ),
-                                label: const Text("Video"),
-                                style: FilledButton.styleFrom(
-                                    backgroundColor: isUnlocked
-                                        ? theme.colorScheme.primary.withOpacity(0.15)
-                                        : Colors.grey.withOpacity(0.12),
-                                    foregroundColor: isUnlocked
-                                        ? theme.colorScheme.primary
-                                        : Colors.grey,
-                                    elevation: 0,
-                                )),
-                          ],
-                        ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          FilledButton.icon(
+                              onPressed: isUnlocked
+                                  ? () => context.push('/chat', extra: {
+                                        'title': widget.appointment.patientName,
+                                        'isAi': false,
+                                        'appointmentId': widget.appointment.id,
+                                        'isCompleted': widget.appointment.status == 'completed'
+                                      })
+                                  : null,
+                              icon: Icon(
+                                isUnlocked
+                                    ? Icons.meeting_room
+                                    : Icons.lock_outline,
+                                size: 18,
+                              ),
+                              label: const Text("Join Consultation Room"),
+                              style: FilledButton.styleFrom(
+                                  backgroundColor: isUnlocked
+                                      ? theme.colorScheme.primary
+                                      : Colors.grey.withOpacity(0.12),
+                                  foregroundColor: isUnlocked
+                                      ? theme.colorScheme.onPrimary
+                                      : Colors.grey,
+                                  elevation: 0,
+                              )),
+                        ],
                       ),
                       if (!isUnlocked) ...[
                         const SizedBox(height: 4),
