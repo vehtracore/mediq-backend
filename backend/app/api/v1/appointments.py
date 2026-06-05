@@ -589,6 +589,13 @@ def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_us
     if not appt: raise HTTPException(404)
     appt.status = "completed"
 
+    # ── Compile referral data if the doctor issued a hospital referral ───
+    referrals = (
+        f"Referred to: {appt.referred_hospital}\nNote: {appt.referral_note}"
+        if appt.referred_hospital
+        else None
+    )
+
     # ── Auto-create a ConsultationRecord in the Health Vault ─────────────
     # patient_id is sourced from the appointment row (NOT current_user,
     # which is the doctor) to guarantee correct ownership attribution.
@@ -603,25 +610,26 @@ def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_us
             patient_id=appt.patient_id,
             doctor_id=doctor.id,
             clinical_notes=appt.notes,
-            # Propagate prescription written during the consultation
             prescriptions=appt.prescription,
-            referrals=None,
+            referrals=referrals,
             created_at=datetime.now(timezone.utc),
         )
         db.add(vault_record)
         logger.info(
-            "[Vault] ConsultationRecord created — appt_id=%s patient_id=%s doctor_id=%s prescription=%s",
+            "[Vault] ConsultationRecord created — appt_id=%s patient_id=%s doctor_id=%s prescription=%s referral=%s",
             appt.id, appt.patient_id, doctor.id,
-            bool(appt.prescription),
+            bool(appt.prescription), bool(referrals),
         )
     else:
-        # Update existing record's prescription if it was written after completion
+        # Sync prescription and referral data into the existing vault record
         if appt.prescription:
             existing.prescriptions = appt.prescription
-            logger.info(
-                "[Vault] ConsultationRecord prescription updated — appt_id=%s",
-                appt.id,
-            )
+        if referrals:
+            existing.referrals = referrals
+        logger.info(
+            "[Vault] ConsultationRecord updated — appt_id=%s prescription=%s referral=%s",
+            appt.id, bool(appt.prescription), bool(referrals),
+        )
 
     db.commit()
     db.refresh(appt)
@@ -715,8 +723,9 @@ def refer_patient_to_hospital(
         f"Clinical Note: {referral.note}"
     )
 
-    # 5. Persist to appointment row
-    appt.status = "referred"
+    # 5. Persist to appointment row — status intentionally NOT changed;
+    #    the appointment remains "confirmed" until the doctor explicitly
+    #    completes the session via the /complete endpoint.
     appt.referred_hospital = referral.hospital_name
     appt.referral_note = referral_note
     db.commit()
