@@ -115,4 +115,16 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
       rethrow;
     }
   }
+
+  Future<void> cancelSubscription() async {
+    state = const AsyncLoading();
+    try {
+      await _authRepository.cancelSubscription();
+      _ref.invalidate(userProvider);
+      state = const AsyncData(null);
+    } catch (e, stack) {
+      state = AsyncError(e, stack);
+      rethrow;
+    }
+  }
 }

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mediq_app/src/features/auth/presentation/auth_controller.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
@@ -86,6 +87,84 @@ class ProfileScreen extends ConsumerWidget {
                     text: "Settings",
                     onTap: () => context.push('/settings')),
                 const Divider(height: 32),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    "Support",
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.grey),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _buildProfileItem(context,
+                    icon: Icons.help_outline,
+                    text: "FAQ",
+                    onTap: () async {
+                      final Uri url = Uri.parse('https://mdqplus.com/faq');
+                      if (await canLaunchUrl(url)) {
+                        await launchUrl(url);
+                      }
+                    }),
+                _buildProfileItem(context,
+                    icon: Icons.support_agent,
+                    text: "Contact Support",
+                    onTap: () async {
+                      final Uri url = Uri.parse('https://mdqplus.com/support');
+                      if (await canLaunchUrl(url)) {
+                        await launchUrl(url);
+                      }
+                    }),
+                const Divider(height: 32),
+                if (user != null && user.plan != 'free') ...[
+                  _buildProfileItem(context,
+                      icon: Icons.cancel_outlined,
+                      text: "Cancel Subscription",
+                      textColor: Colors.red,
+                      iconColor: Colors.red, onTap: () async {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text("Cancel Subscription"),
+                        content: const Text(
+                            "Are you sure you want to cancel your subscription? You will lose access to premium features immediately."),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(context).pop(false),
+                            child: const Text("No"),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.of(context).pop(true),
+                            child: const Text("Yes", style: TextStyle(color: Colors.red)),
+                          ),
+                        ],
+                      ),
+                    );
+
+                    if (confirm == true) {
+                      showDialog(
+                        context: context,
+                        barrierDismissible: false,
+                        builder: (_) => const Center(child: CircularProgressIndicator()),
+                      );
+                      try {
+                        await ref.read(authControllerProvider.notifier).cancelSubscription();
+                        if (context.mounted) {
+                          Navigator.of(context).pop(); // dismiss loading
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text("Subscription cancelled successfully"), backgroundColor: Colors.green),
+                          );
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          Navigator.of(context).pop(); // dismiss loading
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
+                          );
+                        }
+                      }
+                    }
+                  }),
+                  const SizedBox(height: 12),
+                ],
                 _buildProfileItem(context,
                     icon: Icons.logout,
                     text: "Logout",

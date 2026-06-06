@@ -80,6 +80,12 @@ class User(Base):
     last_emergency_trigger = Column(DateTime(timezone=True), nullable=True)
     emergency_sms_count = Column(Integer, default=0, nullable=False)
 
+    # --- 💳 PAYSTACK BILLING ---
+    # Populated by the webhook when a recurring subscription is created.
+    # Required to call Paystack POST /subscription/disable for cancellation.
+    paystack_subscription_code = Column(String, nullable=True)  # e.g. "SUB_xxxxxxxxxxxx"
+    paystack_email_token = Column(String, nullable=True)         # e.g. "d7gofp6yppn3qz7"
+
     # --- 📲 PUSH NOTIFICATIONS ---
     fcm_token = Column(String, nullable=True)
 

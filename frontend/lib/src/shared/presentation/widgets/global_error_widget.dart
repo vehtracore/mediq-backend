@@ -3,8 +3,9 @@ import 'package:flutter/material.dart';
 
 class GlobalErrorWidget extends StatelessWidget {
   final FlutterErrorDetails details;
+  final VoidCallback? onRetry;
 
-  const GlobalErrorWidget({super.key, required this.details});
+  const GlobalErrorWidget({super.key, required this.details, this.onRetry});
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +50,14 @@ class GlobalErrorWidget extends StatelessWidget {
                 icon: const Icon(Icons.arrow_back),
                 label: const Text("Go Back"),
               ),
+              if (onRetry != null) ...[
+                const SizedBox(height: 16),
+                ElevatedButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text("Try Again"),
+                ),
+              ],
               if (kDebugMode) ...[
                 const SizedBox(height: 32),
                 const Divider(),

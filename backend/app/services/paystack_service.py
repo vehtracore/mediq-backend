@@ -242,6 +242,84 @@ class PaystackService:
         )
         return account_name
 
+    async def disable_subscription(
+        self,
+        subscription_code: str,
+        email_token: str,
+    ) -> dict:
+        """
+        Disable (cancel) a Paystack recurring subscription.
+
+        Paystack requires both the ``subscription_code`` and the
+        ``email_token`` as a two-factor guard before it will deactivate a
+        subscription. Both values are captured from the
+        ``subscription.create`` webhook event and stored on the User row.
+
+        Args:
+            subscription_code: The Paystack subscription identifier,
+                               e.g. ``"SUB_vsyqdmlzble3uii"``.
+            email_token:       The short-lived token sent alongside the
+                               subscription code, e.g. ``"d7gofp6yppn3qz7"``.
+
+        Returns:
+            The parsed Paystack response body as a dict.
+
+        Raises:
+            HTTPException(400): Paystack rejected the cancellation request.
+            HTTPException(503): Network-level failure reaching Paystack.
+        """
+        endpoint = f"{PAYSTACK_BASE_URL}/subscription/disable"
+        body = {
+            "code": subscription_code,
+            "token": email_token,
+        }
+
+        logger.info(
+            "[PAYSTACK] Disabling subscription | code='%s'",
+            subscription_code,
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(
+                    endpoint, json=body, headers=self._headers
+                )
+        except httpx.RequestError as exc:
+            logger.error(
+                "[PAYSTACK] ❌ Network error disabling subscription: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Could not reach Paystack to cancel your subscription. "
+                    "Please try again later."
+                ),
+            ) from exc
+
+        try:
+            resp_json: dict = response.json()
+        except Exception:
+            resp_json = {}
+
+        paystack_status: bool = resp_json.get("status", False)
+        paystack_message: str = resp_json.get("message", "Unknown error from Paystack")
+
+        if not response.is_success or not paystack_status:
+            logger.error(
+                "[PAYSTACK] ❌ Subscription cancellation failed | HTTP %s | message='%s' | code='%s'",
+                response.status_code,
+                paystack_message,
+                subscription_code,
+            )
+            raise HTTPException(status_code=400, detail=paystack_message)
+
+        logger.info(
+            "[PAYSTACK] ✅ Subscription disabled — code='%s'",
+            subscription_code,
+        )
+        return resp_json
 
 
 # ── Module-level singleton ─────────────────────────────────────────────────────

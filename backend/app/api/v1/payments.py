@@ -49,6 +49,7 @@ from app.models.failed_webhook import FailedWebhook
 from app.models.user import User
 from app.models.doctor import Doctor
 from app.services.email_service import send_transactional_email
+from app.services.paystack_service import paystack_service  # noqa: F401 (used in future endpoints)
 
 logger = logging.getLogger(__name__)
 
@@ -513,6 +514,23 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
     user.plan = "premium"
     user.subscription_expiry = datetime.utcnow() + timedelta(days=30)
     user.burst_chat_count = 0
+
+    # ── Capture subscription codes if Paystack includes them ───────────────────
+    # charge.success events sometimes embed a nested `subscription` object.
+    # Extract and persist both values so the cancel endpoint can use them.
+    sub_obj: dict = data.get("subscription") or {}
+    sub_code: str | None = sub_obj.get("subscription_code") or data.get("subscription_code")
+    email_token: str | None = sub_obj.get("email_token") or data.get("email_token")
+    if sub_code:
+        user.paystack_subscription_code = sub_code
+        logger.info(
+            "[WEBHOOK] charge.success — captured subscription_code='%s' for user_id=%s",
+            sub_code,
+            user.id,
+        )
+    if email_token:
+        user.paystack_email_token = email_token
+
     db.commit()
     db.refresh(user)
 
@@ -526,6 +544,67 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
         "user_id": user.id,
         "plan": "premium",
         "expiry": str(user.subscription_expiry),
+    }
+
+
+def _handle_subscription_create(data: dict, db: Session) -> dict:
+    """
+    Handle subscription.create events from Paystack.
+
+    This is the primary source for ``subscription_code`` and ``email_token``.
+    Paystack fires this event immediately after a recurring subscription is
+    activated (either via a plan-based charge.success or an explicit creation).
+
+    Payload path: data.subscription_code, data.email_token, data.customer.metadata.user_id
+
+    Raises ValueError when required fields are missing or the user is not found.
+    """
+    subscription_code: str | None = data.get("subscription_code")
+    email_token: str | None = data.get("email_token")
+
+    if not subscription_code:
+        raise ValueError(
+            "subscription.create: data.subscription_code is absent."
+        )
+
+    # Resolve user_id — Paystack stores it in the customer's metadata
+    customer: dict = data.get("customer") or {}
+    customer_meta: dict = customer.get("metadata") or {}
+    user_id_raw = customer_meta.get("user_id")
+
+    if not user_id_raw:
+        raise ValueError(
+            "subscription.create: customer.metadata.user_id is absent — "
+            "cannot persist subscription codes."
+        )
+
+    user: User | None = db.query(User).filter(User.id == int(user_id_raw)).first()
+    if not user:
+        raise ValueError(
+            f"subscription.create: user id={user_id_raw} not found."
+        )
+
+    user.paystack_subscription_code = subscription_code
+    if email_token:
+        user.paystack_email_token = email_token
+
+    # Also ensure the plan is upgraded in case charge.success was missed
+    if user.plan not in ("premium", "family"):
+        user.plan = "premium"
+        user.subscription_expiry = datetime.utcnow() + timedelta(days=30)
+
+    db.commit()
+    db.refresh(user)
+
+    logger.info(
+        "[WEBHOOK] subscription.create — persisted sub_code='%s' for user_id=%s",
+        subscription_code,
+        user.id,
+    )
+    return {
+        "action": "subscription_codes_persisted",
+        "user_id": user.id,
+        "subscription_code": subscription_code,
     }
 
 
@@ -654,6 +733,8 @@ async def paystack_webhook(
     try:
         if raw_event == "charge.success" and (data.get("metadata") or {}).get("user_id"):
             result = _handle_charge_success(data=data, db=db)
+        elif raw_event == "subscription.create":
+            result = _handle_subscription_create(data=data, db=db)
         elif raw_event == "transfer.success":
             result = _handle_transfer_success(data=data, db=db)
         else:

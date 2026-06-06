@@ -236,6 +236,20 @@ class AuthRepository {
     }
   }
 
+  Future<void> cancelSubscription() async {
+    try {
+      final response = await _dio.post('/api/v1/subscription/cancel-subscription');
+      if (response.statusCode != null && response.statusCode! >= 400) {
+        throw Exception("Failed to cancel subscription.");
+      }
+    } on DioException catch (e) {
+      final msg = e.response?.data['detail'] ?? "Cancel subscription failed. Please try again.";
+      throw Exception(msg);
+    } catch (e) {
+      throw Exception("Cancel subscription failed: $e");
+    }
+  }
+
   // --- FAMILY PLAN ---
 
   Future<String> generateFamilyInvite() async {

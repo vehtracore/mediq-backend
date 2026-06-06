@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/media/data/media_repository.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class DoctorRegisterScreen extends ConsumerStatefulWidget {
   const DoctorRegisterScreen({super.key});
@@ -42,6 +43,38 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
     "Oncologist",
     "Diagnostician",
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedData();
+    _fullNameCtrl.addListener(() => _saveData('doc_reg_name', _fullNameCtrl.text));
+    _emailCtrl.addListener(() => _saveData('doc_reg_email', _emailCtrl.text));
+    _licenseNumberCtrl.addListener(() => _saveData('doc_reg_license', _licenseNumberCtrl.text));
+  }
+
+  Future<void> _loadSavedData() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _fullNameCtrl.text = prefs.getString('doc_reg_name') ?? '';
+        _emailCtrl.text = prefs.getString('doc_reg_email') ?? '';
+        _licenseNumberCtrl.text = prefs.getString('doc_reg_license') ?? '';
+      });
+    }
+  }
+
+  Future<void> _saveData(String key, String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(key, value);
+  }
+
+  Future<void> _clearSavedData() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('doc_reg_name');
+    await prefs.remove('doc_reg_email');
+    await prefs.remove('doc_reg_license');
+  }
 
   @override
   void dispose() {
@@ -131,6 +164,8 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
         mdcnLicense: _licenseImage!,
         indemnityCertificate: _indemnityImage!,
       );
+
+      await _clearSavedData();
 
       if (!mounted) return;
 
