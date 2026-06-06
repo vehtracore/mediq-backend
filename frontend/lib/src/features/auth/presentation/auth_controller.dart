@@ -127,4 +127,12 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
       rethrow;
     }
   }
+
+  Future<void> sendSupportMessage({required String subject, required String message}) async {
+    try {
+      await _authRepository.sendSupportMessage(subject: subject, message: message);
+    } catch (e) {
+      rethrow;
+    }
+  }
 }

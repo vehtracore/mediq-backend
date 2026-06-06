@@ -107,9 +107,10 @@ async def cancel_subscription(
         email_token=email_token,
     )
 
-    # ── 3. Revert user plan and clear billing codes ───────────────────────────
-    current_user.plan = "free"
-    current_user.subscription_expiry = None
+    # ── 3. Clear billing codes only — do NOT touch plan or subscription_expiry ──
+    # The user retains premium access until their paid period expires naturally.
+    # Clearing the codes prevents Paystack from auto-renewing on the next cycle
+    # and prevents this endpoint from being double-called.
     current_user.paystack_subscription_code = None
     current_user.paystack_email_token = None
 
@@ -117,8 +118,10 @@ async def cancel_subscription(
     db.refresh(current_user)
 
     logger.info(
-        "[SUBSCRIPTION] ✅ Subscription cancelled — user_id=%s reverted to free plan",
+        "[SUBSCRIPTION] ✅ Subscription disabled — user_id=%s billing codes cleared. "
+        "Premium access retained until expiry=%s",
         current_user.id,
+        current_user.subscription_expiry,
     )
 
     return current_user

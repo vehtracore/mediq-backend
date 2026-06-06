@@ -250,6 +250,22 @@ class AuthRepository {
     }
   }
 
+  // --- SUPPORT ---
+
+  Future<void> sendSupportMessage({required String subject, required String message}) async {
+    try {
+      await _dio.post('/api/v1/support/contact', data: {
+        'subject': subject,
+        'message': message,
+      });
+    } on DioException catch (e) {
+      final msg = e.response?.data['detail'] ?? "Failed to send support message.";
+      throw Exception(msg);
+    } catch (e) {
+      throw Exception("Support message failed: $e");
+    }
+  }
+
   // --- FAMILY PLAN ---
 
   Future<String> generateFamilyInvite() async {

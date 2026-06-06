@@ -33,6 +33,7 @@ from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscr
 from app.api.v1 import emergency
 from app.api.v1 import payments
 from app.api.v1 import family
+from app.api.v1 import support
 from app.api.v1.auth import scrub_expired_accounts
 from app.services.watchdog_service import sweep_pending_transactions
 from app.core.scheduler import cleanup_expired_slots, sweep_stale_appointments
@@ -317,6 +318,7 @@ app.include_router(payments.router, prefix="/api/v1/payments", tags=["Payments"]
 app.include_router(family.router, prefix="/api/v1/family", tags=["Family Plan"])
 app.include_router(vault.router, prefix="/api/v1/vault", tags=["Vault"])
 app.include_router(voice.router, prefix="/api/v1/voice", tags=["Voice"])
+app.include_router(support.router, prefix="/api/v1/support", tags=["Support"])
 
 # --- STATIC FILES ---
 static_dir = "static"
