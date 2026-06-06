@@ -54,6 +54,8 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <meta-data android:name="com.posthog.posthog.API_KEY" android:value="phc_y6zEYKPQNQKpo2EJXHQhMCgh6cHPerGpMxg5DzQtWj37" />
+        <meta-data android:name="com.posthog.posthog.POSTHOG_HOST" android:value="https://eu.i.posthog.com" />
     </application>
     <queries>
         <!-- Required by url_launcher to open the native phone dialer (Android 11+) -->

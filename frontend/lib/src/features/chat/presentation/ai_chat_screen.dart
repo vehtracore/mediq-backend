@@ -33,9 +33,10 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   // --- VOICE STATE ---
   late stt.SpeechToText _speech;
-  bool _isListening = false;
+  bool _isListening = false;        // Visual UI state (drives the pulsing mic)
+  bool _isUserIntendingToListen = false; // Master toggle — survives OS kills
   bool _speechEnabled = false;
-  String _preListenText = ''; // Snapshot of text before mic tap
+  String _preListenText = '';        // Accumulated text snapshot before each listen cycle
 
   // --- TTS STATE ---
   // (Per-message speak — no global auto-play toggle)
@@ -50,7 +51,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     _speech = stt.SpeechToText();
   }
 
-  /// Lazy speech initialization
+  /// Lazy speech initialization with aggressive restart callbacks
   Future<bool> _ensureSpeechInitialized() async {
     if (_speechEnabled) return true;
 
@@ -64,13 +65,36 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         onStatus: (status) {
           debugPrint('🎤 Status: $status');
           if (status == 'notListening' || status == 'done') {
-            if (mounted) setState(() => _isListening = false);
+            if (_isUserIntendingToListen && mounted) {
+              // OS killed the listener against the user's will.
+              // Snapshot whatever we have so far, then restart.
+              _preListenText = _messageController.text.trim();
+              debugPrint('🔄 Auto-restarting listener (OS timeout). Snapshot: "${_preListenText.length} chars"');
+              Future.delayed(const Duration(milliseconds: 50), () {
+                if (_isUserIntendingToListen && mounted) {
+                  _startListeningSession();
+                }
+              });
+            } else {
+              if (mounted) setState(() => _isListening = false);
+            }
           }
         },
         onError: (e) {
           debugPrint('❌ Voice Error: ${e.errorMsg}');
-          if (mounted) {
-            setState(() => _isListening = false);
+          if (_isUserIntendingToListen && mounted) {
+            // Error (e.g. error_speech_timeout) — restart if user still wants to talk
+            _preListenText = _messageController.text.trim();
+            debugPrint('🔄 Auto-restarting listener after error: ${e.errorMsg}');
+            Future.delayed(const Duration(milliseconds: 50), () {
+              if (_isUserIntendingToListen && mounted) {
+                _startListeningSession();
+              }
+            });
+          } else {
+            if (mounted) {
+              setState(() => _isListening = false);
+            }
           }
         },
         debugLogging: true,
@@ -86,6 +110,26 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     }
   }
 
+  /// Internal: starts a single listen() session that appends to _preListenText.
+  void _startListeningSession() {
+    _speech.listen(
+      onResult: (result) {
+        final recognized = result.recognizedWords;
+        final appended = _preListenText.isEmpty
+            ? recognized
+            : '$_preListenText $recognized';
+        if (mounted) {
+          setState(() {
+            _messageController.text = appended;
+            _messageController.selection = TextSelection.fromPosition(
+              TextPosition(offset: _messageController.text.length),
+            );
+          });
+        }
+      },
+    );
+  }
+
   void _toggleListening() async {
     final isAvailable = await _ensureSpeechInitialized();
 
@@ -99,33 +143,24 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
       return;
     }
 
-    if (_isListening) {
+    if (_isUserIntendingToListen) {
+      // ── USER TAPS STOP ──
+      _isUserIntendingToListen = false;
       _speech.stop();
       setState(() => _isListening = false);
     } else {
-      // Snapshot the current text so we can append to it, not overwrite it
+      // ── USER TAPS START ──
       _preListenText = _messageController.text.trim();
+      _isUserIntendingToListen = true;
       setState(() => _isListening = true);
-      _speech.listen(
-        onResult: (result) {
-          final recognized = result.recognizedWords;
-          final appended = _preListenText.isEmpty
-              ? recognized
-              : '$_preListenText $recognized';
-          setState(() {
-            _messageController.text = appended;
-            _messageController.selection = TextSelection.fromPosition(
-              TextPosition(offset: _messageController.text.length),
-            );
-          });
-        },
-      );
+      _startListeningSession();
     }
   }
 
 
   @override
   void dispose() {
+    _isUserIntendingToListen = false; // Kill the restart loop before disposing
     _messageController.dispose();
     _scrollController.dispose();
     _speech.stop();
@@ -405,6 +440,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                         msg['message'],
                         isMe,
                         imageUrl: msg['image'],
+                        isSending: msg['isSending'] == true,
                         theme: theme,
                         isDark: isDark,
                       );
@@ -551,6 +587,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   Widget _buildMessageBubble(String text, bool isMe,
       {String? imageUrl,
+      bool isSending = false,
       required ThemeData theme,
       required bool isDark}) {
 
@@ -634,6 +671,20 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                   isMe: isMe,
                   isDark: isDark,
                 ),
+                if (isMe)
+                  Align(
+                    alignment: Alignment.bottomRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 4.0),
+                      child: isSending
+                          ? const SizedBox(
+                              width: 12,
+                              height: 12,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
+                            )
+                          : const Icon(Icons.check, size: 14, color: Colors.white70),
+                    ),
+                  ),
               ],
             ),
           ),

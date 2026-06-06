@@ -299,7 +299,10 @@ class QuickActionGrid extends ConsumerWidget {
     showModalBottomSheet(
         context: context,
         backgroundColor: Colors.transparent,
-        builder: (ctx) => Container(
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, setModalState) {
+              bool isLoading = false;
+              return Container(
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
                 color: theme.cardTheme.color, // ✅ Dynamic Sheet
@@ -307,19 +310,22 @@ class QuickActionGrid extends ConsumerWidget {
                     const BorderRadius.vertical(top: Radius.circular(24))),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               ListTile(
-                  title: Text("See a GP Now",
+                  title: isLoading 
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : Text("See a GP Now",
                       style: theme.textTheme.titleMedium
                           ?.copyWith(fontWeight: FontWeight.bold)),
                   subtitle: Text(priceText,
                       style: theme.textTheme.bodyMedium),
                   leading: const Icon(Icons.flash_on, color: Colors.orange),
-                  onTap: () async {
-                    Navigator.pop(ctx);
+                  onTap: isLoading ? null : () async {
+                    setModalState(() => isLoading = true);
                     try {
                       final appt = await ref
                           .read(appointmentRepositoryProvider)
                           .bookGeneralConsultation("I need a doctor now.");
                       if (context.mounted) {
+                        Navigator.pop(ctx);
                         context.push('/payment', extra: {
                           'transactionType': 'gp_consult',
                           'baseAmount': priceVal,
@@ -331,6 +337,7 @@ class QuickActionGrid extends ConsumerWidget {
                       }
                     } catch (e) {
                       if (context.mounted) {
+                        setModalState(() => isLoading = false);
                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                             content: Text("Error: $e"),
                             backgroundColor: Colors.red));
@@ -347,7 +354,8 @@ class QuickActionGrid extends ConsumerWidget {
                     Navigator.pop(ctx);
                     context.push('/find_doctor');
                   })
-            ])));
+            ]));
+        }));
   }
 
   @override

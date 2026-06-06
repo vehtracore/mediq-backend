@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -212,8 +214,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
         if (mounted) {
           setState(() {
-            // New message comes in -> Goes to index 0 (bottom)
-            _messages.insert(0, newMessage);
+            final msgIndex = _messages.indexWhere((m) => m['isSending'] == true && m['content'] == newMessage['content']);
+            if (msgIndex != -1) {
+              _messages[msgIndex] = newMessage;
+            } else {
+              _messages.insert(0, newMessage);
+            }
           });
         }
       }, onError: (error) => print("WS Error: $error"));
@@ -222,10 +228,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  void _sendMessage({String? content}) {
+  void _sendMessage({String? content, String? tempId}) {
     final textToSend = content ?? _msgController.text.trim();
     if (textToSend.isEmpty) return;
     if (_channel == null) return;
+
+    if (tempId == null) {
+      tempId = "temp_${DateTime.now().millisecondsSinceEpoch}";
+      final tempMessage = {
+        'id': tempId,
+        'sender_id': _myUserId,
+        'content': textToSend,
+        'isSending': true,
+      };
+      setState(() {
+        _messages.insert(0, tempMessage);
+      });
+    }
 
     try {
       _channel!.sink.add(textToSend);
@@ -239,9 +258,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _handleImageUpload() async {
-    final url = await ref.read(imageUploadServiceProvider).pickAndUploadImage();
+    final picker = ImagePicker();
+    final XFile? image = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 90,
+      maxWidth: 1920,
+      maxHeight: 1920,
+    );
+    if (image == null) return;
+
+    final tempId = "temp_${DateTime.now().millisecondsSinceEpoch}";
+    final tempMessage = {
+      'id': tempId,
+      'sender_id': _myUserId,
+      'content': "FILE:${image.path}",
+      'isSending': true,
+    };
+    setState(() {
+      _messages.insert(0, tempMessage);
+    });
+
+    final url = await ref.read(imageUploadServiceProvider).uploadFile(image);
     if (url != null) {
-      _sendMessage(content: url);
+      setState(() {
+        final idx = _messages.indexWhere((m) => m['id'] == tempId);
+        if (idx != -1) {
+          _messages[idx]['content'] = url;
+        }
+      });
+      _sendMessage(content: url, tempId: tempId);
+    } else {
+      setState(() {
+        _messages.removeWhere((m) => m['id'] == tempId);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Image upload failed")));
+      }
     }
   }
 
@@ -265,107 +317,100 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(widget.title, style: theme.textTheme.titleLarge),
-            if (_mdcnNumber != null && _mdcnNumber!.isNotEmpty)
-              Text("MDCN: $_mdcnNumber", style: const TextStyle(fontSize: 12, color: Colors.blue, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: _isPeerOnline ? Colors.greenAccent : Colors.grey,
-                    shape: BoxShape.circle,
+      body: Column(
+        children: [
+          SafeArea(
+            bottom: false,
+            child: Container(
+              margin: const EdgeInsets.all(12),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white.withOpacity(0.05) : Colors.grey[200],
+                borderRadius: BorderRadius.circular(30),
+              ),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back),
+                    onPressed: () => context.pop(),
                   ),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  _isPeerOnline ? 'Online' : 'Offline',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: _isPeerOnline ? Colors.greenAccent : Colors.grey,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.primary.withOpacity(0.1),
-              shape: BoxShape.circle,
-            ),
-            child: IconButton(
-              icon: Icon(Icons.phone_outlined, color: theme.colorScheme.primary, size: 20),
-              onPressed: () {
-                if (_channel != null && _myUserId != null) {
-                  _channel!.sink.add(jsonEncode({
-                    "type": "call_signal",
-                    "media": "audio",
-                    "status": "initiated",
-                    "user_id": _myUserId
-                  }));
-                }
-                context.push('/video_call?type=voice', extra: widget.appointmentId);
-              },
-            ),
-          ),
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.primary.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(20),
-              onTap: () {
-                if (_channel != null && _myUserId != null) {
-                  _channel!.sink.add(jsonEncode({
-                    "type": "call_signal",
-                    "media": "video",
-                    "status": "initiated",
-                    "user_id": _myUserId
-                  }));
-                }
-                context.push('/video_call', extra: widget.appointmentId);
-              },
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Row(
-                  children: [
-                    Icon(Icons.videocam_outlined, color: theme.colorScheme.primary, size: 20),
-                    const SizedBox(width: 4),
-                    Text(
-                      "Video",
-                      style: TextStyle(
-                        color: theme.colorScheme.primary,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(widget.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      if (_mdcnNumber != null && _mdcnNumber!.isNotEmpty)
+                        Text("MDCN: $_mdcnNumber", style: const TextStyle(fontSize: 12, color: Colors.blue, fontWeight: FontWeight.bold)),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: _isPeerOnline ? Colors.greenAccent : Colors.grey,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _isPeerOnline ? 'Online' : 'Offline',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: _isPeerOnline ? Colors.greenAccent : Colors.grey,
+                            ),
+                          ),
+                        ],
                       ),
+                    ],
+                  ),
+                  const Spacer(),
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primary.withOpacity(0.1),
+                      shape: BoxShape.circle,
                     ),
-                  ],
-                ),
+                    child: IconButton(
+                      icon: Icon(Icons.phone_outlined, color: theme.colorScheme.primary, size: 20),
+                      onPressed: () {
+                        if (_channel != null && _myUserId != null) {
+                          _channel!.sink.add(jsonEncode({
+                            "type": "call_signal",
+                            "media": "audio",
+                            "status": "initiated",
+                            "user_id": _myUserId
+                          }));
+                        }
+                        context.push('/video_call?type=voice', extra: widget.appointmentId);
+                      },
+                    ),
+                  ),
+                  Container(
+                    margin: const EdgeInsets.only(left: 4, right: 8),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primary.withOpacity(0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: IconButton(
+                      icon: Icon(Icons.videocam_outlined, color: theme.colorScheme.primary, size: 20),
+                      onPressed: () {
+                        if (_channel != null && _myUserId != null) {
+                          _channel!.sink.add(jsonEncode({
+                            "type": "call_signal",
+                            "media": "video",
+                            "status": "initiated",
+                            "user_id": _myUserId
+                          }));
+                        }
+                        context.push('/video_call', extra: widget.appointmentId);
+                      },
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-        ],
-        backgroundColor: theme.appBarTheme.backgroundColor,
-        foregroundColor: theme.appBarTheme.foregroundColor,
-        elevation: 2,
-        shadowColor: Colors.black.withOpacity(0.1),
-        surfaceTintColor: Colors.transparent,
-      ),
-      body: Column(
-        children: [
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -388,6 +433,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           int.tryParse(msg['sender_id'].toString());
                       final isMe = senderId == _myUserId;
                       final content = msg['content'] ?? '';
+                      final isSending = msg['isSending'] == true;
                       
                       if (content.toString().contains('"type":"call_signal"')) {
                         return const SizedBox.shrink();
@@ -395,7 +441,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
                       final isImage =
                           content.toString().startsWith('/static/') ||
-                              content.toString().startsWith('http');
+                          content.toString().startsWith('http') ||
+                          content.toString().startsWith('FILE:');
 
                       return Align(
                         alignment:
@@ -416,6 +463,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           child: isImage
                               ? GestureDetector(
                                   onTap: () {
+                                    if (content.toString().startsWith('FILE:')) return;
                                     final fullUrl = content.startsWith('http')
                                         ? content
                                         : "$cleanBaseUrl$content";
@@ -437,29 +485,72 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                       ),
                                     );
                                   },
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(8),
-                                    child: Image.network(
-                                      content.startsWith('http')
-                                          ? content
-                                          : "$cleanBaseUrl$content",
-                                      height: 200,
-                                      width: 200,
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (c, e, s) => const Icon(
-                                          Icons.broken_image,
-                                          color: Colors.white),
-                                    ),
+                                  child: Stack(
+                                    alignment: Alignment.center,
+                                    children: [
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: content.toString().startsWith('FILE:')
+                                            ? Image.file(
+                                                File(content.toString().substring(5)),
+                                                height: 200,
+                                                width: 200,
+                                                fit: BoxFit.cover,
+                                              )
+                                            : Image.network(
+                                                content.startsWith('http')
+                                                    ? content
+                                                    : "$cleanBaseUrl$content",
+                                                height: 200,
+                                                width: 200,
+                                                fit: BoxFit.cover,
+                                                errorBuilder: (c, e, s) => const Icon(
+                                                    Icons.broken_image,
+                                                    color: Colors.white),
+                                              ),
+                                      ),
+                                      if (isSending)
+                                        Positioned.fill(
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: Colors.black45,
+                                              borderRadius: BorderRadius.circular(8),
+                                            ),
+                                            child: const Center(
+                                              child: CircularProgressIndicator(color: Colors.white),
+                                            ),
+                                          ),
+                                        ),
+                                    ],
                                   ),
                                 )
-                              : Text(
-                                  content,
-                                  style: TextStyle(
-                                    color: isMe
-                                        ? Colors.white
-                                        : theme.colorScheme.onSurface,
-                                    fontSize: 16,
-                                  ),
+                              : Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        content,
+                                        style: TextStyle(
+                                          color: isMe
+                                              ? Colors.white
+                                              : theme.colorScheme.onSurface,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                    ),
+                                    if (isMe)
+                                      Padding(
+                                        padding: const EdgeInsets.only(left: 4.0),
+                                        child: isSending
+                                            ? const SizedBox(
+                                                width: 12,
+                                                height: 12,
+                                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
+                                              )
+                                            : const Icon(Icons.check, size: 14, color: Colors.white70),
+                                      ),
+                                  ],
                                 ),
                         ),
                       );

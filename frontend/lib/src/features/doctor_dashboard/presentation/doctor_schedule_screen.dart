@@ -42,19 +42,28 @@ class DoctorScheduleScreen extends ConsumerWidget {
                 error: (err, stack) => Center(child: Text("Error: $err")),
                 data: (appointments) {
                   if (appointments.isEmpty) {
-                    return const Center(
-                      child: Text("No upcoming appointments"),
+                    return RefreshIndicator(
+                      onRefresh: () async => ref.refresh(doctorScheduleProvider.future),
+                      child: ListView(
+                        children: const [
+                          SizedBox(height: 200),
+                          Center(child: Text("No upcoming appointments")),
+                        ],
+                      ),
                     );
                   }
-                  return ListView.separated(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 8,
+                  return RefreshIndicator(
+                    onRefresh: () async => ref.refresh(doctorScheduleProvider.future),
+                    child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 8,
+                      ),
+                      itemCount: appointments.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 16),
+                      itemBuilder: (context, index) =>
+                          _AppointmentCard(appointment: appointments[index]),
                     ),
-                    itemCount: appointments.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 16),
-                    itemBuilder: (context, index) =>
-                        _AppointmentCard(appointment: appointments[index]),
                   );
                 },
               ),

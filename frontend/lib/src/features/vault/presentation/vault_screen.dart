@@ -604,35 +604,49 @@ class ConsultationCard extends StatelessWidget {
             if (record.prescriptions != null &&
                 record.prescriptions!.isNotEmpty) ...[
               const SizedBox(height: 14),
-              _SectionLabel(
-                icon: Icons.medication_rounded,
-                label: 'Prescriptions',
-                iconColor: const Color(0xFF27AE60),
-                isDark: isDark,
+              Text(
+                'Prescriptions & Medications',
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF008080), // Subtle teal
+                  letterSpacing: 0.5,
+                ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               Align(
                 alignment: Alignment.centerLeft,
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: record.prescriptions!
-                      .map((p) => _PrescriptionChip(raw: p, isDark: isDark))
-                      .toList(),
+                child: Text(
+                  record.prescriptions!,
+                  style: GoogleFonts.lato(
+                    fontSize: 14,
+                    color: isDark ? Colors.white70 : Colors.black87,
+                  ),
                 ),
               ),
             ],
             if (record.referrals != null && record.referrals!.isNotEmpty) ...[
               const SizedBox(height: 14),
-              _SectionLabel(
-                icon: Icons.local_hospital_rounded,
-                label: 'Referrals',
-                iconColor: const Color(0xFFE67E22),
-                isDark: isDark,
+              Text(
+                'Referrals',
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? Colors.white54 : Colors.grey[600],
+                  letterSpacing: 0.5,
+                ),
               ),
-              const SizedBox(height: 8),
-              ...record.referrals!
-                  .map((r) => _ReferralTile(raw: r, isDark: isDark)),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  record.referrals!,
+                  style: GoogleFonts.lato(
+                    fontSize: 14,
+                    color: isDark ? Colors.white70 : Colors.black87,
+                  ),
+                ),
+              ),
             ],
           ],
         ),

@@ -14,82 +14,104 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 // import 'package:web/web.dart' as web; // For cleaning URL (Optional)
 
+// 🔭 Observability — Sentry (crash reporting) & PostHog (analytics)
+import 'package:sentry_flutter/sentry_flutter.dart';
+import 'package:posthog_flutter/posthog_flutter.dart'; // PostHog: native config in AndroidManifest/Info.plist
+
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  
-  await dotenv.load(fileName: ".env");
-  await Supabase.initialize(
-    url: dotenv.env['SUPABASE_URL']!,
-    anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
-    // Tells the Supabase SDK to intercept deep links on this scheme and
-    // automatically exchange the token before firing onAuthStateChange.
-    // Must match AndroidManifest.xml android:scheme value.
-    authOptions: const FlutterAuthClientOptions(
-      authFlowType: AuthFlowType.pkce,
-    ),
+  // ---------------------------------------------------------------------------
+  // 🔭 Sentry — wraps the entire app so crashes anywhere are captured.
+  // Set SENTRY_DSN in your .env / CI secrets. Empty string = silent no-op.
+  // ---------------------------------------------------------------------------
+  await SentryFlutter.init(
+    (options) {
+      options.dsn = const String.fromEnvironment(
+        'SENTRY_DSN',
+        defaultValue: '', // Fails open — no data sent when DSN is absent
+      );
+      options.tracesSampleRate = 1.0;   // 100 % → lower to 0.1 in high-traffic prod
+      options.profilesSampleRate = 1.0; // CPU profiling (requires tracesSampleRate > 0)
+      options.debug = kDebugMode;       // Verbose Sentry logs only in debug builds
+    },
+    appRunner: () async {
+      WidgetsFlutterBinding.ensureInitialized();
+
+      await dotenv.load(fileName: ".env");
+      await Supabase.initialize(
+        url: dotenv.env['SUPABASE_URL']!,
+        anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
+        // Tells the Supabase SDK to intercept deep links on this scheme and
+        // automatically exchange the token before firing onAuthStateChange.
+        // Must match AndroidManifest.xml android:scheme value.
+        authOptions: const FlutterAuthClientOptions(
+          authFlowType: AuthFlowType.pkce,
+        ),
+      );
+
+      // --- 🔥 Firebase Initialization ---
+      try {
+        await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform, // Fix for Flutter Web
+        );
+
+        // 🛑 FIX: Removed await NotificationService().init() from the boot sequence.
+        // Browsers block notification requests on load without user interaction,
+        // which caused the infinite white screen. We will call this post-login instead.
+      } catch (e) {
+        debugPrint("Firebase init failed: $e");
+      }
+
+      // --- 🛡️ Error Boundaries ---
+      // 1. Catch synchronous UI rendering errors (Grey Screen of Death)
+      ErrorWidget.builder = (FlutterErrorDetails details) {
+        // Only return the custom widget in release mode or if we want it in debug too.
+        // We already handle kDebugMode inside GlobalErrorWidget to show the stack trace.
+        return GlobalErrorWidget(details: details);
+      };
+
+      // 2. Catch asynchronous Dart exceptions — forwarded to Sentry before
+      //    returning true (fail-open: the app never crashes from this handler).
+      PlatformDispatcher.instance.onError = (error, stack) {
+        if (kDebugMode) {
+          debugPrint('🐛 [PlatformDispatcher] Asynchronous Error Caught: $error');
+          debugPrint('🐛 StackTrace: $stack');
+        }
+        // Forward to Sentry — no-op when DSN is empty (local dev)
+        Sentry.captureException(error, stackTrace: stack);
+        return true; // Return true to prevent the app from crashing entirely
+      };
+      // ---------------------------
+
+      // --- 🔑 Google Auth: Capture Token from URL (Web) ---
+      final uri = Uri.base; // Get current URL
+
+      // 1. Try standard query params (e.g. ?token=...)
+      String? token = uri.queryParameters['token'];
+
+      // 2. Try Fragment (Hash) params (Common in Flutter Web e.g. /#/auth_callback?token=...)
+      if (token == null && uri.fragment.isNotEmpty) {
+        try {
+          // We construct a dummy URL with the fragment as the path/query to parse it easily
+          // Example fragment: "/auth_callback?token=abc"
+          final fragmentUri = Uri.parse("http://dummy${uri.fragment}");
+          token = fragmentUri.queryParameters['token'];
+        } catch (e) {
+          debugPrint("Error parsing URL fragment: $e");
+        }
+      }
+
+      if (token != null && token.isNotEmpty) {
+        // 1. Save Token
+        const storage = FlutterSecureStorage();
+        await storage.write(key: 'auth_token', value: token);
+
+        // 2. The App Router (UserController) will pick this up on load and auto-login.
+      }
+      // ----------------------------------------------------
+
+      runApp(const ProviderScope(child: MDQApp()));
+    },
   );
-  
-  // --- 🔥 Firebase Initialization ---
-  try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform, // Fix for Flutter Web
-    );
-    
-    // 🛑 FIX: Removed await NotificationService().init() from the boot sequence.
-    // Browsers block notification requests on load without user interaction, 
-    // which caused the infinite white screen. We will call this post-login instead.
-    
-  } catch (e) {
-    debugPrint("Firebase init failed: $e");
-  }
-
-  // --- 🛡️ Error Boundaries ---
-  // 1. Catch synchronous UI rendering errors (Grey Screen of Death)
-  ErrorWidget.builder = (FlutterErrorDetails details) {
-    // Only return the custom widget in release mode or if we want it in debug too.
-    // We already handle kDebugMode inside GlobalErrorWidget to show the stack trace.
-    return GlobalErrorWidget(details: details);
-  };
-
-  // 2. Catch asynchronous Dart exceptions
-  PlatformDispatcher.instance.onError = (error, stack) {
-    if (kDebugMode) {
-      debugPrint('🐛 [PlatformDispatcher] Asynchronous Error Caught: $error');
-      debugPrint('🐛 StackTrace: $stack');
-    }
-    // TODO: Send to Crashlytics or Sentry here in production
-    return true; // Return true to prevent the app from crashing entirely
-  };
-  // ---------------------------
-
-  // --- 🔑 Google Auth: Capture Token from URL (Web) ---
-  final uri = Uri.base; // Get current URL
-  
-  // 1. Try standard query params (e.g. ?token=...)
-  String? token = uri.queryParameters['token'];
-  
-  // 2. Try Fragment (Hash) params (Common in Flutter Web e.g. /#/auth_callback?token=...)
-  if (token == null && uri.fragment.isNotEmpty) {
-     try {
-       // We construct a dummy URL with the fragment as the path/query to parse it easily
-       // Example fragment: "/auth_callback?token=abc"
-       final fragmentUri = Uri.parse("http://dummy${uri.fragment}");
-       token = fragmentUri.queryParameters['token'];
-     } catch (e) {
-       debugPrint("Error parsing URL fragment: $e");
-     }
-  }
-  
-  if (token != null && token.isNotEmpty) {
-    // 1. Save Token
-    const storage = FlutterSecureStorage();
-    await storage.write(key: 'auth_token', value: token); 
-    
-    // 2. The App Router (UserController) will pick this up on load and auto-login.
-  }
-  // ----------------------------------------------------
-
-  runApp(const ProviderScope(child: MDQApp()));
 }
 
 class MDQApp extends ConsumerWidget {

@@ -5,6 +5,19 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+import sentry_sdk
+
+# ---------------------------------------------------------------------------
+# 🔭 Sentry — crash reporting & performance tracing
+# Initialised before anything else so startup errors are also captured.
+# Set SENTRY_DSN in your environment (Render/Railway secret). When the DSN is
+# empty (local dev) Sentry's SDK is a silent no-op — no data is sent.
+# ---------------------------------------------------------------------------
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN", ""),
+    traces_sample_rate=1.0,   # 100 % of transactions → performance dashboard
+    profiles_sample_rate=1.0, # 100 % CPU profiling (reduce to 0.1 in prod)
+)
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -236,7 +249,7 @@ async def lifespan(app: FastAPI):
 
 
 # ✅ redirect_slashes=False prevents 307 redirects that strip CORS headers
-app = FastAPI(title="MDQplus API", redirect_slashes=False, lifespan=lifespan)
+app = FastAPI(title="MDQplus API", redirect_slashes=False, lifespan=lifespan, docs_url=None, redoc_url=None)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 

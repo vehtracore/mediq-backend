@@ -167,6 +167,7 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     ImageProvider? licenseProvider;
     if (_licenseImage != null) {
       if (kIsWeb) {
@@ -186,12 +187,12 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
     }
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
         title: const Text("Doctor Registration"),
-        backgroundColor: Colors.white,
+        backgroundColor: theme.scaffoldBackgroundColor,
         elevation: 0,
-        foregroundColor: Colors.black,
+        foregroundColor: theme.colorScheme.onSurface,
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
@@ -245,9 +246,9 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
                   height: 150,
                   width: double.infinity,
                   decoration: BoxDecoration(
-                    color: Colors.grey[100],
+                    color: theme.brightness == Brightness.dark ? Colors.white.withOpacity(0.05) : Colors.grey[100],
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey[300]!),
+                    border: Border.all(color: theme.brightness == Brightness.dark ? Colors.white.withOpacity(0.1) : Colors.grey[300]!),
                     image: licenseProvider != null
                         ? DecorationImage(
                             image: licenseProvider,
@@ -256,18 +257,18 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
                         : null,
                   ),
                   child: _licenseImage == null
-                      ? const Column(
+                      ? Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(
                               Icons.cloud_upload_outlined,
                               size: 40,
-                              color: Colors.grey,
+                              color: theme.colorScheme.onSurfaceVariant,
                             ),
-                            SizedBox(height: 8),
+                            const SizedBox(height: 8),
                             Text(
                               "Tap to upload License Image",
-                              style: TextStyle(color: Colors.grey),
+                              style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
                             ),
                           ],
                         )
@@ -286,9 +287,9 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
                   height: 150,
                   width: double.infinity,
                   decoration: BoxDecoration(
-                    color: Colors.grey[100],
+                    color: theme.brightness == Brightness.dark ? Colors.white.withOpacity(0.05) : Colors.grey[100],
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey[300]!),
+                    border: Border.all(color: theme.brightness == Brightness.dark ? Colors.white.withOpacity(0.1) : Colors.grey[300]!),
                     image: indemnityProvider != null
                         ? DecorationImage(
                             image: indemnityProvider,
@@ -297,18 +298,18 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
                         : null,
                   ),
                   child: _indemnityImage == null
-                      ? const Column(
+                      ? Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(
                               Icons.cloud_upload_outlined,
                               size: 40,
-                              color: Colors.grey,
+                              color: theme.colorScheme.onSurfaceVariant,
                             ),
-                            SizedBox(height: 8),
+                            const SizedBox(height: 8),
                             Text(
                               "Tap to upload Indemnity Certificate",
-                              style: TextStyle(color: Colors.grey),
+                              style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
                             ),
                           ],
                         )
@@ -410,13 +411,14 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
     required ValueChanged<bool?> onChanged,
     required VoidCallback onTapLink,
   }) {
+    final theme = Theme.of(context);
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: Colors.blue.withOpacity(0.05),
+        color: theme.colorScheme.primaryContainer.withOpacity(0.3),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.blue.withOpacity(0.2)),
+        border: Border.all(color: theme.colorScheme.primary.withOpacity(0.2)),
       ),
       child: Row(
         children: [
@@ -426,13 +428,13 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
               onTap: onTapLink,
               child: RichText(
                 text: TextSpan(
-                  style: Theme.of(context).textTheme.bodySmall,
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurface),
                   children: [
                     TextSpan(text: title),
                     TextSpan(
                       text: linkText,
-                      style: const TextStyle(
-                        color: Colors.blue,
+                      style: TextStyle(
+                        color: theme.colorScheme.primary,
                         fontWeight: FontWeight.bold,
                         decoration: TextDecoration.underline,
                       ),

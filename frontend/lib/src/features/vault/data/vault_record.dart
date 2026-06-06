@@ -7,8 +7,8 @@ class VaultRecord {
   final String? doctorName;
   final String topicOrReason;
   final String? details;
-  final List<dynamic>? prescriptions;
-  final List<dynamic>? referrals;
+  final String? prescriptions;
+  final String? referrals;
 
   const VaultRecord({
     required this.id,
@@ -22,13 +22,6 @@ class VaultRecord {
   });
 
   factory VaultRecord.fromJson(Map<String, dynamic> json) {
-    // Safely coerce prescriptions / referrals — backend emits JSONB arrays or null
-    List<dynamic>? _toList(dynamic raw) {
-      if (raw == null) return null;
-      if (raw is List) return raw;
-      return null;
-    }
-
     return VaultRecord(
       id: json['id'] as String,
       type: json['type'] as String,
@@ -36,8 +29,8 @@ class VaultRecord {
       doctorName: json['doctor_name'] as String?,
       topicOrReason: json['topic_or_reason'] as String? ?? '',
       details: json['details'] as String?,
-      prescriptions: _toList(json['prescriptions']),
-      referrals: _toList(json['referrals']),
+      prescriptions: json['prescriptions'] as String?,
+      referrals: json['referrals'] as String?,
     );
   }
 

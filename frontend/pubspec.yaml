@@ -47,6 +47,10 @@ dependencies:
   share_plus: ^10.1.4
   flutter_tts: ^4.2.5
   just_audio: ^0.10.5
+
+  # 🔭 Observability
+  sentry_flutter: ^8.3.0    # Crash reporting & performance tracing
+  posthog_flutter: ^4.0.0   # Product analytics (events, funnels, session recording)
 dev_dependencies:
   flutter_test:
     sdk: flutter

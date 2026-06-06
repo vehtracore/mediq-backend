@@ -43,9 +43,13 @@ if "sqlite" in SQLALCHEMY_DATABASE_URL:
     )
 else:
     # PostgreSQL specific args (Cloud Production)
+    # Connection-pool tuning for high-concurrency / serverless environments
     engine = create_engine(
         SQLALCHEMY_DATABASE_URL,
-        pool_pre_ping=True,
+        pool_size=5,            # Persistent connections kept open and ready
+        max_overflow=10,        # Extra connections allowed during traffic spikes
+        pool_timeout=30,        # Seconds to wait for a free connection before raising
+        pool_pre_ping=True,     # Validate connections before checkout (avoids stale-conn errors)
         connect_args={"prepare_threshold": None}
     )
 

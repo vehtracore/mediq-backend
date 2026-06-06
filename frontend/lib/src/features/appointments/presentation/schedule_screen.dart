@@ -79,14 +79,25 @@ class ScheduleScreen extends ConsumerWidget {
             ),
         data: (appointments) {
           if (appointments.isEmpty) {
-            return const Center(child: Text("No appointments yet"));
+            return RefreshIndicator(
+              onRefresh: () async => ref.refresh(myAppointmentsProvider.future),
+              child: ListView(
+                children: const [
+                  SizedBox(height: 200),
+                  Center(child: Text("No appointments yet")),
+                ],
+              ),
+            );
           }
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: appointments.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 16),
-            itemBuilder: (context, index) =>
-                _AppointmentCard(appointment: appointments[index]),
+          return RefreshIndicator(
+            onRefresh: () async => ref.refresh(myAppointmentsProvider.future),
+            child: ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: appointments.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 16),
+              itemBuilder: (context, index) =>
+                  _AppointmentCard(appointment: appointments[index]),
+            ),
           );
         },
       ),
@@ -107,6 +118,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
 
   void _showRatingSheet(BuildContext context, WidgetRef ref) {
     int selectedRating = 5;
+    bool isReviewLoading = false;
     final commentCtrl = TextEditingController();
     showModalBottomSheet(
       context: context,
@@ -150,20 +162,23 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton(
-                      onPressed: () async {
-                        Navigator.pop(ctx);
+                      onPressed: isReviewLoading ? null : () async {
+                        setModalState(() => isReviewLoading = true);
                         try {
                           await ref.read(reviewRepositoryProvider).submitReview(
                               appointmentId: widget.appointment.id,
                               rating: selectedRating,
                               comment: commentCtrl.text);
+                          if (ctx.mounted) Navigator.pop(ctx);
                           ref.refresh(myAppointmentsProvider);
-                        } catch (e) {}
+                        } catch (e) {
+                          if (ctx.mounted) setModalState(() => isReviewLoading = false);
+                        }
                       },
                       style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF4A90E2),
                           foregroundColor: Colors.white),
-                      child: const Text("Submit Review"))),
+                      child: isReviewLoading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text("Submit Review"))),
               const SizedBox(height: 24),
             ],
           ),

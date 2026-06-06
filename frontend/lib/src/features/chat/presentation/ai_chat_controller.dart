@@ -31,7 +31,8 @@ class AiChatController extends StateNotifier<AiChatState> {
   Future<void> sendMessage(String text, {String? imageUrl, String language = 'English'}) async {
     if (text.trim().isEmpty && imageUrl == null) return;
 
-    final userMsg = {'role': 'user', 'message': text, 'image': imageUrl};
+    final tempId = DateTime.now().millisecondsSinceEpoch.toString();
+    final userMsg = {'id': tempId, 'role': 'user', 'message': text, 'image': imageUrl, 'isSending': true};
     state =
         state.copyWith(messages: [...state.messages, userMsg], isLoading: true);
 
@@ -71,8 +72,18 @@ class AiChatController extends StateNotifier<AiChatState> {
 
       final aiMsg = {'role': 'ai', 'message': response.data['response']};
       if (!mounted) return;
+
+      final newMessages = state.messages.map((m) {
+        if (m['id'] == tempId) {
+          final newM = Map<String, dynamic>.from(m);
+          newM['isSending'] = false;
+          return newM;
+        }
+        return m;
+      }).toList();
+
       state = state
-          .copyWith(messages: [...state.messages, aiMsg], isLoading: false);
+          .copyWith(messages: [...newMessages, aiMsg], isLoading: false);
     } on DioException catch (e) {
       String errorMessage = "Connection error. Please try again.";
       
@@ -89,14 +100,34 @@ class AiChatController extends StateNotifier<AiChatState> {
         'message': errorMessage
       };
       if (!mounted) return;
-      state = state.copyWith(messages: [...state.messages, errorMsg], isLoading: false);
+
+      final newMessages = state.messages.map((m) {
+        if (m['id'] == tempId) {
+          final newM = Map<String, dynamic>.from(m);
+          newM['isSending'] = false;
+          return newM;
+        }
+        return m;
+      }).toList();
+
+      state = state.copyWith(messages: [...newMessages, errorMsg], isLoading: false);
     } catch (e) {
       final errorMsg = {
         'role': 'system',
         'message': "System Error: ${e.toString()}"
       };
       if (!mounted) return;
-      state = state.copyWith(messages: [...state.messages, errorMsg], isLoading: false);
+
+      final newMessages = state.messages.map((m) {
+        if (m['id'] == tempId) {
+          final newM = Map<String, dynamic>.from(m);
+          newM['isSending'] = false;
+          return newM;
+        }
+        return m;
+      }).toList();
+
+      state = state.copyWith(messages: [...newMessages, errorMsg], isLoading: false);
     }
 
   }

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Form, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Form, File, UploadFile, Request
 from fastapi.responses import HTMLResponse
 import uuid
 from pydantic import EmailStr
@@ -12,6 +12,7 @@ from app.schemas.doctor import DoctorResponse
 from app.api import deps
 
 from app.services.media_service import upload_image
+from app.core.limiter import limiter
 
 router = APIRouter()
 
@@ -143,7 +144,8 @@ def send_email(to_email: str, subject: str, body: str):
 # ---------------------------------------------------------------------------
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def create_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def create_user(request: Request, user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user: raise HTTPException(400, detail="Email already registered")
     
