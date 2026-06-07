@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ── Resend configuration ───────────────────────────────────────────────────────
-FROM_ADDRESS: str = "MDQ+ Support <support@vehtr.com>"
-ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "admin@vehtr.com")
+FROM_ADDRESS: str = "MDQ+ Support <support@mdqplus.com>"
+ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "admin@mdqplus.com")
 
 
 # ── Request schema ─────────────────────────────────────────────────────────────
