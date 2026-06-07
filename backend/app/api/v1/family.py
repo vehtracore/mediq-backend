@@ -23,7 +23,8 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -77,7 +78,7 @@ def _decode_invite_token(token: str) -> int:
     """
     try:
         payload = jwt.decode(token, _SECRET_KEY, algorithms=[_ALGORITHM])
-    except JWTError as exc:
+    except PyJWTError as exc:
         logger.warning("[FAMILY] Invite token decode failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
