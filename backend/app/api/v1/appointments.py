@@ -332,6 +332,38 @@ def request_vip_appointment(
             detail="Doctor has not set a consultation rate. Please try again later.",
         )
 
+    # ── PENDING-LOCK: Rule 2 — Global cap (max 3 pending requests platform-wide) ──
+    global_pending_count = (
+        db.query(Appointment)
+        .filter(
+            Appointment.patient_id == current_user.id,
+            Appointment.status == "pending",
+        )
+        .count()
+    )
+    if global_pending_count >= 3:
+        raise HTTPException(
+            status_code=400,
+            detail="You have reached the maximum of 3 pending requests. "
+                   "Please wait for a doctor to respond before sending more.",
+        )
+
+    # ── PENDING-LOCK: Rule 1 — Per-doctor cap (max 1 pending per specialist) ──
+    per_doctor_pending_count = (
+        db.query(Appointment)
+        .filter(
+            Appointment.patient_id == current_user.id,
+            Appointment.doctor_id == req.doctor_id,
+            Appointment.status == "pending",
+        )
+        .count()
+    )
+    if per_doctor_pending_count >= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="You already have a pending request with this specialist.",
+        )
+
     # Pricing: derive from the doctor's actual rate, matching the /book endpoint
     # commission model (30% platform / 70% doctor payout).
     patient_price: float = doctor.hourly_rate
