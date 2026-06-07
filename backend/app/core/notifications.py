@@ -86,3 +86,49 @@ def send_push_notification(
     except Exception as exc:
         logger.error(f"[FCM] Push send failed: {exc}")
         return None
+
+
+def dispatch_push(
+    token: str | None,
+    title: str,
+    body: str,
+    data: dict | None = None,
+    *,
+    event_label: str = "FCM",
+) -> str | None:
+    """
+    Sentry-aware fire-and-forget wrapper for ``send_push_notification``.
+
+    Differences from the raw helper:
+    • Silently skips (returns None) when *token* is falsy — avoids crashing
+      when a user has not granted notification permission.
+    • Wraps the entire dispatch in a try/except so FCM failures are forwarded
+      to Sentry as ``logger.error`` events (which the LoggingIntegration in
+      main.py converts into Sentry issues) without propagating the exception
+      to the calling request handler.
+
+    Args:
+        token:       FCM device registration token (may be None / empty string).
+        title:       Notification title.
+        body:        Notification body text.
+        data:        Optional string key/value pairs sent as data payload.
+        event_label: Short label prefixed to log messages for tracing.
+
+    Returns:
+        The FCM message ID on success, or ``None`` on any failure / skip.
+    """
+    if not token:
+        logger.debug("[%s] dispatch_push skipped — no FCM token.", event_label)
+        return None
+
+    try:
+        return send_push_notification(token=token, title=title, body=body, data=data)
+    except Exception as exc:
+        # logger.error is captured by Sentry's LoggingIntegration as an issue.
+        logger.error(
+            "[%s] FCM dispatch_push failed: %s",
+            event_label,
+            exc,
+            exc_info=True,
+        )
+        return None

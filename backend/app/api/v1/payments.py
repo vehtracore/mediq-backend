@@ -50,6 +50,7 @@ from app.models.user import User
 from app.models.doctor import Doctor
 from app.services.email_service import send_transactional_email
 from app.services.paystack_service import paystack_service  # noqa: F401 (used in future endpoints)
+from app.core.notifications import dispatch_push
 
 logger = logging.getLogger(__name__)
 
@@ -539,11 +540,94 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
         user.id,
         user.subscription_expiry,
     )
+
+    # ── FCM: notify the user their subscription is now active ──────────────
+    try:
+        expiry_str = user.subscription_expiry.strftime("%d %b %Y") if user.subscription_expiry else "N/A"
+        dispatch_push(
+            token=user.fcm_token,
+            title="🎉 MDQ+ Premium Activated!",
+            body=f"Your subscription is active until {expiry_str}. Enjoy unlimited access!",
+            data={"type": "subscription_active", "plan": "premium"},
+            event_label="PAYMENTS/CHARGE_SUCCESS",
+        )
+    except Exception as notif_exc:
+        logger.error(
+            "[WEBHOOK] charge.success FCM push failed — user_id=%s: %s",
+            user.id,
+            notif_exc,
+            exc_info=True,
+        )
+
     return {
         "action": "subscription_upgraded_via_charge",
         "user_id": user.id,
         "plan": "premium",
         "expiry": str(user.subscription_expiry),
+    }
+
+
+def _handle_subscription_disable(data: dict, db: Session) -> dict:
+    """
+    Handle subscription.disable (and subscription.not_renew) events from Paystack.
+
+    Downgrades the user's plan back to 'free' and fires a push notification
+    so they are immediately aware their access has been revoked.
+
+    Raises ValueError when required fields are missing or the user is not found.
+    """
+    # Resolve user_id from customer.metadata (same path as subscription.create)
+    customer: dict = data.get("customer") or {}
+    customer_meta: dict = customer.get("metadata") or {}
+    user_id_raw = customer_meta.get("user_id")
+
+    # Fallback: some payloads embed user_id directly in data.metadata
+    if not user_id_raw:
+        top_meta: dict = data.get("metadata") or {}
+        user_id_raw = top_meta.get("user_id")
+
+    if not user_id_raw:
+        raise ValueError(
+            "subscription.disable: user_id not found in customer.metadata or metadata — "
+            "cannot downgrade subscription."
+        )
+
+    user: User | None = db.query(User).filter(User.id == int(user_id_raw)).first()
+    if not user:
+        raise ValueError(f"subscription.disable: user id={user_id_raw} not found.")
+
+    # Downgrade plan
+    user.plan = "free"
+    user.subscription_expiry = None
+    db.commit()
+    db.refresh(user)
+
+    logger.info(
+        "[WEBHOOK] subscription.disable — downgraded user_id=%s to free tier.",
+        user.id,
+    )
+
+    # ── FCM: notify the user their subscription has expired / been disabled ──
+    try:
+        dispatch_push(
+            token=user.fcm_token,
+            title="⚠️ Subscription Ended",
+            body="Your MDQ+ subscription has expired. Renew now to restore full access.",
+            data={"type": "subscription_disabled", "plan": "free"},
+            event_label="PAYMENTS/SUB_DISABLE",
+        )
+    except Exception as notif_exc:
+        logger.error(
+            "[WEBHOOK] subscription.disable FCM push failed — user_id=%s: %s",
+            user.id,
+            notif_exc,
+            exc_info=True,
+        )
+
+    return {
+        "action": "subscription_disabled",
+        "user_id": user.id,
+        "plan": "free",
     }
 
 
@@ -737,6 +821,8 @@ async def paystack_webhook(
             result = _handle_subscription_create(data=data, db=db)
         elif raw_event == "transfer.success":
             result = _handle_transfer_success(data=data, db=db)
+        elif raw_event in ("subscription.disable", "subscription.not_renew"):
+            result = _handle_subscription_disable(data=data, db=db)
         else:
             result = _apply_db_update(
                 transaction_type=transaction_type,
