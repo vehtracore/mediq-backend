@@ -1,9 +1,9 @@
-import os
 import logging
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import jwt, JWTError
+import jwt
+from jwt import PyJWKClient, PyJWTError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -12,17 +12,20 @@ from app.models.user import User
 logger = logging.getLogger("uvicorn.error")
 
 # ---------------------------------------------------------------------------
-# Supabase JWT configuration
+# Supabase JWT configuration — asymmetric ES256 via JWKS
 # ---------------------------------------------------------------------------
-# The JWT secret is found in your Supabase dashboard:
-#   Settings → API → JWT Secret
+# Supabase's modern API keys sign access tokens with ECDSA P-256 (ES256).
+# We fetch the public signing key dynamically from the project's JWKS endpoint
+# so we never need to store or rotate a shared secret.
 #
-# Supabase access tokens are signed with HS256 and carry
-# aud="authenticated" for logged-in users.
+# The client is initialised once at module load time and caches the JWKS
+# response internally, refreshing only when it encounters an unknown key ID.
 # ---------------------------------------------------------------------------
-SUPABASE_JWT_SECRET: str = os.getenv("SUPABASE_JWT_SECRET", "")
-SUPABASE_JWT_ALGORITHM: str = "HS256"
+SUPABASE_URL: str = "https://hzrjaquqlpkbggwdcres.supabase.co"
+JWKS_URL: str = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json"
 SUPABASE_JWT_AUDIENCE: str = "authenticated"
+
+jwks_client = PyJWKClient(JWKS_URL)
 
 # The tokenUrl is kept for OpenAPI docs compatibility — the frontend no
 # longer calls this endpoint; Supabase handles token issuance.
@@ -39,7 +42,8 @@ def get_current_user(
     Token flow:
         1. Frontend authenticates with Supabase Auth (email/password, OAuth, etc.)
         2. Frontend sends the Supabase `access_token` in `Authorization: Bearer <token>`
-        3. This function verifies the JWT signature (HS256) and audience claim.
+        3. This function fetches the matching public key from the Supabase JWKS
+           endpoint and verifies the JWT signature (ES256) and audience claim.
         4. The `email` field from the JWT payload is used to look up the local User.
     """
 
@@ -49,26 +53,17 @@ def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
 
-    # ── Guard: JWT secret must be configured ──────────────────────────────────
-    if not SUPABASE_JWT_SECRET:
-        logger.error(
-            "[AUTH] FATAL: SUPABASE_JWT_SECRET is not set. "
-            "Add it to your .env / Render environment variables. "
-            "Find it at Supabase Dashboard → Settings → API → JWT Secret."
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server authentication misconfigured.",
-        )
-
     # ── Decode & verify ───────────────────────────────────────────────────────
     try:
         logger.debug(f"[AUTH] Verifying token: {token[:15]}...")
 
+        # Resolve the correct public key using the token's `kid` header claim.
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+
         payload = jwt.decode(
             token,
-            SUPABASE_JWT_SECRET,
-            algorithms=[SUPABASE_JWT_ALGORITHM],
+            signing_key.key,
+            algorithms=["ES256"],
             audience=SUPABASE_JWT_AUDIENCE,
         )
 
@@ -78,8 +73,12 @@ def get_current_user(
             logger.warning("[AUTH] Token decoded but 'email' claim is missing.")
             raise credentials_exception
 
-    except JWTError as e:
+    except PyJWTError as e:
         logger.warning(f"[AUTH] JWT verification failed: {e}")
+        raise credentials_exception
+    except Exception as e:
+        # Catch JWKS fetch failures, network errors, etc.
+        logger.error(f"[AUTH] Unexpected error during token verification: {e}")
         raise credentials_exception
 
     # ── Resolve local user ────────────────────────────────────────────────────
