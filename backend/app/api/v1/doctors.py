@@ -80,14 +80,12 @@ def read_doctors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db))
             try:
                 results.append(DoctorResponse.model_validate(doc))
             except Exception as ve:
-                print(f"🔥 [VALIDATION ERROR] Doctor ID={doc.id}, Name={doc.full_name}: {ve}")
+                logger.warning("[DOCTORS] Validation error for Doctor ID=%s, Name=%s: %s", doc.id, doc.full_name, ve, exc_info=True)
                 # Still include it with lenient fields
                 results.append(DoctorResponse.model_validate(doc, strict=False))
         return results
     except Exception as e:
-        import traceback
-        print(f"🔥 [DOCTORS LIST ERROR] {e}")
-        print(traceback.format_exc())
+        logger.error("[DOCTORS] Failed to list doctors: %s", e, exc_info=True)
         raise
 
 @router.get("/stats")

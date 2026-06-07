@@ -16,7 +16,7 @@ if GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
         logger.info("DEBUG: Gemini Configured Successfully")
     except Exception as e:
-        logger.error(f"DEBUG: Gemini Configuration Failed: {e}")
+        logger.error(f"DEBUG: Gemini Configuration Failed: {e}", exc_info=True)
 else:
     logger.warning("WARNING: GEMINI_API_KEY not found in environment.")
 
@@ -118,7 +118,7 @@ async def get_medical_response(user_text: str, history: list = None, image_url: 
         return clean_text
 
     except Exception as e:
-        logger.error(f"Gemini API Error: {e}")
+        logger.error(f"Gemini API Error: {e}", exc_info=True)
         return f"System Error: {str(e)}"
 
 
@@ -228,10 +228,10 @@ async def analyze_lab_strip(image_bytes: bytes) -> dict:
         return result
         
     except json.JSONDecodeError as e:
-        logger.error(f"Lab Strip JSON Parse Error: {e}")
+        logger.error(f"Lab Strip JSON Parse Error: {e}", exc_info=True)
         logger.error(f"Raw response: {raw_text[:500] if 'raw_text' in dir() else 'N/A'}")
         return {"status": "ERROR", "reason": "Failed to parse AI response"}
         
     except Exception as e:
-        logger.error(f"Lab Strip Analysis Error: {e}")
+        logger.error(f"Lab Strip Analysis Error: {e}", exc_info=True)
         return {"status": "ERROR", "reason": str(e)}

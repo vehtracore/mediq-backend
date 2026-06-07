@@ -1,3 +1,4 @@
+import logging
 import os
 import traceback
 from contextlib import asynccontextmanager
@@ -6,17 +7,30 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import sentry_sdk
+from sentry_sdk.integrations.logging import LoggingIntegration
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 🔭 Sentry — crash reporting & performance tracing
 # Initialised before anything else so startup errors are also captured.
 # Set SENTRY_DSN in your environment (Render/Railway secret). When the DSN is
 # empty (local dev) Sentry's SDK is a silent no-op — no data is sent.
+#
+# LoggingIntegration ensures every logger.error() across the entire app is
+# automatically forwarded to Sentry as an issue, giving full observability
+# over third-party API failures (Termii, Paystack, Cloudinary, Gemini, etc.).
 # ---------------------------------------------------------------------------
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN", ""),
     traces_sample_rate=1.0,   # 100 % of transactions → performance dashboard
     profiles_sample_rate=1.0, # 100 % CPU profiling (reduce to 0.1 in prod)
+    integrations=[
+        LoggingIntegration(
+            level=logging.INFO,          # Breadcrumbs from INFO and above
+            event_level=logging.ERROR,   # Sentry issues from ERROR and above
+        ),
+    ],
 )
 
 from slowapi import _rate_limit_exceeded_handler
@@ -259,10 +273,13 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # --- Global Exception Handler: ensures CORS headers are present even on 500 errors ---
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    tb = traceback.format_exc()
-    print(f"🔥 [UNHANDLED ERROR] {request.method} {request.url.path}")
-    print(f"   Exception: {exc}")
-    print(f"   Traceback:\n{tb}")
+    logger.error(
+        "🔥 [UNHANDLED ERROR] %s %s — %s",
+        request.method,
+        request.url.path,
+        exc,
+        exc_info=True,
+    )
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},

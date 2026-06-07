@@ -1,10 +1,12 @@
-from fastapi import APIRouter, HTTPException
+import logging
 import os
-import time
 import random
-import traceback
-# REMOVED Role_Publisher from this import to fix the crash
-from agora_token_builder import RtcTokenBuilder 
+import time
+
+from fastapi import APIRouter, HTTPException
+from agora_token_builder import RtcTokenBuilder
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -22,7 +24,7 @@ def get_agora_token(appointment_id: int):
         
         # 2. Strict Check with Logging
         if not app_id or not app_certificate:
-            print(f"❌ CRITICAL ERROR: Agora Keys missing. ID: {app_id}, Cert: {app_certificate}")
+            logger.error("Agora credentials missing — AGORA_APP_ID=%s, AGORA_APP_CERTIFICATE=%s", bool(app_id), bool(app_certificate))
             raise Exception("Agora Credentials are missing in Render Environment Variables!")
 
         # 3. Generate Token
@@ -39,7 +41,7 @@ def get_agora_token(appointment_id: int):
         )
         
         # 4. Success Log
-        print(f"✅ Token generated for channel: {channel_name}")
+        logger.info("Agora token generated for channel: %s", channel_name)
 
         return {
             "token": token,
@@ -50,6 +52,6 @@ def get_agora_token(appointment_id: int):
     
     except Exception as e:
         # 5. Capture the real error log
-        print(f"❌ VIDEO CRASH: {traceback.format_exc()}")
+        logger.error("Failed to generate Agora video token: %s", e, exc_info=True)
         # Send error to phone screen
         raise HTTPException(status_code=500, detail=f"Crash: {str(e)}")

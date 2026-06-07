@@ -71,8 +71,7 @@ class ConnectionManager:
                 try:
                     await connection.send_text(json.dumps(message))
                 except Exception as e:
-                    print(f"DEBUG BROADCAST: send failed, removing dead socket: {e}", flush=True)
-                    logger.warning(f"[WS] Broadcast send failed, removing dead socket: {e}")
+                    logger.warning("[WS] Broadcast send failed, removing dead socket: %s", e)
                     await self.disconnect(connection, appointment_id, 0)
 
 manager = ConnectionManager()
@@ -134,8 +133,7 @@ def get_chat_history(
 # --- HELPER: Save Message Safely ---
 def save_message_sync(appointment_id: int, user_id: int, content: str):
     """Runs in a separate thread to prevent blocking the WebSocket"""
-    print(f"DEBUG DB-SAVE: ENTER — appt={appointment_id}, user={user_id}, len={len(content)}", flush=True)
-    logger.info(f"[WS] save_message_sync called — appt={appointment_id}, user={user_id}, len={len(content)}")
+    logger.debug("[WS] save_message_sync ENTER — appt=%s, user=%s, len=%d", appointment_id, user_id, len(content))
     db = WsSession()
     try:
         new_msg = Message(
@@ -148,8 +146,7 @@ def save_message_sync(appointment_id: int, user_id: int, content: str):
         db.add(new_msg)
         db.commit()
         db.refresh(new_msg)
-        print(f"DEBUG DB-SAVE: SUCCESS — msg id={new_msg.id}", flush=True)
-        logger.info(f"[WS] Message saved — id={new_msg.id}")
+        logger.info("[WS] Message saved — id=%s", new_msg.id)
         return {
             "id": new_msg.id,
             "content": new_msg.content,
@@ -157,9 +154,7 @@ def save_message_sync(appointment_id: int, user_id: int, content: str):
             "created_at": new_msg.created_at.isoformat()
         }
     except Exception as e:
-        print(f"DEBUG DB-SAVE: FAILED — {e}", flush=True)
-        print(traceback.format_exc(), flush=True)
-        logger.error(f"[WS] DB Save Error: {e}\n{traceback.format_exc()}")
+        logger.error("[WS] DB Save Error: %s", e, exc_info=True)
         db.rollback()
         return None
     finally:
@@ -172,8 +167,7 @@ def send_chat_push_sync(appointment_id: int, sender_id: int, message_text: str):
     Determine the recipient of a chat message and fire an FCM push.
     Runs in a threadpool so it doesn't block the WebSocket loop.
     """
-    print(f"DEBUG FCM: ENTER — appt={appointment_id}, sender={sender_id}", flush=True)
-    logger.info(f"[FCM-PUSH] Starting push lookup — appt={appointment_id}, sender={sender_id}")
+    logger.debug("[FCM-PUSH] ENTER — appt=%s, sender=%s", appointment_id, sender_id)
     db = WsSession()
     try:
         appointment = (
@@ -182,11 +176,10 @@ def send_chat_push_sync(appointment_id: int, sender_id: int, message_text: str):
             .first()
         )
         if not appointment:
-            print(f"DEBUG FCM: No appointment found for id={appointment_id}", flush=True)
-            logger.warning(f"[FCM-PUSH] No appointment found for id={appointment_id}")
+            logger.warning("[FCM-PUSH] No appointment found for id=%s", appointment_id)
             return
 
-        print(f"DEBUG FCM: Appointment found — patient_id={appointment.patient_id}, doctor_id={appointment.doctor_id}", flush=True)
+        logger.debug("[FCM-PUSH] Appointment found — patient_id=%s, doctor_id=%s", appointment.patient_id, appointment.doctor_id)
 
         # Determine the recipient's User ID
         if sender_id == appointment.patient_id:
@@ -196,8 +189,7 @@ def send_chat_push_sync(appointment_id: int, sender_id: int, message_text: str):
                 .first()
             )
             if not doctor:
-                print(f"DEBUG FCM: No doctor found for doctor_id={appointment.doctor_id}", flush=True)
-                logger.warning(f"[FCM-PUSH] No doctor found for doctor_id={appointment.doctor_id}")
+                logger.warning("[FCM-PUSH] No doctor found for doctor_id=%s", appointment.doctor_id)
                 return
             recipient_user_id = doctor.user_id
             sender_label = "Patient"
@@ -205,26 +197,23 @@ def send_chat_push_sync(appointment_id: int, sender_id: int, message_text: str):
             recipient_user_id = appointment.patient_id
             sender_label = "Doctor"
 
-        print(f"DEBUG FCM: Recipient user_id={recipient_user_id}, sender_label={sender_label}", flush=True)
+        logger.debug("[FCM-PUSH] Recipient user_id=%s, sender_label=%s", recipient_user_id, sender_label)
 
         recipient = db.query(User).filter(User.id == recipient_user_id).first()
         sender = db.query(User).filter(User.id == sender_id).first()
 
         if not recipient:
-            print(f"DEBUG FCM: Recipient user NOT FOUND — user_id={recipient_user_id}", flush=True)
-            logger.warning(f"[FCM-PUSH] Recipient user not found — user_id={recipient_user_id}")
+            logger.warning("[FCM-PUSH] Recipient user not found — user_id=%s", recipient_user_id)
             return
 
         if not recipient.fcm_token:
-            print(f"DEBUG FCM: Recipient user_id={recipient_user_id} has NO FCM TOKEN — skipping", flush=True)
-            logger.info(f"[FCM-PUSH] Recipient user_id={recipient_user_id} has no FCM token — skipping push")
+            logger.info("[FCM-PUSH] Recipient user_id=%s has no FCM token — skipping push", recipient_user_id)
             return
 
         sender_name = f"{sender.first_name} {sender.last_name}" if sender else sender_label
         body_preview = message_text[:200] + "…" if len(message_text) > 200 else message_text
 
-        print(f"DEBUG FCM: SENDING push to user_id={recipient_user_id} token={recipient.fcm_token[:12]}...", flush=True)
-        logger.info(f"[FCM-PUSH] Sending push to user_id={recipient_user_id} (token={recipient.fcm_token[:12]}...)")
+        logger.info("[FCM-PUSH] Sending push to user_id=%s", recipient_user_id)
 
         result = send_push_notification(
             token=recipient.fcm_token,
@@ -236,11 +225,9 @@ def send_chat_push_sync(appointment_id: int, sender_id: int, message_text: str):
                 "sender_id": str(sender_id),
             },
         )
-        print(f"DEBUG FCM: send_push_notification returned: {result}", flush=True)
+        logger.debug("[FCM-PUSH] send_push_notification returned: %s", result)
     except Exception as e:
-        print(f"DEBUG FCM: EXCEPTION — {e}", flush=True)
-        print(traceback.format_exc(), flush=True)
-        logger.error(f"[FCM-PUSH] Error: {e}\n{traceback.format_exc()}")
+        logger.error("[FCM-PUSH] Error sending push notification: %s", e, exc_info=True)
     finally:
         db.close()
 
@@ -252,55 +239,48 @@ async def websocket_endpoint(
     appointment_id: str, 
     user_id: int
 ):
-    print(f"DEBUG WS: CONNECT — User {user_id}, Appointment {appointment_id}", flush=True)
-    logger.info(f"[WS] Connecting: User {user_id} to appointment {appointment_id}")
+    logger.info("[WS] Connecting: User %s to appointment %s", user_id, appointment_id)
     await manager.connect(websocket, appointment_id, user_id)
     
     try:
         while True:
             # 1. Receive
             data = await websocket.receive_text()
-            print(f"DEBUG WS: RECEIVED from user {user_id} — {data[:100]}", flush=True)
-            logger.info(f"[WS] Received from user {user_id}: {data[:80]}...")
+            logger.debug("[WS] Received from user %s: %s...", user_id, data[:100])
             
             # 2. Save to DB (Run in background thread!)
-            print(f"DEBUG WS: Calling save_message_sync...", flush=True)
+            logger.debug("[WS] Calling save_message_sync...")
             saved_msg = await run_in_threadpool(
                 save_message_sync, 
                 int(appointment_id), 
                 user_id, 
                 data
             )
-            print(f"DEBUG WS: save_message_sync returned: {saved_msg}", flush=True)
+            logger.debug("[WS] save_message_sync returned: %s", saved_msg)
 
             if saved_msg:
                 # 3. Broadcast the SAVED message (with real ID)
-                print(f"DEBUG WS: Broadcasting msg id={saved_msg['id']}...", flush=True)
+                logger.debug("[WS] Broadcasting msg id=%s...", saved_msg['id'])
                 await manager.broadcast(saved_msg, appointment_id)
-                print(f"DEBUG WS: Broadcast DONE for msg id={saved_msg['id']}", flush=True)
-                logger.info(f"[WS] Broadcast complete for msg id={saved_msg['id']}")
+                logger.info("[WS] Broadcast complete for msg id=%s", saved_msg['id'])
 
                 # 4. Send FCM push to the OTHER user
-                print(f"DEBUG WS: Triggering push notification task...", flush=True)
+                logger.debug("[WS] Triggering push notification task...")
                 await run_in_threadpool(
                     send_chat_push_sync,
                     int(appointment_id),
                     user_id,
                     data,
                 )
-                print(f"DEBUG WS: Push notification task completed", flush=True)
+                logger.debug("[WS] Push notification task completed")
             else:
-                print(f"DEBUG WS: save_message_sync returned None — MESSAGE DROPPED", flush=True)
-                logger.error(f"[WS] save_message_sync returned None — message dropped for user {user_id}")
+                logger.error("[WS] save_message_sync returned None — message dropped for user %s", user_id)
 
     except WebSocketDisconnect:
-        print(f"DEBUG WS: DISCONNECT — User {user_id}", flush=True)
+        logger.info("[WS] Disconnected: User %s from appointment %s", user_id, appointment_id)
         await manager.disconnect(websocket, appointment_id, user_id)
-        logger.info(f"[WS] Disconnected: User {user_id} from appointment {appointment_id}")
     except Exception as e:
-        print(f"DEBUG WS: UNEXPECTED EXCEPTION — {e}", flush=True)
-        print(traceback.format_exc(), flush=True)
-        logger.error(f"[WS] Unexpected error for user {user_id}: {e}\n{traceback.format_exc()}")
+        logger.error("[WS] Unexpected error for user %s: %s", user_id, e, exc_info=True)
         await manager.disconnect(websocket, appointment_id, user_id)
         try:
             await websocket.close(code=1011, reason="Internal server error")

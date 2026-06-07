@@ -92,4 +92,5 @@ async def send_transactional_email(
             to_email,
             subject,
             exc,
+            exc_info=True,
         )

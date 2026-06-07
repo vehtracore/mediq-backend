@@ -115,6 +115,7 @@ class PaystackService:
                 "[PAYSTACK] ❌ Network error creating subaccount: %s: %s",
                 type(exc).__name__,
                 exc,
+                exc_info=True,
             )
             raise HTTPException(
                 status_code=503,
@@ -202,6 +203,7 @@ class PaystackService:
                 "[PAYSTACK] ❌ Network error resolving account: %s: %s",
                 type(exc).__name__,
                 exc,
+                exc_info=True,
             )
             raise HTTPException(
                 status_code=503,
@@ -289,6 +291,7 @@ class PaystackService:
                 "[PAYSTACK] ❌ Network error disabling subscription: %s: %s",
                 type(exc).__name__,
                 exc,
+                exc_info=True,
             )
             raise HTTPException(
                 status_code=503,

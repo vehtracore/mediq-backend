@@ -1,11 +1,15 @@
 import cloudinary
 import cloudinary.uploader
-import shutil
+import logging
 import os
+import shutil
+
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -31,5 +35,5 @@ async def upload_image(file: UploadFile = File(...)):
         return {"url": image_url}
 
     except Exception as e:
-        print(f"Cloudinary Error: {e}")
+        logger.error("Failed to upload image to Cloudinary: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Image upload failed")

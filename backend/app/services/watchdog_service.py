@@ -112,7 +112,8 @@ async def _verify_and_update(
         data: dict = resp.json()
     except httpx.RequestError as exc:
         logger.error(
-            "[WATCHDOG] HTTP error verifying reference='%s': %s", reference, exc
+            "[WATCHDOG] HTTP error verifying reference='%s': %s", reference, exc,
+            exc_info=True,
         )
         return
 
@@ -153,7 +154,8 @@ async def _verify_and_update(
             )
         except Exception as exc:
             logger.error(
-                "[WATCHDOG] DB update failed for reference='%s': %s", reference, exc
+                "[WATCHDOG] DB update failed for reference='%s': %s", reference, exc,
+                exc_info=True,
             )
 
     # ── Failed or abandoned payment ────────────────────────────────────────────
@@ -170,7 +172,8 @@ async def _verify_and_update(
         except Exception as exc:
             db.rollback()
             logger.error(
-                "[WATCHDOG] Failed to cancel appt_id=%s: %s", appt.id, exc
+                "[WATCHDOG] Failed to cancel appt_id=%s: %s", appt.id, exc,
+                exc_info=True,
             )
 
     # ── Still pending / processing ─────────────────────────────────────────────

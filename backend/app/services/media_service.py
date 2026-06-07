@@ -1,7 +1,10 @@
 import cloudinary
 import cloudinary.uploader
+import logging
 import os
 from fastapi import UploadFile, HTTPException
+
+logger = logging.getLogger(__name__)
 
 # Configure Cloudinary using the keys from your .env file
 # It automatically reads CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, etc.
@@ -39,5 +42,5 @@ async def upload_image(file: UploadFile, folder: str = "mdq_plus/general") -> st
         return response.get("secure_url")
 
     except Exception as e:
-        print(f"❌ Upload Error: {e}")
+        logger.error("Failed to upload image to Cloudinary: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Image upload failed")

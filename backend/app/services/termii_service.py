@@ -145,6 +145,7 @@ class TermiiService:
                 "[TERMII] ❌ SMS HTTP error | status=%s | body=%s",
                 exc.response.status_code,
                 exc.response.text,
+                exc_info=True,
             )
         except httpx.RequestError as exc:
             # Network-level failure (DNS, timeout, connection refused, etc.)
@@ -152,12 +153,14 @@ class TermiiService:
                 "[TERMII] ❌ SMS network error | type=%s | detail=%s",
                 type(exc).__name__,
                 exc,
+                exc_info=True,
             )
         except Exception as exc:
             logger.error(
                 "[TERMII] ❌ SMS unexpected error | %s: %s",
                 type(exc).__name__,
                 exc,
+                exc_info=True,
             )
 
         return False

@@ -1,5 +1,6 @@
 import cloudinary
 import cloudinary.uploader
+import logging
 import os
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
@@ -12,6 +13,8 @@ from app.models.user import User
 from app.models.lab_result import LabResult
 from app.services.ai_service import analyze_lab_strip
 from app.schemas.lab import LabAnalysisResponse
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -152,7 +155,7 @@ async def analyze_lab_image(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Lab Analysis Error: {e}")
+        logger.error("Failed to analyze lab strip image: %s", e, exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to analyze image: {str(e)}",
