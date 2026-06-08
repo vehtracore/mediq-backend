@@ -7,6 +7,7 @@ class HealthTipBase(BaseModel):
     category: str
     read_time: str
     image_url: Optional[str] = None
+    external_url: Optional[str] = None
     content: str
 
 class HealthTipCreate(HealthTipBase):
@@ -17,6 +18,7 @@ class HealthTipUpdate(BaseModel):
     category: Optional[str] = None
     read_time: Optional[str] = None
     image_url: Optional[str] = None
+    external_url: Optional[str] = None
     content: Optional[str] = None
 
 class HealthTipResponse(HealthTipBase):
