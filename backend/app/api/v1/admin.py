@@ -25,28 +25,67 @@ class AdminStats(BaseModel):
     total_doctors: int
     subscribed_users: int
     pending_verifications: int
-    total_revenue: float
+    total_completed_consultations: int
     active_appointments: int
 
 @router.get("/stats", response_model=AdminStats)
 def get_admin_stats(db: Session = Depends(get_db), admin: User = Depends(get_current_admin)):
     total_users = db.query(User).filter(User.role == "patient").count()
     total_doctors = db.query(User).filter(User.role == "doctor").count()
-    subscribed_users = db.query(User).filter(User.plan == "premium").count()
+
+    # --- True Active Subscribers ---
+    # Count 1: Primary account holders on an active premium or family plan.
+    primary_subscribers = (
+        db.query(User)
+        .filter(
+            User.role == "patient",
+            User.plan.in_(["premium", "family"]),
+            User.primary_account_id == None,  # noqa: E711  — must be a primary holder
+        )
+        .count()
+    )
+
+    # Count 2: Dependent users whose primary account holder is on an active
+    # family plan. We join User (dependent) → User (primary) and filter on
+    # the primary's plan to avoid counting orphaned / expired links.
+    PrimaryUser = db.query(User).subquery()  # alias for the self-join
+    dependents_covered = (
+        db.query(User)
+        .join(
+            PrimaryUser,
+            User.primary_account_id == PrimaryUser.c.id,
+        )
+        .filter(
+            PrimaryUser.c.plan.in_(["premium", "family"]),
+        )
+        .count()
+    )
+
+    subscribed_users = primary_subscribers + dependents_covered
+
     pending_verifications = db.query(Doctor).filter(Doctor.is_verified == False).count()
-    
-    paid_appts = db.query(Appointment).filter(Appointment.payment_status == "paid").all()
-    total_revenue = sum(a.amount for a in paid_appts)
-    
-    active_appointments = db.query(Appointment).filter(Appointment.status.in_(["pending", "confirmed"])).count()
+
+    # --- Total Completed Consultations ---
+    # Count of all appointments that have reached a terminal "completed" state.
+    total_completed_consultations = (
+        db.query(Appointment)
+        .filter(Appointment.status == "completed")
+        .count()
+    )
+
+    active_appointments = (
+        db.query(Appointment)
+        .filter(Appointment.status.in_(["pending", "confirmed"]))
+        .count()
+    )
 
     return {
         "total_users": total_users,
         "total_doctors": total_doctors,
         "subscribed_users": subscribed_users,
         "pending_verifications": pending_verifications,
-        "total_revenue": total_revenue,
-        "active_appointments": active_appointments
+        "total_completed_consultations": total_completed_consultations,
+        "active_appointments": active_appointments,
     }
 
 @router.get("/users", response_model=List[UserResponse])
