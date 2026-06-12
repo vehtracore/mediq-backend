@@ -285,9 +285,9 @@ def book_appointment(
 
 @router.post("/book-general", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
 def book_general_consultation(req: GeneralBookRequest, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    doctor_payout = 1750.0
-    patient_price = 2500.0 if current_user.plan == "premium" else 4000.0
-    platform_commission = patient_price - doctor_payout
+    patient_price = 4000.0
+    platform_commission = round(patient_price * 0.30, 2)
+    doctor_payout = round(patient_price - platform_commission, 2)
     new_appointment = Appointment(
         patient_id=current_user.id, doctor_id=None, slot_id=None,
         start_time=datetime.utcnow(), status="pending", payment_status="unpaid",
