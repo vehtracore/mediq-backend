@@ -324,6 +324,10 @@ def request_vip_appointment(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
+    # ── VIP FEE FLOOR: default to ₦3,000 when doctor hasn't set a rate ────
+    if not doctor.hourly_rate:
+        doctor.hourly_rate = 3000
+
     # Guardrail: refuse VIP requests for doctors who haven't configured their rate.
     # This prevents ₦0 appointments and confusing zero-value Paystack checkouts.
     if not doctor.hourly_rate or doctor.hourly_rate <= 0:

@@ -121,6 +121,8 @@ def update_doctor_me(data: DoctorUpdate, db: Session = Depends(get_db), current_
     if not doctor: raise HTTPException(404, "Not found")
 
     if data.bio: doctor.bio = data.bio
+    if data.hourly_rate is not None and data.hourly_rate < 3000:
+        raise HTTPException(status_code=400, detail="Minimum consultation fee must be at least ₦3,000.")
     if data.hourly_rate: doctor.hourly_rate = data.hourly_rate
     if data.years_experience: doctor.years_experience = data.years_experience
     if data.image_url: doctor.image_url = data.image_url
