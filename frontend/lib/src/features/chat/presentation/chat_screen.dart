@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -44,6 +46,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _isLoadingMore = false;
 
   bool _isPeerOnline = false;
+
+  RealtimeChannel? _supabaseChannel;
+  bool _isPeerWaitingOnVideo = false;
+  bool _isPeerWaitingOnVoice = false;
 
   String? _mdcnNumber;
 
@@ -174,17 +180,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _channel!.stream.listen((data) {
         final newMessage = jsonDecode(data);
 
-        if (newMessage['type'] == 'presence') {
-          if (newMessage['user_id'] != _myUserId) {
-            if (mounted) {
-              setState(() {
-                _isPeerOnline = newMessage['status'] == 'online';
-              });
-            }
-          }
-          return;
-        }
-
         if (newMessage['type'] == 'call_signal' && newMessage['user_id'] != _myUserId) {
           if (mounted) {
             final mediaType = newMessage['media'] == 'video' ? 'Video' : 'Voice';
@@ -195,12 +190,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 content: Text("The doctor is inviting you to a $mediaType call."),
                 actions: [
                   TextButton(
-                    onPressed: () => Navigator.pop(ctx),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _supabaseChannel?.sendBroadcastMessage(
+                        event: 'call_waiting',
+                        payload: {'type': 'cancel', 'user_id': _myUserId},
+                      );
+                    },
                     child: const Text("Decline"),
                   ),
                   FilledButton(
                     onPressed: () {
                       Navigator.pop(ctx);
+                      _supabaseChannel?.sendBroadcastMessage(
+                        event: 'call_waiting',
+                        payload: {'type': 'cancel', 'user_id': _myUserId},
+                      );
                       // TODO: Navigate to WebRTC room
                     },
                     child: const Text("Join Call"),
@@ -219,10 +224,66 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               _messages[msgIndex] = newMessage;
             } else {
               _messages.insert(0, newMessage);
+
+              if (newMessage['sender_id'] != _myUserId) {
+                HapticFeedback.vibrate();
+                SystemSound.play(SystemSoundType.click);
+              }
             }
           });
         }
       }, onError: (error) => print("WS Error: $error"));
+
+      // Setup Supabase Realtime Presence & Broadcast
+      _supabaseChannel = Supabase.instance.client.channel('chat_room_${widget.appointmentId}');
+      _supabaseChannel!
+        ..onPresenceSync((payload) {
+          final state = _supabaseChannel!.presenceState();
+          bool peerOnline = false;
+          for (final singleState in state) {
+            for (final presence in singleState.presences) {
+              final payload = presence.payload;
+              if (payload['user_id'] != _myUserId) {
+                peerOnline = true;
+              }
+            }
+          }
+          if (mounted) {
+            setState(() {
+              _isPeerOnline = peerOnline;
+            });
+          }
+        })
+        ..onPresenceJoin((payload) {
+          if (mounted) setState(() {});
+        })
+        ..onPresenceLeave((payload) {
+          if (mounted) setState(() {});
+        })
+        ..onBroadcast(event: 'call_waiting', callback: (payload) {
+          if (payload['user_id'] != _myUserId) {
+            if (mounted) {
+              setState(() {
+                if (payload['type'] == 'video_waiting') {
+                  _isPeerWaitingOnVideo = true;
+                } else if (payload['type'] == 'voice_waiting') {
+                  _isPeerWaitingOnVoice = true;
+                } else if (payload['type'] == 'cancel') {
+                  _isPeerWaitingOnVideo = false;
+                  _isPeerWaitingOnVoice = false;
+                }
+              });
+            }
+          }
+        })
+        ..subscribe((status, [error]) {
+          if (status == RealtimeSubscribeStatus.subscribed) {
+            _supabaseChannel!.track({
+              'user_id': _myUserId,
+              'online_at': DateTime.now().toIso8601String()
+            });
+          }
+        });
     } catch (e) {
       print("Connection Error: $e");
     }
@@ -299,6 +360,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
+    _supabaseChannel?.unsubscribe();
     _channel?.sink.close();
     _msgController.dispose();
     _scrollController.dispose();
@@ -371,19 +433,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       color: theme.colorScheme.primary.withOpacity(0.1),
                       shape: BoxShape.circle,
                     ),
-                    child: IconButton(
-                      icon: Icon(Icons.phone_outlined, color: theme.colorScheme.primary, size: 20),
-                      onPressed: () {
-                        if (_channel != null && _myUserId != null) {
-                          _channel!.sink.add(jsonEncode({
-                            "type": "call_signal",
-                            "media": "audio",
-                            "status": "initiated",
-                            "user_id": _myUserId
-                          }));
-                        }
-                        context.push('/video_call?type=voice', extra: widget.appointmentId);
-                      },
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        IconButton(
+                          icon: Icon(Icons.phone_outlined, color: theme.colorScheme.primary, size: 20),
+                          onPressed: () {
+                            if (_channel != null && _myUserId != null) {
+                              _channel!.sink.add(jsonEncode({
+                                "type": "call_signal",
+                                "media": "audio",
+                                "status": "initiated",
+                                "user_id": _myUserId
+                              }));
+                            }
+                            _supabaseChannel?.sendBroadcastMessage(
+                              event: 'call_waiting',
+                              payload: {'type': 'voice_waiting', 'user_id': _myUserId},
+                            );
+                            context.push('/video_call?type=voice', extra: widget.appointmentId).then((_) {
+                              _supabaseChannel?.sendBroadcastMessage(
+                                event: 'call_waiting',
+                                payload: {'type': 'cancel', 'user_id': _myUserId},
+                              );
+                            });
+                          },
+                        ),
+                        if (_isPeerWaitingOnVoice)
+                          const Positioned(
+                            top: 4,
+                            right: 4,
+                            child: _BlinkingDot(color: Colors.green),
+                          ),
+                      ],
                     ),
                   ),
                   Container(
@@ -392,19 +474,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       color: theme.colorScheme.primary.withOpacity(0.1),
                       shape: BoxShape.circle,
                     ),
-                    child: IconButton(
-                      icon: Icon(Icons.videocam_outlined, color: theme.colorScheme.primary, size: 20),
-                      onPressed: () {
-                        if (_channel != null && _myUserId != null) {
-                          _channel!.sink.add(jsonEncode({
-                            "type": "call_signal",
-                            "media": "video",
-                            "status": "initiated",
-                            "user_id": _myUserId
-                          }));
-                        }
-                        context.push('/video_call', extra: widget.appointmentId);
-                      },
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        IconButton(
+                          icon: Icon(Icons.videocam_outlined, color: theme.colorScheme.primary, size: 20),
+                          onPressed: () {
+                            if (_channel != null && _myUserId != null) {
+                              _channel!.sink.add(jsonEncode({
+                                "type": "call_signal",
+                                "media": "video",
+                                "status": "initiated",
+                                "user_id": _myUserId
+                              }));
+                            }
+                            _supabaseChannel?.sendBroadcastMessage(
+                              event: 'call_waiting',
+                              payload: {'type': 'video_waiting', 'user_id': _myUserId},
+                            );
+                            context.push('/video_call', extra: widget.appointmentId).then((_) {
+                              _supabaseChannel?.sendBroadcastMessage(
+                                event: 'call_waiting',
+                                payload: {'type': 'cancel', 'user_id': _myUserId},
+                              );
+                            });
+                          },
+                        ),
+                        if (_isPeerWaitingOnVideo)
+                          const Positioned(
+                            top: 4,
+                            right: 4,
+                            child: _BlinkingDot(color: Colors.green),
+                          ),
+                      ],
                     ),
                   ),
                 ],
@@ -620,6 +722,43 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   ),
                 ),
         ],
+      ),
+    );
+  }
+}
+
+class _BlinkingDot extends StatefulWidget {
+  final Color color;
+  const _BlinkingDot({required this.color});
+
+  @override
+  State<_BlinkingDot> createState() => _BlinkingDotState();
+}
+
+class _BlinkingDotState extends State<_BlinkingDot> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 800))
+      ..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _controller,
+      child: Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(color: widget.color, shape: BoxShape.circle),
       ),
     );
   }

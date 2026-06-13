@@ -120,7 +120,7 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
           final int seatsUsed = 1 + dependents.length; // 1 for primary + dependents
           final int totalSeats = 4;
 
-          return Padding(
+          return SingleChildScrollView(
             padding: const EdgeInsets.all(24.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -239,9 +239,10 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
                     ),
                   )
                 else
-                  Expanded(
-                    child: ListView.separated(
-                      itemCount: dependents.length,
+                  ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: dependents.length,
                       separatorBuilder: (context, index) => const Divider(),
                       itemBuilder: (context, index) {
                         final dependent = dependents[index];
@@ -272,7 +273,6 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
                         );
                       },
                     ),
-                  ),
               ],
             ),
           );

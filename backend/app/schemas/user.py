@@ -1,6 +1,6 @@
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, ConfigDict, computed_field
 from typing import Optional
-from datetime import date
+from datetime import date, datetime
 
 # Base schema with shared fields
 class UserBase(BaseModel):
@@ -72,6 +72,20 @@ class UserResponse(UserBase):
     # Family Plan
     primary_account_id: Optional[int] = None
     dependents: Optional[list['DependentUser']] = []
+
+    # --- 💳 Auto-Renew / Subscription Expiry ---
+    # auto_renew: True  → active recurring subscription (paystack_subscription_code is set)
+    # auto_renew: False → subscription was cancelled; access remains until expiry
+    # This is a computed field — it never needs a value in the DB row; it is derived
+    # live from paystack_subscription_code so the frontend always gets the correct state.
+    paystack_subscription_code: Optional[str] = None  # needed for field access
+    subscription_expiry: Optional[datetime] = None
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def auto_renew(self) -> bool:
+        """True when the user has an active Paystack recurring subscription code."""
+        return self.paystack_subscription_code is not None
 
     model_config = ConfigDict(from_attributes=True)
 

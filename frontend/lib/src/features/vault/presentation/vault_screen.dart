@@ -92,7 +92,7 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
 
       // Write to temp dir
       final tmpDir = await getTemporaryDirectory();
-      final fileName = 'vehtr_records_${DateTime.now().millisecondsSinceEpoch}.pdf';
+      final fileName = 'mdq_records_${DateTime.now().millisecondsSinceEpoch}.pdf';
       final file = File('${tmpDir.path}/$fileName');
       await file.writeAsBytes(bytes, flush: true);
 

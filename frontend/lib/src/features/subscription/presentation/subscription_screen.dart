@@ -14,14 +14,15 @@ class SubscriptionScreen extends ConsumerStatefulWidget {
 class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
   final bool _isLoading = false;
 
-  void _handleSubscribe({required String planTitle, required double parsedPrice, required bool isFamily}) {
+  Future<void> _handleSubscribe({required String planTitle, required double parsedPrice, required bool isFamily}) async {
     final user = ref.read(userProvider).value;
-    context.push('/payment', extra: {
+    await context.push('/payment', extra: {
       'transactionType': isFamily ? 'family_subscription' : 'subscription',
       'baseAmount': parsedPrice,
       'title': planTitle,
       'userId': user?.id,
     });
+    ref.invalidate(userProvider);
   }
 
   void _showJoinFamilyDialog() {

@@ -8,6 +8,8 @@ class User {
   final String imageUrl; // ✅ Sanitized URL
   final String? location;
   final bool isBanned;
+  final bool autoRenew;
+  final String? subscriptionExpiry;
 
   // --- 🏥 Medical History ---
   final String? bloodType;
@@ -43,6 +45,8 @@ class User {
     this.imageUrl = '',
     this.location,
     this.isBanned = false,
+    this.autoRenew = true,
+    this.subscriptionExpiry,
     this.bloodType,
     this.allergies,
     this.chronicConditions,
@@ -86,6 +90,8 @@ class User {
       imageUrl: finalUrl,
       location: json['location'],
       isBanned: json['is_banned'] ?? false,
+      autoRenew: json['auto_renew'] ?? true,
+      subscriptionExpiry: json['subscription_expiry']?.toString(),
 
       bloodType: json['blood_type'],
       allergies: json['allergies'],
@@ -117,6 +123,8 @@ class User {
       'image_url': imageUrl,
       'location': location,
       'is_banned': isBanned,
+      'auto_renew': autoRenew,
+      'subscription_expiry': subscriptionExpiry,
       'blood_type': bloodType,
       'allergies': allergies,
       'chronic_conditions': chronicConditions,

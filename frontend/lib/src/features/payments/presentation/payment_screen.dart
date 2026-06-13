@@ -227,9 +227,10 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
 
   // ── Summary view (before checkout is opened) ─────────────────────────────────
   Widget _buildSummaryView(ThemeData theme, ColorScheme cs) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
         // ── Order Summary Card ────────────────────────────────────────────────
         Card(
           elevation: 0,
@@ -299,7 +300,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
           ),
         ),
 
-        const Spacer(),
+        const SizedBox(height: 48),
 
         // ── Security badge ────────────────────────────────────────────────────
         Row(
@@ -351,16 +352,18 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
                   ),
           ),
         ),
-      ],
+        ],
+      ),
     );
   }
 
   // ── Awaiting webhook confirmation view ───────────────────────────────────────
   Widget _buildAwaitingConfirmationView(ThemeData theme, ColorScheme cs) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
         // ── Animated icon ─────────────────────────────────────────────────────
         Center(
           child: Container(
@@ -456,7 +459,8 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
             style: TextStyle(color: cs.primary),
           ),
         ),
-      ],
+        ],
+      ),
     );
   }
 }
