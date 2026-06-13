@@ -49,6 +49,13 @@ def update_health_tip(
         raise HTTPException(status_code=404, detail="Health Tip not found")
     
     update_data = tip_in.model_dump(exclude_unset=True)
+
+    # Normalize empty-string URL fields to NULL so the DB column
+    # stores a true NULL rather than a zombie blank string.
+    for url_field in ("image_url", "external_url"):
+        if url_field in update_data and update_data[url_field] == "":
+            update_data[url_field] = None
+
     for field, value in update_data.items():
         setattr(tip, field, value)
         
