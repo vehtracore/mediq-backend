@@ -13,7 +13,7 @@ Design notes
 • The Resend SDK is already installed (resend>=2.4.0 in requirements.txt).
 • RESEND_API_KEY and ADMIN_EMAIL are read from environment variables.
 • The sender address MUST belong to a domain verified in the Resend dashboard
-  (currently vehtr.com). Update FROM_ADDRESS if the verified domain changes.
+  (currently mdqplus.com). Update FROM_ADDRESS if the verified domain changes.
 • The endpoint always returns 200 to the client even when the email fails so
   that a transient Resend error does not surface a 500 to users — the failure
   is logged for ops visibility.

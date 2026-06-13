@@ -35,6 +35,8 @@ class _DoctorEditProfileScreenState
         TextEditingController(text: widget.doctor.yearsExperience.toString());
   }
 
+  String? _rateError;
+
   Future<void> _pickImage() async {
     final picker = ImagePicker();
     final pickedFile = await picker.pickImage(
@@ -54,7 +56,16 @@ class _DoctorEditProfileScreenState
   }
 
   Future<void> _handleSave() async {
-    setState(() => _isLoading = true);
+    final rate = double.tryParse(_rateCtrl.text.trim()) ?? 0;
+    if (rate < 3000) {
+      setState(() => _rateError = "Minimum fee is ₦3,000");
+      return;
+    }
+
+    setState(() {
+      _rateError = null;
+      _isLoading = true;
+    });
     try {
       String? uploadedImageUrl;
       if (_selectedImage != null) {
@@ -66,7 +77,7 @@ class _DoctorEditProfileScreenState
       // Update DOCTOR Profile
       await ref.read(doctorRepositoryProvider).updateDoctorProfile(
             bio: _bioCtrl.text.trim(),
-            hourlyRate: double.tryParse(_rateCtrl.text.trim()),
+            hourlyRate: rate,
             yearsExperience: int.tryParse(_expCtrl.text.trim()),
             imageUrl: uploadedImageUrl,
           );
@@ -147,10 +158,14 @@ class _DoctorEditProfileScreenState
             TextField(
                 controller: _rateCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
+                onChanged: (val) {
+                  if (_rateError != null) setState(() => _rateError = null);
+                },
+                decoration: InputDecoration(
                     labelText: "Rate (₦)",
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.payments))),
+                    errorText: _rateError,
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.payments))),
             const SizedBox(height: 16),
             TextField(
                 controller: _expCtrl,

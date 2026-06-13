@@ -118,7 +118,7 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
 
           final dependents = user.dependents;
           final int seatsUsed = 1 + dependents.length; // 1 for primary + dependents
-          final int totalSeats = 5;
+          final int totalSeats = 4;
 
           return Padding(
             padding: const EdgeInsets.all(24.0),

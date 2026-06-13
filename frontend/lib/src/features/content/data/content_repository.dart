@@ -29,7 +29,7 @@ class HealthTip {
       category: json['category'],
       readTime: json['read_time'],
       imageUrl: json['image_url'],
-      externalLink: json['external_link'],
+      externalLink: json['external_url'],
       content: json['content'],
     );
   }
@@ -72,7 +72,7 @@ class ContentRepository {
           "read_time": readTime,
           "content": content,
           "image_url": imageUrl,
-          "external_link": externalLink,
+          "external_url": externalLink,
         },
       );
     } catch (e) {
@@ -98,7 +98,7 @@ class ContentRepository {
           if (readTime != null) "read_time": readTime,
           if (content != null) "content": content,
           if (imageUrl != null) "image_url": imageUrl,
-          if (externalLink != null) "external_link": externalLink,
+          if (externalLink != null) "external_url": externalLink,
         },
       );
     } catch (e) {

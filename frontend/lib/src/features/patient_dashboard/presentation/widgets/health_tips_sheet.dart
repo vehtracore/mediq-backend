@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/features/content/data/content_repository.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 final healthTipsProvider = FutureProvider.autoDispose((ref) async {
   return await ref.watch(contentRepositoryProvider).getHealthTips();
@@ -52,7 +53,7 @@ class HealthTipsSheet extends ConsumerWidget {
                 data: (tips) => ListView.builder(
                   controller: scrollController,
                   padding: const EdgeInsets.all(24),
-                  itemCount: tips.length + 1,
+                  itemCount: tips.isEmpty ? 2 : tips.length + 1,
                   itemBuilder: (context, index) {
                     if (index == 0) {
                       return Column(
@@ -73,6 +74,15 @@ class HealthTipsSheet extends ConsumerWidget {
                         ],
                       );
                     }
+                    if (tips.isEmpty) {
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 40),
+                          child: Text("No health tips available.",
+                              style: theme.textTheme.bodyMedium),
+                        ),
+                      );
+                    }
                     final tip = tips[index - 1];
                     return _TipCard(tip: tip);
                   },
@@ -87,7 +97,7 @@ class HealthTipsSheet extends ConsumerWidget {
 }
 
 class _TipCard extends StatelessWidget {
-  final dynamic tip;
+  final HealthTip tip;
   const _TipCard({required this.tip});
 
   @override
@@ -104,41 +114,80 @@ class _TipCard extends StatelessWidget {
             : Colors.grey[50], // ✅ Dynamic Card
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-                color: Colors.white, borderRadius: BorderRadius.circular(16)),
-            child: const Text("🍎", style: TextStyle(fontSize: 32)),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                      color: const Color(0xFF4A90E2).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: Text(tip.category.toUpperCase(),
-                      style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF4A90E2))),
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                          color: const Color(0xFF4A90E2).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8)),
+                      child: Text(tip.category.toUpperCase(),
+                          style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF4A90E2))),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(tip.title,
+                        style: theme.textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold)), // ✅ Dynamic
+                    const SizedBox(height: 4),
+                    Text(tip.readTime,
+                        style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                Text(tip.title,
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold)), // ✅ Dynamic
-                const SizedBox(height: 4),
-                Text(tip.readTime,
-                    style: TextStyle(fontSize: 12, color: Colors.grey[500])),
-              ],
-            ),
+              ),
+            ],
           ),
+          if (tip.imageUrl != null && tip.imageUrl!.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.network(
+                tip.imageUrl!,
+                width: double.infinity,
+                height: 150,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => const SizedBox(),
+              ),
+            ),
+          ],
+          if (tip.content.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(tip.content, style: theme.textTheme.bodyMedium),
+          ],
+          if (tip.externalLink != null && tip.externalLink!.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final url = Uri.tryParse(tip.externalLink!);
+                if (url != null) {
+                  try {
+                    await launchUrl(url, mode: LaunchMode.externalApplication);
+                  } catch (e) {
+                    debugPrint('Could not launch $url');
+                  }
+                }
+              },
+              icon: const Icon(Icons.open_in_new, size: 18),
+              label: const Text("Read More"),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF4A90E2),
+                side: const BorderSide(color: Color(0xFF4A90E2)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

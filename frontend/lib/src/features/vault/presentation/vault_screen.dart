@@ -206,27 +206,9 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
                           color: Colors.white,
                         ),
                       )
-                    : Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(7),
-                            decoration: BoxDecoration(
-                              color: _kBlue,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: const Icon(Icons.health_and_safety_rounded,
-                                color: Colors.white, size: 20),
-                          ),
-                          const SizedBox(width: 10),
-                          Text(
-                            'Records',
-                            style: GoogleFonts.poppins(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: isDark ? Colors.white : const Color(0xFF2D3436),
-                            ),
-                          ),
-                        ],
+                    : Text(
+                        'Records',
+                        style: theme.textTheme.titleLarge,
                       ),
                 actions: [
                   if (inSelectionMode) ...[

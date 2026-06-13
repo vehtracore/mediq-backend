@@ -40,7 +40,7 @@ logger = logging.getLogger("uvicorn.error")
 # ---------------------------------------------------------------------------
 
 _FAMILY_PLAN_NAME  = "family"
-_MAX_DEPENDENTS    = 4          # primary + 4 = 5 total members
+_MAX_DEPENDENTS    = 3          # primary + 3 = 4 total members
 _INVITE_TTL_HOURS  = 72         # invite codes expire after 3 days
 _INVITE_TOKEN_TYPE = "family_invite"
 
@@ -115,7 +115,7 @@ def _assert_valid_primary(user: User) -> None:
     if len(user.dependents) >= _MAX_DEPENDENTS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Family plan is full (maximum 4 dependents reached).",
+            detail="Family plan is full (maximum 3 dependents reached).",
         )
 
 
@@ -177,7 +177,7 @@ def generate_invite_code(
     if len(current_user.dependents) >= _MAX_DEPENDENTS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Family plan is full (maximum 4 dependents reached).",
+            detail="Family plan is full (maximum 3 dependents reached).",
         )
 
     token = _create_invite_token(current_user.id)

@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
-import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
-import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 
 class SplashScreen extends ConsumerStatefulWidget {
   const SplashScreen({super.key});
@@ -15,58 +13,38 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    _checkSession();
+    _checkFirstLaunch();
   }
 
-  Future<void> _checkSession() async {
-    // Brief pause so the splash animation is visible
+  // ---------------------------------------------------------------------------
+  // _checkFirstLaunch
+  //
+  // The GoRouter redirect (app_router.dart) is now the SOLE authority for all
+  // role-based navigation.  The only job left for the splash screen is to
+  // detect brand-new users (no session at all) and show the Onboarding flow.
+  //
+  // For authenticated users, we simply wait — the router's resolvedRoleProvider
+  // will fire once the role is loaded and trigger an automatic redirect to the
+  // correct dashboard with NO risk of a race condition.
+  // ---------------------------------------------------------------------------
+  Future<void> _checkFirstLaunch() async {
+    // Minimum display time so the splash logo is visible.
     await Future.delayed(const Duration(milliseconds: 800));
     if (!mounted) return;
 
-    try {
-      // Supabase.instance.client.auth.currentSession is synchronously available
-      // after Supabase.initialize() resolves in main(). No race condition.
-      final session = Supabase.instance.client.auth.currentSession;
+    final session = Supabase.instance.client.auth.currentSession;
 
-      if (session == null) {
-        // No valid session — go to onboarding for new users
-        context.go('/onboarding');
-        return;
-      }
-
-      // Session exists: fetch the backend user profile to determine role
-      try {
-        final user = await ref.read(userProvider.future);
-        if (!mounted) return;
-
-        if (user?.role == 'doctor') {
-          try {
-            final doctor =
-                await ref.read(authRepositoryProvider).getMyDoctorProfile();
-            switch (doctor.status) {
-              case 'active':
-                context.go('/doctor_home');
-              case 'rejected':
-                context.go('/doctor_rejected');
-              default:
-                context.go('/auth');
-            }
-          } catch (_) {
-            context.go('/auth');
-          }
-        } else if (user?.role == 'admin') {
-          context.go('/admin_dashboard');
-        } else {
-          context.go('/patient_home');
-        }
-      } catch (_) {
-        // Backend unreachable but Supabase session is valid— send to auth to retry
-        context.go('/auth');
-      }
-    } catch (e) {
-      if (mounted) context.go('/auth');
+    if (session == null) {
+      // Genuinely new / logged-out user — show onboarding.
+      // The router will also handle this case but we fast-path here to avoid
+      // showing the loading spinner longer than necessary.
+      context.go('/onboarding');
     }
+    // If session != null: do nothing. The GoRouter redirect is already
+    // watching resolvedRoleProvider and will push to the correct dashboard
+    // as soon as the role resolves.  No competing navigation needed.
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -92,17 +70,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
                 const SizedBox(height: 40),
                 const CircularProgressIndicator(color: Colors.white),
                 const SizedBox(height: 50),
-                TextButton.icon(
-                  onPressed: () async {
-                    await Supabase.instance.client.auth.signOut();
-                    if (context.mounted) context.go('/auth');
-                  },
-                  icon: const Icon(Icons.delete_forever, color: Colors.white70),
-                  label: const Text(
-                    "Stuck? Clear Data",
-                    style: TextStyle(color: Colors.white70),
-                  ),
-                ),
+
               ],
             ),
           ),

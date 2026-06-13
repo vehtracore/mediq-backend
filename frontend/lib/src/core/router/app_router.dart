@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
+import '../../features/auth/data/auth_repository.dart';
 
 // Feature Imports
 import '../../features/splash/splash_screen.dart';
@@ -54,6 +55,41 @@ final supabaseAuthProvider = StreamProvider<AuthState>((ref) {
   return Supabase.instance.client.auth.onAuthStateChange;
 });
 
+// ---------------------------------------------------------------------------
+// Role Provider — single source of truth for the current user's role.
+//
+// Strategy (fast-path first, no unnecessary network calls):
+//   1. Read role from the Supabase JWT user_metadata synchronously.  This is
+//      populated by the backend on register and is present in the cached
+//      session — zero latency, works offline.
+//   2. If the JWT metadata has no role (legacy accounts), fall back to a
+//      backend call to /api/v1/auth/me.
+//   3. Returns null when there is no active session.
+// ---------------------------------------------------------------------------
+final resolvedRoleProvider = FutureProvider<String?>((ref) async {
+  // Re-evaluate whenever the auth stream fires (sign-in, sign-out, refresh).
+  final authAsync = ref.watch(supabaseAuthProvider);
+
+  // Still loading the stream — propagate the loading state.
+  if (authAsync.isLoading) return null;
+
+  final session = authAsync.valueOrNull?.session;
+  if (session == null) return null; // Logged out.
+
+  // Fast-path: role embedded in the Supabase JWT by the backend at sign-up.
+  final metaRole = session.user.userMetadata?['role'] as String?;
+  if (metaRole != null && metaRole.isNotEmpty) return metaRole;
+
+  // Slow-path: fetch from the backend profile endpoint (legacy / edge-case).
+  try {
+    final repo = ref.read(authRepositoryProvider);
+    final user = await repo.getUserProfile();
+    return user?.role;
+  } catch (_) {
+    return null; // Backend unreachable — treat as unresolved.
+  }
+});
+
 // Tracks whether the current session is a password-recovery flow.
 // GoRouter reads this via redirect to send the user to /update-password
 // instead of a normal dashboard.
@@ -63,8 +99,10 @@ final _isPasswordRecoveryProvider = StateProvider<bool>((ref) => false);
 final passwordRecoveryProvider = _isPasswordRecoveryProvider;
 
 final goRouterProvider = Provider<GoRouter>((ref) {
-  // Watch the auth stream so GoRouter rebuilds on every session change.
+  // Watch both the auth stream AND the resolved role so GoRouter rebuilds
+  // on every session change AND whenever the role finishes loading.
   final authState = ref.watch(supabaseAuthProvider);
+  final roleAsync = ref.watch(resolvedRoleProvider);
 
   // Detect PASSWORD_RECOVERY events from the Supabase stream and set the flag.
   ref.listen<AsyncValue<AuthState>>(supabaseAuthProvider, (_, next) {
@@ -84,45 +122,93 @@ final goRouterProvider = Provider<GoRouter>((ref) {
     navigatorKey: rootNavigatorKey,
     initialLocation: '/',
     // -------------------------------------------------------------------------
-    // Redirect: the single source of truth for auth-gated navigation.
+    // Redirect — strict role-enforcement auth gate.
     //
-    // States:
-    //   loading  → show '/'  (SplashScreen) while Supabase reads storage
-    //   no session → force '/auth'
-    //   has session → let the route through; block back-navigation to '/auth'
+    // Decision tree:
+    //   1. Auth stream still loading           → hold on '/' (SplashScreen)
+    //   2. PASSWORD_RECOVERY event             → force '/update-password'
+    //   3. No session                          → force '/auth'
+    //   4. Session present, role still loading → hold on '/' (SplashScreen)
+    //   5. Role resolved:
+    //        doctor  → only /doctor_home and doctor-only paths allowed
+    //        patient → only /patient_home and patient-only paths allowed
+    //        admin   → /admin_dashboard
+    //        unknown → '/auth' (cannot determine role — treat as unauthenticated)
     // -------------------------------------------------------------------------
     redirect: (context, state) {
-      // Still loading the auth stream — stay on splash
+      final loc = state.matchedLocation;
+
+      // ── Step 1: Supabase session stream still initialising ────────────────
       if (authState.isLoading) {
-        return state.matchedLocation == '/' ? null : '/';
+        return loc == '/' ? null : '/';
       }
 
-      // PASSWORD_RECOVERY deep link: always send to the update-password screen.
-      // This gate runs before the normal isLoggedIn check because a recovery
-      // session is technically "logged in" but should not reach a dashboard.
+      // ── Step 2: Password-recovery deep link ──────────────────────────────
       if (isPasswordRecovery) {
-        return state.matchedLocation == '/update-password' ? null : '/update-password';
+        return loc == '/update-password' ? null : '/update-password';
       }
 
       final session = authState.valueOrNull?.session;
       final isLoggedIn = session != null;
-      final isOnAuthPage = state.matchedLocation == '/auth' ||
-          state.matchedLocation == '/' ||
-          state.matchedLocation == '/onboarding' ||
-          state.matchedLocation == '/safety_disclaimer' ||
-          state.matchedLocation == '/update-password' ||
-          state.matchedLocation == '/doctor_register';
 
-      // Not logged in and trying to access a protected route → kick to /auth
-      if (!isLoggedIn && !isOnAuthPage) return '/auth';
+      // Public routes — accessible without a session.
+      const publicRoutes = {
+        '/auth',
+        '/',
+        '/onboarding',
+        '/safety_disclaimer',
+        '/update-password',
+        '/doctor_register',
+      };
+      final isPublicRoute = publicRoutes.contains(loc);
 
-      // Logged in but stuck on an auth/splash page → redirect to splash
-      // which will resolve the correct dashboard via _checkSession()
-      if (isLoggedIn && (state.matchedLocation == '/auth' ||
-          state.matchedLocation == '/onboarding' ||
-          state.matchedLocation == '/safety_disclaimer')) return '/';
+      // ── Step 3: No session → kick to /auth ───────────────────────────────
+      if (!isLoggedIn) {
+        return isPublicRoute ? null : '/auth';
+      }
 
-      return null; // No redirect needed
+      // ── Step 4: Session exists but role not yet resolved ─────────────────
+      // Keep the user on the splash screen until we know their role so we
+      // never accidentally drop them on the wrong dashboard.
+      if (roleAsync.isLoading || (!roleAsync.hasValue && !roleAsync.hasError)) {
+        return loc == '/' ? null : '/';
+      }
+
+      // ── Step 5: Role resolved — enforce strict routing ───────────────────
+      final role = roleAsync.valueOrNull;
+
+      // Could not determine role (backend error / unknown role string).
+      // Clear session-aware state and bounce to /auth.
+      if (role == null || (role != 'doctor' && role != 'patient' && role != 'admin')) {
+        // Only redirect away from public routes to avoid infinite loops.
+        return isPublicRoute ? null : '/auth';
+      }
+
+      // Logged-in user landing on a public/splash page → send to their home.
+      if (isPublicRoute && loc != '/update-password' && loc != '/doctor_register') {
+        if (role == 'doctor') return '/doctor_home';
+        if (role == 'admin') return '/admin_dashboard';
+        return '/patient_home';
+      }
+
+      // ── Cross-role contamination guard ───────────────────────────────────
+      // A doctor must never reach the patient dashboard and vice-versa.
+      // Patient trying to reach doctor routes → patient home.
+      if (role == 'patient' && (loc == '/doctor_home' ||
+          loc == '/doctor_edit_profile' ||
+          loc == '/doctor_availability' ||
+          loc == '/payout_settings')) {
+        return '/patient_home';
+      }
+      // Doctor trying to reach patient-only routes → doctor home.
+      if (role == 'doctor' && (loc == '/patient_home' ||
+          loc == '/find_doctor' ||
+          loc == '/book_appointment' ||
+          loc == '/medical_history')) {
+        return '/doctor_home';
+      }
+
+      return null; // Route is valid for this role — allow.
     },
     routes: [
       GoRoute(path: '/', builder: (context, state) => const SplashScreen()),

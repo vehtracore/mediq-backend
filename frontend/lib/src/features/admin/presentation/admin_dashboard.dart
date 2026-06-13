@@ -256,10 +256,10 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
               runSpacing: 16,
               children: [
                 _StatCard(
-                    title: "Total Revenue",
-                    value: "₦${stats['total_revenue']}",
+                    title: "Total Consultations",
+                    value: "${stats['total_completed_consultations'] ?? 0}",
                     color: Colors.green,
-                    icon: Icons.payments),
+                    icon: Icons.assignment_turned_in),
                 _StatCard(
                     title: "Subscribed",
                     value: "${stats['subscribed_users'] ?? 0}",

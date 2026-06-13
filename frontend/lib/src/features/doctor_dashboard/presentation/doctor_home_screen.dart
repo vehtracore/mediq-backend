@@ -91,7 +91,7 @@ class _DoctorDashboardTab extends ConsumerWidget {
                         child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text("Good Morning,",
+                              Text("Welcome back,",
                                   style: theme
                                       .textTheme.bodyMedium), // ✅ Dynamic Text
                               Text("Dr. ${user?.lastName ?? ''}",

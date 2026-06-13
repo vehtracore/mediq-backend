@@ -172,7 +172,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
               title: "Free Plan",
               price: "₦0/mo",
               features: [
-                "3 AI Chats per day",
+                "Limited AI chats per day",
                 "Standard Doctor Booking",
                 "Basic Health Tips"
               ],
@@ -183,7 +183,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
             _buildPlanCard(
               context,
               title: "MDQ+ Premium",
-              price: "₦2,500/mo",
+              price: "₦3,000/mo",
               features: [
                 "Unlimited AI Chats",
                 "Priority Doctor Access",

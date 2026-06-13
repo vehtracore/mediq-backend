@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_repository.dart';
 import 'package:mediq_app/src/shared/presentation/widgets/skeleton_loader.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../../presentation/widgets/global_error_widget.dart';
 
 // ─── Bank model ───────────────────────────────────────────────────────────────
@@ -118,6 +119,17 @@ class _PayoutSettingsScreenState extends ConsumerState<PayoutSettingsScreen> {
     }
   }
 
+  Future<void> _launchURL(String urlString) async {
+    try {
+      final Uri url = Uri.parse(urlString);
+      if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+        throw Exception('Could not launch $urlString');
+      }
+    } catch (e) {
+      if (mounted) _showSnack('Could not open link: $e', isError: true);
+    }
+  }
+
   void _showSnack(String msg, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
@@ -220,7 +232,7 @@ class _PayoutSettingsScreenState extends ConsumerState<PayoutSettingsScreen> {
                             text: 'Payout Terms & Conditions',
                             style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold,
                                 decoration: TextDecoration.underline, decorationColor: Colors.white),
-                            recognizer: TapGestureRecognizer()..onTap = () => _showSnack('Payout T&Cs coming soon.'),
+                            recognizer: TapGestureRecognizer()..onTap = () => _launchURL("https://mdqplus.com/legal.html#payout-terms"),
                           )],
                         )),
                       ]),
