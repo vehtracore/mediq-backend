@@ -67,9 +67,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       if (!mounted) return;
 
       // Redirect based on role
-      if (user?.role == 'admin') {
+      if (user == null) {
+        context.go('/login');
+      } else if (user.role == 'admin') {
         context.go('/admin_dashboard');
-      } else if (user?.role == 'doctor') {
+      } else if (user.role == 'doctor') {
         try {
           final doctor = await ref.read(authRepositoryProvider).getMyDoctorProfile();
           if (!mounted) return;
@@ -81,12 +83,23 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         } catch (e) {
           if (mounted) context.go('/');
         }
-      } else {
+      } else if (user.role == 'patient') {
         context.go('/patient_home');
+      } else {
+        await Supabase.instance.client.auth.signOut();
+        if (mounted) context.go('/login');
       }
     } catch (e) {
-      // Fallback if user fetch fails but login succeeded
-      if (mounted) context.go('/patient_home');
+      await Supabase.instance.client.auth.signOut();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('We could not restore your secure session. Please log in again.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        context.go('/login');
+      }
     }
   }
 

@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 import '../../features/auth/data/auth_repository.dart';
+import '../storage/storage_service.dart';
 
 // Feature Imports
 import '../../features/splash/splash_screen.dart';
@@ -55,6 +56,66 @@ final supabaseAuthProvider = StreamProvider<AuthState>((ref) {
   return Supabase.instance.client.auth.onAuthStateChange;
 });
 
+bool _sessionNeedsRefresh(Session session) {
+  final expiresAt = session.expiresAt;
+  if (expiresAt == null) return false;
+
+  final expiry = DateTime.fromMillisecondsSinceEpoch(
+    expiresAt * 1000,
+    isUtc: true,
+  );
+  return expiry.isBefore(DateTime.now().toUtc().add(const Duration(minutes: 1)));
+}
+
+final sessionRestoreProvider = FutureProvider<bool>((ref) async {
+  ref.watch(supabaseAuthProvider);
+
+  final auth = Supabase.instance.client.auth;
+  final storage = ref.read(storageServiceProvider);
+  final currentSession = auth.currentSession;
+  final storedRefreshToken = await storage.getRefreshToken();
+
+  if (currentSession == null &&
+      (storedRefreshToken == null || storedRefreshToken.isEmpty)) {
+    return false;
+  }
+
+  if (currentSession != null && !_sessionNeedsRefresh(currentSession)) {
+    await storage.saveToken(currentSession.accessToken);
+    final refreshToken = currentSession.refreshToken;
+    if (refreshToken != null && refreshToken.isNotEmpty) {
+      await storage.saveRefreshToken(refreshToken);
+    }
+    return true;
+  }
+
+  final refreshToken = currentSession?.refreshToken ?? storedRefreshToken;
+  if (refreshToken == null || refreshToken.isEmpty) {
+    await storage.deleteToken();
+    return false;
+  }
+
+  try {
+    final response = await auth.refreshSession(refreshToken);
+    final refreshedSession = response.session ?? auth.currentSession;
+    if (refreshedSession == null) {
+      await storage.deleteToken();
+      return false;
+    }
+
+    await storage.saveToken(refreshedSession.accessToken);
+    final refreshedToken = refreshedSession.refreshToken;
+    if (refreshedToken != null && refreshedToken.isNotEmpty) {
+      await storage.saveRefreshToken(refreshedToken);
+    }
+    return true;
+  } catch (_) {
+    await auth.signOut();
+    await storage.deleteToken();
+    return false;
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Role Provider — single source of truth for the current user's role.
 //
@@ -69,11 +130,14 @@ final supabaseAuthProvider = StreamProvider<AuthState>((ref) {
 final resolvedRoleProvider = FutureProvider<String?>((ref) async {
   // Re-evaluate whenever the auth stream fires (sign-in, sign-out, refresh).
   final authAsync = ref.watch(supabaseAuthProvider);
+  final sessionReady = ref.watch(sessionRestoreProvider);
 
   // Still loading the stream — propagate the loading state.
   if (authAsync.isLoading) return null;
+  if (sessionReady.isLoading || sessionReady.valueOrNull != true) return null;
 
-  final session = authAsync.valueOrNull?.session;
+  final session =
+      Supabase.instance.client.auth.currentSession ?? authAsync.valueOrNull?.session;
   if (session == null) return null; // Logged out.
 
   // Fast-path: role embedded in the Supabase JWT by the backend at sign-up.
@@ -102,6 +166,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
   // Watch both the auth stream AND the resolved role so GoRouter rebuilds
   // on every session change AND whenever the role finishes loading.
   final authState = ref.watch(supabaseAuthProvider);
+  final sessionRestore = ref.watch(sessionRestoreProvider);
   final roleAsync = ref.watch(resolvedRoleProvider);
 
   // Detect PASSWORD_RECOVERY events from the Supabase stream and set the flag.
@@ -125,7 +190,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
     // Redirect — strict role-enforcement auth gate.
     //
     // Decision tree:
-    //   1. Auth stream still loading           → hold on '/' (SplashScreen)
+    //   1. Auth/session restore still loading  → hold on '/' (SplashScreen)
     //   2. PASSWORD_RECOVERY event             → force '/update-password'
     //   3. No session                          → force '/auth'
     //   4. Session present, role still loading → hold on '/' (SplashScreen)
@@ -139,7 +204,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       final loc = state.matchedLocation;
 
       // ── Step 1: Supabase session stream still initialising ────────────────
-      if (authState.isLoading) {
+      if (authState.isLoading || sessionRestore.isLoading) {
         return loc == '/' ? null : '/';
       }
 
@@ -154,6 +219,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // Public routes — accessible without a session.
       const publicRoutes = {
         '/auth',
+        '/login',
         '/',
         '/onboarding',
         '/safety_disclaimer',
@@ -163,8 +229,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       final isPublicRoute = publicRoutes.contains(loc);
 
       // ── Step 3: No session → kick to /auth ───────────────────────────────
-      if (!isLoggedIn) {
-        return isPublicRoute ? null : '/auth';
+      final hasRestoredSession = sessionRestore.valueOrNull == true;
+
+      if (!isLoggedIn || !hasRestoredSession) {
+        return isPublicRoute ? null : '/login';
       }
 
       // ── Step 4: Session exists but role not yet resolved ─────────────────
@@ -181,7 +249,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // Clear session-aware state and bounce to /auth.
       if (role == null || (role != 'doctor' && role != 'patient' && role != 'admin')) {
         // Only redirect away from public routes to avoid infinite loops.
-        return isPublicRoute ? null : '/auth';
+        return isPublicRoute ? null : '/login';
       }
 
       // Logged-in user landing on a public/splash page → send to their home.
@@ -219,6 +287,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           path: '/safety_disclaimer',
           builder: (context, state) => const SafetyDisclaimerScreen()),
       GoRoute(path: '/auth', builder: (context, state) => const AuthScreen()),
+      GoRoute(path: '/login', builder: (context, state) => const AuthScreen()),
       GoRoute(
           path: '/patient_home',
           builder: (context, state) => const PatientHomeScreen()),

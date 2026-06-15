@@ -2,10 +2,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
 import 'api_constants.dart';
 import '../router/app_router.dart';
+import '../storage/storage_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 import 'app_exception.dart';
 
@@ -18,23 +18,85 @@ final dioProvider = Provider<Dio>((ref) {
   );
 
   final dio = Dio(options);
+  final storage = ref.read(storageServiceProvider);
+  Future<String?>? refreshInFlight;
 
-  // --- FIX: USE CONSISTENT OPTIONS ---
-  const storage = FlutterSecureStorage();
+  bool isSessionExpiring(Session session) {
+    final expiresAt = session.expiresAt;
+    if (expiresAt == null) return false;
 
-  // Define the EXACT same options as used in storage_service.dart to ensure we read the same file
-  AndroidOptions getAndroidOptions() => const AndroidOptions(
-        encryptedSharedPreferences: true,
-      );
+    final expiry = DateTime.fromMillisecondsSinceEpoch(
+      expiresAt * 1000,
+      isUtc: true,
+    );
+    return expiry.isBefore(DateTime.now().toUtc().add(const Duration(minutes: 1)));
+  }
+
+  Future<void> persistSession(Session session) async {
+    await storage.saveToken(session.accessToken);
+
+    final refreshToken = session.refreshToken;
+    if (refreshToken != null && refreshToken.isNotEmpty) {
+      await storage.saveRefreshToken(refreshToken);
+    }
+  }
+
+  Future<String?> refreshAccessToken() {
+    if (refreshInFlight != null) return refreshInFlight!;
+
+    refreshInFlight = (() async {
+      final auth = Supabase.instance.client.auth;
+      final refreshToken =
+          auth.currentSession?.refreshToken ?? await storage.getRefreshToken();
+
+      if (refreshToken == null || refreshToken.isEmpty) {
+        return null;
+      }
+
+      final response = await auth.refreshSession(refreshToken);
+      final session = response.session ?? auth.currentSession;
+      if (session == null) return null;
+
+      await persistSession(session);
+      return session.accessToken;
+    })();
+
+    return refreshInFlight!.whenComplete(() {
+      refreshInFlight = null;
+    });
+  }
+
+  Future<String?> validAccessToken() async {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) return null;
+
+    if (isSessionExpiring(session)) {
+      return refreshAccessToken();
+    }
+
+    await persistSession(session);
+    return session.accessToken;
+  }
+
+  Future<void> clearSessionAndRouteToLogin() async {
+    try {
+      await Supabase.instance.client.auth.signOut();
+    } catch (_) {}
+
+    await storage.deleteToken();
+
+    final context = rootNavigatorKey.currentContext;
+    if (context != null && context.mounted) {
+      GoRouter.of(context).go('/login');
+    }
+  }
 
   dio.interceptors.add(
-    InterceptorsWrapper(
+    QueuedInterceptorsWrapper(
       onRequest: (options, handler) async {
         try {
-          // 1. Retrieve the current Supabase session token
-          final token = Supabase.instance.client.auth.currentSession?.accessToken;
+          final token = await validAccessToken();
 
-          // 2. Attach Token
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
           } else {
@@ -67,21 +129,35 @@ final dioProvider = Provider<Dio>((ref) {
         }
 
         // --- 401 UNAUTHORIZED CHECK: Silent Refresh ---
-        if (e.response?.statusCode == 401) {
-          if (kDebugMode) print('⚠️ [AUTH] -> 401 Detected. Supabase token invalid or expired. Logging out.');
-          
-          try {
-            await Supabase.instance.client.auth.signOut();
-          } catch (_) {}
-          
-          // Legacy cleanup just in case
-          await storage.delete(key: 'auth_token', aOptions: getAndroidOptions());
-          await storage.delete(key: 'refresh_token', aOptions: getAndroidOptions());
-          
-          final context = rootNavigatorKey.currentContext;
-          if (context != null && context.mounted) {
-            GoRouter.of(context).go('/auth');
+        if (e.response?.statusCode == 401 &&
+            e.requestOptions.extra['authRetry'] != true) {
+          if (kDebugMode) {
+            print('⚠️ [AUTH] -> 401 Detected. Attempting silent token refresh.');
           }
+
+          try {
+            final refreshedToken = await refreshAccessToken();
+            if (refreshedToken != null && refreshedToken.isNotEmpty) {
+              final retryOptions = e.requestOptions.copyWith(
+                headers: {
+                  ...e.requestOptions.headers,
+                  'Authorization': 'Bearer $refreshedToken',
+                },
+                extra: {
+                  ...e.requestOptions.extra,
+                  'authRetry': true,
+                },
+              );
+              final retryResponse = await dio.fetch<dynamic>(retryOptions);
+              return handler.resolve(retryResponse);
+            }
+          } catch (refreshError) {
+            if (kDebugMode) {
+              print('⚠️ [AUTH] -> Silent refresh failed: $refreshError');
+            }
+          }
+
+          await clearSessionAndRouteToLogin();
           return handler.next(e);
         }
 
@@ -96,11 +172,8 @@ final dioProvider = Provider<Dio>((ref) {
               print('🚫 [AUTH] -> Account suspended. Logging out...');
             }
 
-            // 1. Clear token
-            await storage.delete(
-                key: 'auth_token', aOptions: getAndroidOptions());
+            await storage.deleteToken();
 
-            // 2. Show dialog & navigate to login
             final context = rootNavigatorKey.currentContext;
             if (context != null && context.mounted) {
               showDialog(
@@ -115,7 +188,7 @@ final dioProvider = Provider<Dio>((ref) {
                     TextButton(
                       onPressed: () {
                         Navigator.of(context).pop(); // close dialog
-                        GoRouter.of(context).go('/auth');
+                        GoRouter.of(context).go('/login');
                       },
                       child: const Text('Understood'),
                     ),

@@ -1,19 +1,17 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 
-// ✅ FIXED: userProvider now correctly handles nullable User?
 final userProvider = FutureProvider<User?>((ref) async {
   final repo = ref.watch(authRepositoryProvider);
 
-  try {
-    // FIX: Changed type from 'User' to 'User?' to prevent crash
-    final User? remote = await repo.getUserProfile();
-    return remote;
-  } catch (e) {
-    // If user is not logged in or error occurs, return null
+  if (Supabase.instance.client.auth.currentSession == null) {
     return null;
   }
+
+  final User? remote = await repo.getUserProfile();
+  return remote;
 });
 
 class UserController extends StateNotifier<AsyncValue<User?>> {

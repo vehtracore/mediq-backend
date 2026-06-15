@@ -261,14 +261,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           if (mounted) setState(() {});
         })
         ..onBroadcast(event: 'call_waiting', callback: (payload) {
-          if (payload['user_id'] != _myUserId) {
+          final callPayload = payload['payload'] is Map
+              ? Map<String, dynamic>.from(payload['payload'] as Map)
+              : payload;
+
+          if (callPayload['user_id'] != _myUserId) {
             if (mounted) {
               setState(() {
-                if (payload['type'] == 'video_waiting') {
+                if (callPayload['type'] == 'video_waiting') {
                   _isPeerWaitingOnVideo = true;
-                } else if (payload['type'] == 'voice_waiting') {
+                } else if (callPayload['type'] == 'voice_waiting') {
                   _isPeerWaitingOnVoice = true;
-                } else if (payload['type'] == 'cancel') {
+                } else if (callPayload['type'] == 'cancel') {
                   _isPeerWaitingOnVideo = false;
                   _isPeerWaitingOnVoice = false;
                 }

@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -10,6 +11,17 @@ from app.core.database import get_db
 from app.models.user import User
 
 logger = logging.getLogger("uvicorn.error")
+
+
+def _is_subscription_expired(user: User) -> bool:
+    if user.subscription_expiry is None:
+        return False
+
+    expiry = user.subscription_expiry
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+
+    return expiry < datetime.now(timezone.utc)
 
 # ---------------------------------------------------------------------------
 # Supabase JWT configuration — asymmetric ES256 via JWKS
@@ -114,6 +126,18 @@ def get_current_user(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Account suspended. Please contact support.",
             )
+
+    if _is_subscription_expired(user):
+        logger.info(
+            "[AUTH] Lazy subscription downgrade — user_id=%s expired_at=%s",
+            user.id,
+            user.subscription_expiry,
+        )
+        user.plan = "free"
+        user.subscription_expiry = None
+        user.paystack_subscription_code = None
+        db.commit()
+        db.refresh(user)
 
     logger.debug(f"[AUTH] ✅ Authenticated: {user.first_name} ({user.email})")
     return user

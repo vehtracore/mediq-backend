@@ -64,6 +64,30 @@ def map_appt(a, doc_name=None, patient_name=None):
         prescription=getattr(a, 'prescription', None),
     )
 
+
+def _close_stale_patient_consultations(db: Session, patient_id: int) -> int:
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
+    stale_count = (
+        db.query(Appointment)
+        .filter(
+            Appointment.patient_id == patient_id,
+            Appointment.status == "active",
+            Appointment.start_time < cutoff,
+        )
+        .update({Appointment.status: "completed"}, synchronize_session=False)
+    )
+
+    db.commit()
+
+    if stale_count:
+        logger.info(
+            "[APPT LAZY SWEEP] Closed %d stale active consultation(s) for patient_id=%s.",
+            stale_count,
+            patient_id,
+        )
+
+    return stale_count
+
 # ---------------------------------------------------------------------------
 # Historical Context: Fetch the last 3 completed consultations for a patient
 # ---------------------------------------------------------------------------
@@ -423,6 +447,8 @@ def request_vip_appointment(
 
 @router.get("/my", response_model=List[AppointmentResponse])
 def get_my_appointments(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
+    _close_stale_patient_consultations(db, current_user.id)
+
     # Eager load review to avoid N+1
     scheduled = db.query(Appointment).options(joinedload(Appointment.review), joinedload(Appointment.slot)).join(DoctorSlot, Appointment.slot_id == DoctorSlot.id).filter(Appointment.patient_id == current_user.id).all()
     general = db.query(Appointment).options(joinedload(Appointment.review)).filter(Appointment.patient_id == current_user.id, Appointment.slot_id == None).all()

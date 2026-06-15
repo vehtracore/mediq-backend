@@ -17,14 +17,50 @@ class AuthRepository {
   final Dio _dio;
   AuthRepository(this._dio);
 
+  static const _secureStorage = FlutterSecureStorage();
+  static const _secureStorageOptions = AndroidOptions(
+    encryptedSharedPreferences: true,
+  );
+
+  Future<void> _persistSession(supabase.Session? session) async {
+    if (session == null) return;
+
+    await _secureStorage.write(
+      key: 'auth_token',
+      value: session.accessToken,
+      aOptions: _secureStorageOptions,
+    );
+
+    final refreshToken = session.refreshToken;
+    if (refreshToken != null && refreshToken.isNotEmpty) {
+      await _secureStorage.write(
+        key: 'refresh_token',
+        value: refreshToken,
+        aOptions: _secureStorageOptions,
+      );
+    }
+  }
+
+  Future<void> _clearStoredSession() async {
+    await _secureStorage.delete(
+      key: 'auth_token',
+      aOptions: _secureStorageOptions,
+    );
+    await _secureStorage.delete(
+      key: 'refresh_token',
+      aOptions: _secureStorageOptions,
+    );
+  }
+
   // --- AUTHENTICATION ---
 
   Future<void> login(String email, String password) async {
     try {
-      await supabase.Supabase.instance.client.auth.signInWithPassword(
+      final response = await supabase.Supabase.instance.client.auth.signInWithPassword(
         email: email,
         password: password,
       );
+      await _persistSession(response.session);
     } on supabase.AuthException catch (e) {
       throw Exception(e.message);
     } catch (e) {
@@ -39,6 +75,7 @@ class AuthRepository {
         email: email,
         password: password,
       );
+      await _persistSession(response.session);
       
       // 2. Provision the backend DB row
       if (response.user != null) {
@@ -68,24 +105,23 @@ class AuthRepository {
     } catch (e) {
       debugPrint('Supabase logout error: $e');
     }
-    
-    // Legacy cleanup just in case
-    const storage = FlutterSecureStorage();
-    await storage.delete(key: 'auth_token', aOptions: const AndroidOptions(encryptedSharedPreferences: true));
-    await storage.delete(key: 'refresh_token', aOptions: const AndroidOptions(encryptedSharedPreferences: true));
+
+    await _clearStoredSession();
   }
 
   // --- USER DATA ---
 
-  Future<User?> getUserProfile() => getCurrentUser();
-
-  Future<User?> getCurrentUser() async {
-    try {
-      final response = await _dio.get('/api/v1/auth/me');
-      return User.fromJson(response.data);
-    } catch (e) {
+  Future<User?> getUserProfile() async {
+    if (supabase.Supabase.instance.client.auth.currentSession == null) {
       return null;
     }
+
+    return getCurrentUser();
+  }
+
+  Future<User?> getCurrentUser() async {
+    final response = await _dio.get('/api/v1/auth/me');
+    return User.fromJson(response.data);
   }
 
   Future<void> updateUser({
