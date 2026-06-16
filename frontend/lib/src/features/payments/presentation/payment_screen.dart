@@ -51,13 +51,18 @@ class PaymentScreen extends ConsumerStatefulWidget {
   ConsumerState<PaymentScreen> createState() => _PaymentScreenState();
 }
 
-class _PaymentScreenState extends ConsumerState<PaymentScreen> {
+class _PaymentScreenState extends ConsumerState<PaymentScreen>
+    with WidgetsBindingObserver {
   // ── State ────────────────────────────────────────────────────────────────────
   bool _isLoading = false;
 
   /// Set to true once the browser has been launched. The UI transitions to
   /// an "Awaiting confirmation" view so the user knows what to expect.
   bool _awaitingWebhook = false;
+  bool _isVerifying = false;
+  bool _hasOpenedCheckout = false;
+  bool _hasAutoVerifiedForCurrentCheckout = false;
+  String? _verificationMessage;
 
   /// The reference used for this checkout session (either pre-supplied by the
   /// backend or generated locally).
@@ -77,6 +82,25 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        _hasOpenedCheckout &&
+        _awaitingWebhook &&
+        !_hasAutoVerifiedForCurrentCheckout &&
+        !_isVerifying) {
+      _hasAutoVerifiedForCurrentCheckout = true;
+      _verifyPayment();
+    }
   }
 
   // ── Checkout logic ───────────────────────────────────────────────────────────
@@ -144,15 +168,20 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
         return;
       }
 
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-
       // ── Step 3: Transition UI to "Awaiting confirmation" state ────────────
-      // The actual DB update is handled by the backend webhook. The frontend
-      // pops back with the reference so the calling screen can display a
-      // "Payment pending" badge or poll the status.
+      // The backend webhook may confirm the DB while the user is in Paystack.
+      // When the app resumes, we also call /verify/{reference} to close the
+      // loop immediately if the webhook is delayed.
       if (mounted) {
-        setState(() => _awaitingWebhook = true);
+        setState(() {
+          _awaitingWebhook = true;
+          _hasOpenedCheckout = true;
+          _hasAutoVerifiedForCurrentCheckout = false;
+          _verificationMessage = 'Waiting for Paystack confirmation...';
+        });
       }
+
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     } on DioException catch (e) {
       _showSnack(UIErrorFormatter.getMessage(e), isError: true);
       debugPrint('[PAYMENTS] DioException during initialize: $e');
@@ -164,11 +193,56 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
     }
   }
 
-  /// Called when the user taps "Done" after the browser has been opened.
-  /// Returns the reference to the previous screen so it can display a
-  /// pending-payment indicator or trigger a status poll.
-  void _dismissToCallerWithReference() {
-    Navigator.of(context).pop(_reference);
+  Future<void> _verifyPayment() async {
+    if (_isVerifying) return;
+
+    setState(() {
+      _isVerifying = true;
+      _verificationMessage = 'Verifying your payment...';
+    });
+
+    try {
+      final dio = ref.read(dioProvider);
+      final response = await dio.get(
+        '${ApiConstants.baseUrl}/api/v1/payments/verify/$_reference',
+        options: Options(
+          receiveTimeout: const Duration(seconds: 20),
+        ),
+      );
+
+      final data = response.data;
+      final verified = data is Map && data['verified'] == true;
+
+      if (verified) {
+        ref.invalidate(userProvider);
+        if (mounted) {
+          _showSnack('Payment confirmed successfully.');
+          Navigator.of(context).pop(_reference);
+        }
+        return;
+      }
+
+      if (mounted) {
+        setState(() {
+          _verificationMessage =
+              'Payment is not confirmed yet. If you completed payment, this should update shortly.';
+        });
+      }
+    } on DioException catch (e) {
+      if (mounted) {
+        setState(() {
+          _verificationMessage = UIErrorFormatter.getMessage(e);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _verificationMessage = UIErrorFormatter.getMessage(e);
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _isVerifying = false);
+    }
   }
 
   /// Returns the Paystack Plan Code for recurring subscription types,
@@ -396,18 +470,28 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
               shape: BoxShape.circle,
               color: cs.primaryContainer,
             ),
-            child: Icon(
-              Icons.hourglass_top_rounded,
-              size: 48,
-              color: cs.primary,
-            ),
+            child: _isVerifying
+                ? Padding(
+                    padding: const EdgeInsets.all(28),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 3,
+                      color: cs.primary,
+                    ),
+                  )
+                : Icon(
+                    Icons.hourglass_top_rounded,
+                    size: 48,
+                    color: cs.primary,
+                  ),
           ),
         ),
         const SizedBox(height: 32),
 
         // ── Heading ───────────────────────────────────────────────────────────
         Text(
-          'Awaiting Payment Confirmation',
+          _isVerifying
+              ? 'Verifying Payment'
+              : 'Awaiting Payment Confirmation',
           textAlign: TextAlign.center,
           style: theme.textTheme.headlineSmall?.copyWith(
             fontWeight: FontWeight.bold,
@@ -418,9 +502,9 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
 
         // ── Body copy ─────────────────────────────────────────────────────────
         Text(
-          'Complete your payment in the browser that just opened.\n\n'
-          'Once Paystack processes your payment, your appointment will be '
-          'confirmed automatically — no further action is needed here.',
+          _verificationMessage ??
+              'Complete your payment in the browser that just opened.\n\n'
+                  'When you return to MDQ+, we will verify it automatically.',
           textAlign: TextAlign.center,
           style: theme.textTheme.bodyMedium?.copyWith(
             color: cs.onSurfaceVariant,
@@ -449,34 +533,44 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
         ),
         const SizedBox(height: 48),
 
-        // ── Done button ───────────────────────────────────────────────────────
+        // ── Verification status action ────────────────────────────────────────
         SizedBox(
           height: 56,
           child: ElevatedButton(
-            onPressed: _dismissToCallerWithReference,
+            onPressed: _isVerifying ? null : _verifyPayment,
             style: ElevatedButton.styleFrom(
               backgroundColor: cs.primary,
               foregroundColor: cs.onPrimary,
+              disabledBackgroundColor: cs.primary.withOpacity(0.5),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
               elevation: 0,
             ),
-            child: const Text(
-              'Done',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.5,
-              ),
-            ),
+            child: _isVerifying
+                ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Text(
+                    'Check payment status',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
           ),
         ),
         const SizedBox(height: 16),
 
         // ── Re-open browser link ──────────────────────────────────────────────
         TextButton(
-          onPressed: _handlePayment,
+          onPressed: _isLoading || _isVerifying ? null : _handlePayment,
           child: Text(
             'Re-open payment page',
             style: TextStyle(color: cs.primary),

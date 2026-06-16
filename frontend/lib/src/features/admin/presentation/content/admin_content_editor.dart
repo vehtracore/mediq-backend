@@ -73,6 +73,9 @@ class _AdminContentEditorScreenState
 
     setState(() => _isLoading = true);
     final repo = ref.read(contentRepositoryProvider);
+    final trimmedImageUrl = _imgUrl?.trim();
+    final imageUrl =
+        trimmedImageUrl == null || trimmedImageUrl.isEmpty ? null : trimmedImageUrl;
 
     try {
       if (widget.healthTip == null) {
@@ -82,7 +85,7 @@ class _AdminContentEditorScreenState
           category: _catCtrl.text.trim(),
           readTime: _timeCtrl.text.trim(),
           content: _contentCtrl.text.trim(),
-          imageUrl: _imgUrl,
+          imageUrl: imageUrl,
           externalLink: _externalLinkCtrl.text.trim().isEmpty ? null : _externalLinkCtrl.text.trim(),
         );
       } else {
@@ -93,7 +96,8 @@ class _AdminContentEditorScreenState
           category: _catCtrl.text.trim(),
           readTime: _timeCtrl.text.trim(),
           content: _contentCtrl.text.trim(),
-          imageUrl: _imgUrl,
+          imageUrl: imageUrl,
+          includeImageUrl: true,
           externalLink: _externalLinkCtrl.text.trim().isEmpty ? null : _externalLinkCtrl.text.trim(),
         );
       }

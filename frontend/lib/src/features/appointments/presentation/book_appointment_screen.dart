@@ -55,14 +55,22 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
           const SnackBar(content: Text("Please select a time slot")));
       return;
     }
+
+    final notes = _notesController.text.trim();
+    if (notes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please provide a reason for your visit")),
+      );
+      return;
+    }
+
     FocusScope.of(context).unfocus();
     setState(() => _isBooking = true);
 
     try {
       final appointment = await ref
           .read(appointmentRepositoryProvider)
-          .bookSlot(
-              slotId: _selectedSlotId!, notes: _notesController.text.trim());
+          .bookSlot(slotId: _selectedSlotId!, notes: notes);
       if (!mounted) return;
       final Map<String, dynamic> paymentData = {
         'transactionType': 'specialist_consult',
@@ -228,9 +236,29 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                     ),
                 const SizedBox(height: 32),
                 Center(
-                  child: FilledButton.tonal(
+                  child: OutlinedButton(
                     onPressed: () => _showVIPRequestSheet(context, ref, widget.doctor.id),
-                    child: const Text("None of these times work? Request an Appointment"),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: theme.colorScheme.primary,
+                      side: BorderSide(
+                        color: theme.colorScheme.primary.withOpacity(0.35),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 12,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text("Request a different time"),
+                        SizedBox(width: 8),
+                        Icon(Icons.arrow_forward_ios, size: 14),
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 32),
@@ -364,6 +392,16 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                   onPressed: isSubmitting
                       ? null
                       : () async {
+                          final reason = reasonController.text.trim();
+                          if (reason.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text(
+                                      "Please provide a reason for your visit")),
+                            );
+                            return;
+                          }
+
                           setModalState(() => isSubmitting = true);
                           try {
                             await ref
@@ -371,7 +409,7 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                                 .requestVIPAppointment(
                                   doctorId: doctorId,
                                   preferredTime: preferredTime,
-                                  notes: reasonController.text,
+                                  notes: reason,
                                 );
                             if (ctx.mounted) {
                               Navigator.pop(ctx);

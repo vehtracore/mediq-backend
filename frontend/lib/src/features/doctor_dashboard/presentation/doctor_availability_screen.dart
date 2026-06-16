@@ -40,6 +40,19 @@ class _DoctorAvailabilityScreenState
 
   bool get _isCreating => _creatingHour != null;
 
+  bool _isSelectedDate(DateTime value) {
+    return value.year == _selectedDate.year &&
+        value.month == _selectedDate.month &&
+        value.day == _selectedDate.day;
+  }
+
+  Set<int> _existingSlotHoursForSelectedDate(List<dynamic> slots) {
+    return slots
+        .where((slot) => _isSelectedDate(slot.startTime as DateTime))
+        .map<int>((slot) => (slot.startTime as DateTime).hour)
+        .toSet();
+  }
+
   Future<void> _selectDate(BuildContext context) async {
     final DateTime? picked = await showDatePicker(
       context: context,
@@ -187,6 +200,16 @@ class _DoctorAvailabilityScreenState
             ],
           ),
           data: (doctor) {
+            final slotsAsync = ref.watch(myDoctorSlotsProvider);
+            final existingSlotHours = slotsAsync.maybeWhen(
+              data: _existingSlotHoursForSelectedDate,
+              orElse: () => <int>{},
+            );
+            final addableHours = _standardHours
+                .where((hour) => !existingSlotHours.contains(hour))
+                .toList();
+            final canAddSlots = slotsAsync.hasValue;
+
             return SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
               child: Padding(
@@ -256,38 +279,51 @@ class _DoctorAvailabilityScreenState
                     Wrap(
                       spacing: 12,
                       runSpacing: 12,
-                      children: _standardHours.map((hour) {
-                        final timeLabel = DateFormat(
-                          'h:mm a',
-                        ).format(DateTime(2023, 1, 1, hour));
-                        final isCreatingThisHour = _creatingHour == hour;
-    
-                        return ActionChip(
-                          label: Text(
-                            isCreatingThisHour ? 'Adding...' : timeLabel,
-                            style: theme.textTheme.bodyMedium,
-                          ),
-                          backgroundColor: theme.cardColor,
-                          surfaceTintColor: Colors.transparent,
-                          elevation: 1,
-                          onPressed: _isCreating
-                              ? null
-                              : () => _addSlot(hour, doctor.id),
-                          avatar: isCreatingThisHour
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(
-                                  Icons.add,
-                                  size: 16,
-                                  color: Color(0xFF4A90E2),
+                      children: addableHours.isEmpty
+                          ? [
+                              Text(
+                                'All standard times are already added for this date.',
+                                style: TextStyle(
+                                  color: Colors.grey[500],
+                                  fontSize: 13,
                                 ),
-                        );
-                      }).toList(),
+                              ),
+                            ]
+                          : addableHours.map((hour) {
+                              final timeLabel = DateFormat(
+                                'h:mm a',
+                              ).format(DateTime(2023, 1, 1, hour));
+                              final isCreatingThisHour =
+                                  _creatingHour == hour;
+
+                              return ActionChip(
+                                label: Text(
+                                  isCreatingThisHour
+                                      ? 'Adding...'
+                                      : timeLabel,
+                                  style: theme.textTheme.bodyMedium,
+                                ),
+                                backgroundColor: theme.cardColor,
+                                surfaceTintColor: Colors.transparent,
+                                elevation: 1,
+                                onPressed: _isCreating || !canAddSlots
+                                    ? null
+                                    : () => _addSlot(hour, doctor.id),
+                                avatar: isCreatingThisHour
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(
+                                        Icons.add,
+                                        size: 16,
+                                        color: Color(0xFF4A90E2),
+                                      ),
+                              );
+                            }).toList(),
                     ),
     
                     const SizedBox(height: 40),
@@ -298,7 +334,7 @@ class _DoctorAvailabilityScreenState
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
-                    ref.watch(myDoctorSlotsProvider).when(
+                    slotsAsync.when(
                       loading: () => const Padding(
                         padding: EdgeInsets.symmetric(vertical: 8),
                         child: LinearProgressIndicator(),

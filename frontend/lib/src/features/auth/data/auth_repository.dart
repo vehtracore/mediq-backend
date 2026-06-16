@@ -292,6 +292,21 @@ class AuthRepository {
     }
   }
 
+  Future<void> restoreSubscription() async {
+    try {
+      final response = await _dio.post('/api/v1/subscription/restore');
+      if (response.statusCode != null && response.statusCode! >= 400) {
+        throw Exception("Failed to restore subscription.");
+      }
+    } on DioException catch (e) {
+      final msg = e.response?.data['detail'] ??
+          "Restore subscription failed. Please try again.";
+      throw Exception(msg);
+    } catch (e) {
+      throw Exception("Restore subscription failed: $e");
+    }
+  }
+
   // --- SUPPORT ---
 
   Future<void> sendSupportMessage({required String subject, required String message}) async {

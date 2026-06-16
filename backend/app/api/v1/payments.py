@@ -297,6 +297,7 @@ def _apply_db_update(
         expiry = datetime.utcnow() + timedelta(days=30)
         user.plan = "family" if transaction_type == "family_subscription" else "premium"
         user.subscription_expiry = expiry
+        user.auto_renew = True
         db.commit()
         db.refresh(user)
 
@@ -581,6 +582,7 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
 
     user.plan = "premium"
     user.subscription_expiry = datetime.utcnow() + timedelta(days=30)
+    user.auto_renew = True
     user.burst_chat_count = 0
 
     # ── Capture subscription codes if Paystack includes them ───────────────────
@@ -638,7 +640,7 @@ def _handle_subscription_disable(data: dict, db: Session) -> dict:
     """
     Handle subscription.disable (and subscription.not_renew) events from Paystack.
 
-    Downgrades the user's plan back to 'free'.
+    Marks auto-renew disabled while preserving paid access until expiry.
 
     Raises ValueError when required fields are missing or the user is not found.
     """
@@ -662,21 +664,21 @@ def _handle_subscription_disable(data: dict, db: Session) -> dict:
     if not user:
         raise ValueError(f"subscription.disable: user id={user_id_raw} not found.")
 
-    # Downgrade plan
-    user.plan = "free"
-    user.subscription_expiry = None
+    # Preserve paid access until subscription_expiry; lazy expiry enforcement
+    # downgrades the plan when the paid period is actually over.
+    user.auto_renew = False
     db.commit()
     db.refresh(user)
 
     logger.info(
-        "[WEBHOOK] subscription.disable — downgraded user_id=%s to free tier.",
+        "[WEBHOOK] subscription.disable — disabled auto_renew for user_id=%s.",
         user.id,
     )
 
     return {
         "action": "subscription_disabled",
         "user_id": user.id,
-        "plan": "free",
+        "plan": user.plan,
     }
 
 
@@ -720,6 +722,7 @@ def _handle_subscription_create(data: dict, db: Session) -> dict:
     user.paystack_subscription_code = subscription_code
     if email_token:
         user.paystack_email_token = email_token
+    user.auto_renew = True
 
     # Also ensure the plan is upgraded in case charge.success was missed
     if user.plan not in ("premium", "family"):

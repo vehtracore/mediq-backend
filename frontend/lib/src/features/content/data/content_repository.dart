@@ -28,10 +28,28 @@ class HealthTip {
       title: json['title'],
       category: json['category'],
       readTime: json['read_time'],
-      imageUrl: json['image_url'],
+      imageUrl: _sanitizeHealthTipImageUrl(json['image_url']),
       externalLink: json['external_url'],
       content: json['content'],
     );
+  }
+
+  static String? _sanitizeHealthTipImageUrl(dynamic value) {
+    if (value is! String) return null;
+
+    final trimmed = value.trim();
+    if (trimmed.isEmpty || !trimmed.startsWith('http')) return null;
+
+    final host = Uri.tryParse(trimmed)?.host.toLowerCase() ?? '';
+    final isRandomPlaceholderHost =
+        host == 'source.unsplash.com' ||
+        host == 'images.unsplash.com' ||
+        host == 'picsum.photos' ||
+        host == 'loremflickr.com' ||
+        host == 'placehold.co' ||
+        host.contains('placeholder');
+
+    return isRandomPlaceholderHost ? null : trimmed;
   }
 }
 
@@ -44,6 +62,12 @@ final contentRepositoryProvider = Provider<ContentRepository>((ref) {
 class ContentRepository {
   final Dio _dio;
   ContentRepository(this._dio);
+
+  String? _normalizeOptionalUrl(String? value) {
+    final trimmed = value?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    return trimmed;
+  }
 
   Future<List<HealthTip>> getHealthTips() async {
     try {
@@ -71,8 +95,8 @@ class ContentRepository {
           "category": category,
           "read_time": readTime,
           "content": content,
-          "image_url": imageUrl,
-          "external_url": externalLink,
+          "image_url": _normalizeOptionalUrl(imageUrl),
+          "external_url": _normalizeOptionalUrl(externalLink),
         },
       );
     } catch (e) {
@@ -88,8 +112,10 @@ class ContentRepository {
     String? content,
     String? imageUrl,
     String? externalLink,
+    bool includeImageUrl = false,
   }) async {
     try {
+      final normalizedImageUrl = _normalizeOptionalUrl(imageUrl);
       await _dio.put(
         '/api/v1/content/admin/tips/$id',
         data: {
@@ -97,8 +123,9 @@ class ContentRepository {
           if (category != null) "category": category,
           if (readTime != null) "read_time": readTime,
           if (content != null) "content": content,
-          if (imageUrl != null) "image_url": imageUrl,
-          if (externalLink != null) "external_url": externalLink,
+          if (includeImageUrl) "image_url": normalizedImageUrl,
+          if (externalLink != null)
+            "external_url": _normalizeOptionalUrl(externalLink),
         },
       );
     } catch (e) {

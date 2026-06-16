@@ -29,6 +29,7 @@ class User(Base):
     # --- SUBSCRIPTION & LIMITS ---
     plan = Column(String, default="free")  # 'free' or 'premium'
     subscription_expiry = Column(DateTime, nullable=True)
+    auto_renew = Column(Boolean, default=False, nullable=False)
     
     # ── Chat Limits (tiered token-bucket system) ─────────────────────────────
     #

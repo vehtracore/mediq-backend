@@ -10,6 +10,15 @@ from app.api.v1.admin import get_current_admin # Reuse admin dependency
 
 router = APIRouter()
 
+
+def _normalize_url_fields(data: dict) -> dict:
+    for url_field in ("image_url", "external_url"):
+        value = data.get(url_field)
+        if isinstance(value, str):
+            value = value.strip()
+            data[url_field] = value or None
+    return data
+
 # --- PUBLIC ENDPOINTS ---
 
 @router.get("/tips", response_model=List[HealthTipResponse])
@@ -31,7 +40,7 @@ def create_health_tip(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin)
 ):
-    new_tip = HealthTip(**tip_in.model_dump())
+    new_tip = HealthTip(**_normalize_url_fields(tip_in.model_dump()))
     db.add(new_tip)
     db.commit()
     db.refresh(new_tip)
@@ -48,13 +57,7 @@ def update_health_tip(
     if not tip:
         raise HTTPException(status_code=404, detail="Health Tip not found")
     
-    update_data = tip_in.model_dump(exclude_unset=True)
-
-    # Normalize empty-string URL fields to NULL so the DB column
-    # stores a true NULL rather than a zombie blank string.
-    for url_field in ("image_url", "external_url"):
-        if url_field in update_data and update_data[url_field] == "":
-            update_data[url_field] = None
+    update_data = _normalize_url_fields(tip_in.model_dump(exclude_unset=True))
 
     for field, value in update_data.items():
         setattr(tip, field, value)

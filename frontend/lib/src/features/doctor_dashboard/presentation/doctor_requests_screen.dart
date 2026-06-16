@@ -207,6 +207,34 @@ class _RequestCardState extends ConsumerState<_RequestCard> {
     }
   }
 
+  Future<void> _confirmDecline(int appointmentId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('Decline Request'),
+        content: const Text('Are you sure you want to decline this request?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Decline'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    await _runAction(
+      'decline',
+      () => ref.read(requestsControllerProvider.notifier).decline(appointmentId),
+    );
+  }
+
   Widget _buttonSpinner({Color color = Colors.white}) {
     return SizedBox(
       width: 18,
@@ -351,10 +379,7 @@ class _RequestCardState extends ConsumerState<_RequestCard> {
                   child: OutlinedButton(
                     onPressed: isBusy
                         ? null
-                        : () => _runAction(
-                              'decline',
-                              () => controller.decline(appointment.id),
-                            ),
+                        : () => _confirmDecline(appointment.id),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.red,
                     ),

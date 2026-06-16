@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/auth/presentation/auth_controller.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
@@ -234,6 +235,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     // Only active hosts and solo-premium users can cancel.
     final bool canCancel = !isFamilyDep && !isCancelled;
     bool isCancelling = false;
+    bool isRestoring = false;
 
     showModalBottomSheet(
       context: context,
@@ -351,17 +353,100 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: Colors.orange.withOpacity(0.3)),
                   ),
-                  child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.info_outline_rounded,
-                          size: 18, color: Colors.orange),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Subscription Cancelled. Access remains until ${user.subscriptionExpiry?.split('T')[0] ?? "the end of your billing cycle"}.',
-                          style: const TextStyle(fontSize: 13, color: Colors.orange),
-                        ),
+                      Row(
+                        children: [
+                          const Icon(Icons.info_outline_rounded,
+                              size: 18, color: Colors.orange),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              "Subscription Cancelled. Access remains until ${user.subscriptionExpiry?.split('T')[0] ?? 'the end of your billing cycle'}.",
+                              style: const TextStyle(
+                                  fontSize: 13, color: Colors.orange),
+                            ),
+                          ),
+                        ],
                       ),
+                      const SizedBox(height: 8),
+                      TextButton(
+                        onPressed: isRestoring
+                            ? null
+                            : () async {
+                                final messenger =
+                                    ScaffoldMessenger.of(context);
+                                setSheetState(() => isRestoring = true);
+                                try {
+                                  await ref
+                                      .read(authControllerProvider.notifier)
+                                      .restoreSubscription();
+                                  ref.invalidate(userProvider);
+
+                                  if (sheetCtx.mounted) {
+                                    Navigator.of(sheetCtx).pop();
+                                  }
+                                  if (!context.mounted) return;
+                                  messenger.showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                          'Subscription auto-renew restored!'),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                } catch (e) {
+                                  if (sheetCtx.mounted) {
+                                    setSheetState(() => isRestoring = false);
+                                  }
+                                  if (!context.mounted) return;
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                          UIErrorFormatter.getMessage(e)),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                }
+                              },
+                        style: TextButton.styleFrom(
+                          padding: EdgeInsets.zero,
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          foregroundColor: Colors.orange.shade700,
+                        ),
+                        child: isRestoring
+                            ? Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.orange.shade700,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Restoring...',
+                                    style: TextStyle(
+                                      color: Colors.orange.shade700,
+                                      decoration: TextDecoration.underline,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : Text(
+                                'Restore Subscription',
+                                style: TextStyle(
+                                  color: Colors.orange.shade700,
+                                  decoration: TextDecoration.underline,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                        ),
                     ],
                   ),
                 ),

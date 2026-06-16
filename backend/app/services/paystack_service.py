@@ -324,6 +324,71 @@ class PaystackService:
         )
         return resp_json
 
+    async def enable_subscription(
+        self,
+        subscription_code: str,
+        email_token: str,
+    ) -> dict:
+        """
+        Re-enable a previously disabled Paystack recurring subscription.
+
+        Paystack uses the same subscription ``code`` and email ``token`` pair
+        for subscription enable/disable operations.
+        """
+        endpoint = f"{PAYSTACK_BASE_URL}/subscription/enable"
+        body = {
+            "code": subscription_code,
+            "token": email_token,
+        }
+
+        logger.info(
+            "[PAYSTACK] Enabling subscription | code='%s'",
+            subscription_code,
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(
+                    endpoint, json=body, headers=self._headers
+                )
+        except httpx.RequestError as exc:
+            logger.error(
+                "[PAYSTACK] ❌ Network error enabling subscription: %s: %s",
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Could not reach Paystack to restore your subscription. "
+                    "Please try again later."
+                ),
+            ) from exc
+
+        try:
+            resp_json: dict = response.json()
+        except Exception:
+            resp_json = {}
+
+        paystack_status: bool = resp_json.get("status", False)
+        paystack_message: str = resp_json.get("message", "Unknown error from Paystack")
+
+        if not response.is_success or not paystack_status:
+            logger.error(
+                "[PAYSTACK] ❌ Subscription restore failed | HTTP %s | message='%s' | code='%s'",
+                response.status_code,
+                paystack_message,
+                subscription_code,
+            )
+            raise HTTPException(status_code=400, detail=paystack_message)
+
+        logger.info(
+            "[PAYSTACK] ✅ Subscription enabled — code='%s'",
+            subscription_code,
+        )
+        return resp_json
+
 
 # ── Module-level singleton ─────────────────────────────────────────────────────
 # Import this instance wherever you need Paystack interactions:

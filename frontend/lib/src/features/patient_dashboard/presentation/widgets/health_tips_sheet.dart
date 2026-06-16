@@ -104,9 +104,10 @@ class _TipCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final imageUrl = tip.imageUrl;
-    final hasValidUrl =
-        imageUrl != null && imageUrl.isNotEmpty && imageUrl.trim().startsWith('http');
+    final rawImageUrl = tip.imageUrl?.trim();
+    final imageUrl =
+        rawImageUrl == null || rawImageUrl.isEmpty ? null : rawImageUrl;
+    final hasValidUrl = imageUrl != null && imageUrl.startsWith('http');
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -150,26 +151,19 @@ class _TipCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          if (hasValidUrl)
+          if (hasValidUrl) ...[
+            const SizedBox(height: 16),
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
               child: Image.network(
-                imageUrl.trim(),
+                imageUrl!,
                 width: double.infinity,
                 height: 150,
                 fit: BoxFit.cover,
                 errorBuilder: (context, error, stackTrace) => const SizedBox(),
               ),
-            )
-          else
-            CircleAvatar(
-              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: Icon(
-                Icons.health_and_safety,
-                color: Theme.of(context).colorScheme.primary,
-              ),
             ),
+          ],
           if (tip.content.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text(tip.content, style: theme.textTheme.bodyMedium),

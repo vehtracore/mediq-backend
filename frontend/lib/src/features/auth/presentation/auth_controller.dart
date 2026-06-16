@@ -128,6 +128,18 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
     }
   }
 
+  Future<void> restoreSubscription() async {
+    state = const AsyncLoading();
+    try {
+      await _authRepository.restoreSubscription();
+      _ref.invalidate(userProvider);
+      state = const AsyncData(null);
+    } catch (e, stack) {
+      state = AsyncError(e, stack);
+      rethrow;
+    }
+  }
+
   Future<void> sendSupportMessage({required String subject, required String message}) async {
     try {
       await _authRepository.sendSupportMessage(subject: subject, message: message);

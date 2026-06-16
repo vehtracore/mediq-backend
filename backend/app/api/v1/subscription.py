@@ -30,6 +30,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _is_subscription_unexpired(expiry: datetime | None) -> bool:
+    if expiry is None:
+        return False
+
+    now = datetime.now(expiry.tzinfo) if expiry.tzinfo else datetime.utcnow()
+    return expiry > now
+
+
 @router.post("/upgrade", response_model=UserResponse)
 def upgrade_to_premium(
     db: Session = Depends(get_db),
@@ -42,6 +50,7 @@ def upgrade_to_premium(
     """
     current_user.plan = "premium"
     current_user.subscription_expiry = datetime.utcnow() + timedelta(days=30)
+    current_user.auto_renew = False
 
     db.commit()
     db.refresh(current_user)
@@ -57,8 +66,8 @@ async def cancel_subscription(
     """
     POST /api/v1/subscription/cancel-subscription
 
-    Cancels the current user's Paystack recurring subscription with graceful
-    degradation if the external Paystack call cannot be completed.
+    Cancels the current user's Paystack recurring subscription while keeping
+    local renewal state aligned with Paystack.
 
     Flow
     ----
@@ -66,21 +75,20 @@ async def cancel_subscription(
        If not, the subscription was manually granted or already cancelled —
        falls through to the local DB cleanup so the UI always updates.
     2. Attempts to call Paystack POST /subscription/disable.
-       • On Paystack success → billing codes are cleared, plan stays active
+       • On Paystack success → auto_renew is set false, plan stays active
          until ``subscription_expiry`` (Paystack won't renew).
-       • On ANY Paystack error (400 business rejection, 503 network failure,
-         missing/invalid token) → error is logged, the Paystack step is
-         BYPASSED, and execution continues to the local DB cleanup below.
-         This ensures testing, manual DB overrides, and production edge-cases
-         never leave the UI stuck.
-    3. Local DB cleanup (always runs):
-       • Clears ``paystack_subscription_code`` and ``paystack_email_token``
-         so auto-renewal cannot fire and this endpoint cannot be double-called.
+       • On Paystack error → the error is returned and local auto_renew state
+         is left unchanged so the UI never lies about billing status.
+    3. Local DB state update after successful Paystack disable:
+       • Keeps ``paystack_subscription_code`` and ``paystack_email_token`` so
+         an unexpired cancellation can be restored without checkout.
+       • Marks ``auto_renew`` false locally.
        • The user retains premium access until ``subscription_expiry`` expires
          naturally; no artificial downgrade is applied here.
     4. Returns the updated UserResponse so the frontend can refresh state.
 
-    Always returns 200 OK — Paystack failures are treated as soft errors.
+    Returns 200 only when Paystack cancellation succeeds, or when a legacy
+    manually-granted plan has no billing code to disable.
     """
     # ── 1. Guard: no billing codes at all ────────────────────────────────────
     # Unlike the original hard-stop, we now log and fall through so that
@@ -102,13 +110,11 @@ async def cancel_subscription(
             sub_code,
         )
 
-        # ── 2. Call Paystack — wrapped for graceful degradation ───────────────
+        # ── 2. Call Paystack ─────────────────────────────────────────────────
         # PaystackService raises HTTPException(400) on business-logic failures
         # (e.g. "No active recurring subscription found", invalid token) and
-        # HTTPException(503) on network-level errors. We intentionally catch
-        # both so that testing scenarios, manual DB overrides, or transient
-        # Paystack outages never block the user from cancelling their plan in
-        # the UI. The local cleanup in step 3 always runs regardless.
+        # HTTPException(503) on network-level errors. Local auto_renew is only
+        # changed after Paystack confirms disable, keeping billing state honest.
         try:
             await paystack_service.disable_subscription(
                 subscription_code=sub_code,
@@ -122,32 +128,74 @@ async def cancel_subscription(
             # Log enough context for ops to diagnose without alarming the user.
             logger.warning(
                 "[SUBSCRIPTION] ⚠️  Paystack disable failed for user_id=%s "
-                "(sub_code='%s') — HTTP %s: %s. "
-                "Proceeding with local DB cleanup so the UI can update.",
+                "(sub_code='%s') — HTTP %s: %s. Local auto_renew unchanged.",
                 current_user.id,
                 sub_code,
                 paystack_exc.status_code,
                 paystack_exc.detail,
             )
-            # Do NOT re-raise. Fall through to local DB cleanup below.
+            raise
 
-    # ── 3. Local DB cleanup (always runs) ────────────────────────────────────
-    # Clearing the billing codes is the critical idempotency gate:
-    #   • Paystack cannot auto-renew without the subscription code.
-    #   • This endpoint cannot be double-called once the codes are gone.
-    # The user's plan and subscription_expiry are intentionally left intact —
-    # they retain premium access until the period they already paid for ends.
-    current_user.paystack_subscription_code = None
-    current_user.paystack_email_token = None
+    # ── 3. Local DB state (always runs) ───────────────────────────────────────
+    # Keep the Paystack subscription identifiers so an unexpired cancellation
+    # can be restored with /subscription/enable. The local auto_renew flag is
+    # the source of truth for whether recurring billing is currently active.
+    current_user.auto_renew = False
 
     db.commit()
     db.refresh(current_user)
 
     logger.info(
-        "[SUBSCRIPTION] ✅ Cancellation complete — user_id=%s billing codes cleared. "
+        "[SUBSCRIPTION] ✅ Cancellation complete — user_id=%s auto_renew disabled. "
         "Premium access retained until expiry=%s.",
         current_user.id,
         current_user.subscription_expiry,
+    )
+
+    return current_user
+
+
+@router.post("/restore", response_model=UserResponse)
+async def restore_subscription(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    POST /api/v1/subscription/restore
+
+    Re-enables auto-renew for an unexpired, previously cancelled Paystack
+    subscription without forcing the user through checkout again.
+    """
+    if not current_user.paystack_subscription_code:
+        raise HTTPException(
+            status_code=400,
+            detail="No saved subscription found to restore.",
+        )
+
+    if not current_user.paystack_email_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Subscription restore token is missing. Please renew from checkout.",
+        )
+
+    if not _is_subscription_unexpired(current_user.subscription_expiry):
+        raise HTTPException(
+            status_code=400,
+            detail="This subscription has expired. Please renew from checkout.",
+        )
+
+    await paystack_service.enable_subscription(
+        subscription_code=current_user.paystack_subscription_code,
+        email_token=current_user.paystack_email_token,
+    )
+
+    current_user.auto_renew = True
+    db.commit()
+    db.refresh(current_user)
+
+    logger.info(
+        "[SUBSCRIPTION] ✅ Restore complete — user_id=%s auto_renew enabled.",
+        current_user.id,
     )
 
     return current_user

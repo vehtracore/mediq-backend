@@ -45,7 +45,7 @@ class User {
     this.imageUrl = '',
     this.location,
     this.isBanned = false,
-    this.autoRenew = true,
+    this.autoRenew = false,
     this.subscriptionExpiry,
     this.bloodType,
     this.allergies,
@@ -90,7 +90,7 @@ class User {
       imageUrl: finalUrl,
       location: json['location'],
       isBanned: json['is_banned'] ?? false,
-      autoRenew: json['auto_renew'] ?? true,
+      autoRenew: json['auto_renew'] ?? false,
       subscriptionExpiry: json['subscription_expiry']?.toString(),
 
       bloodType: json['blood_type'],

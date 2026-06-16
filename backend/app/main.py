@@ -133,6 +133,27 @@ def _apply_schema_patches():
         ON appointments (paystack_reference)
         WHERE paystack_reference IS NOT NULL;
         """,
+        # Subscription auto-renew state (added 2026-06-16). Backfill only on
+        # first column creation so cancelled users are not re-enabled on restart.
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'users'
+                  AND column_name = 'auto_renew'
+            ) THEN
+                ALTER TABLE users
+                ADD COLUMN auto_renew BOOLEAN NOT NULL DEFAULT FALSE;
+
+                UPDATE users
+                SET auto_renew = TRUE
+                WHERE paystack_subscription_code IS NOT NULL
+                  AND COALESCE(plan, 'free') IN ('premium', 'family');
+            END IF;
+        END $$;
+        """,
         # ── AI quota tracking columns (added 2026-05-11) ─────────────────────
         # last_chat_date — used by /api/v1/chat/analyze for inline daily resets
         """

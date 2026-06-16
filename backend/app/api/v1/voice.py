@@ -29,8 +29,10 @@ _YARNGPT_TTS_URL: str = os.getenv("YARNGPT_TTS_URL", "https://yarngpt.ai/api/v1/
 client = AsyncOpenAI(api_key=_OPENAI_API_KEY)
 
 _MAX_TTS_CHARS = 2000
-_MONTHLY_AUDIO_CHAR_LIMIT = 18000
-_ROLLING_AUDIO_CHAR_LIMIT = 3600
+_FREE_MONTHLY_AUDIO_CHAR_LIMIT = 3600
+_PAID_MONTHLY_AUDIO_CHAR_LIMIT = 18000
+_PAID_ROLLING_AUDIO_CHAR_LIMIT = 3600
+_PAID_PLANS = {"premium", "family"}
 
 _YARNGPT_VOICES = {
     "igbo": "Chinenye",
@@ -84,14 +86,26 @@ def _reset_audio_windows(user: User, now: datetime) -> None:
 
 def _enforce_audio_quota(user: User, char_count: int) -> None:
     monthly_total = (user.monthly_audio_count or 0) + char_count
-    if monthly_total > _MONTHLY_AUDIO_CHAR_LIMIT:
+
+    if user.plan not in _PAID_PLANS:
+        if monthly_total > _FREE_MONTHLY_AUDIO_CHAR_LIMIT:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    "You've reached your monthly Free audio limit. "
+                    "Upgrade to Premium for more voice playback."
+                ),
+            )
+        return
+
+    if monthly_total > _PAID_MONTHLY_AUDIO_CHAR_LIMIT:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Monthly audio character limit reached.",
         )
 
     rolling_total = (user.rolling_audio_count or 0) + char_count
-    if rolling_total > _ROLLING_AUDIO_CHAR_LIMIT:
+    if rolling_total > _PAID_ROLLING_AUDIO_CHAR_LIMIT:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rolling 24-hour audio character limit reached.",
@@ -221,7 +235,8 @@ async def speak(
         )
 
         current_user.monthly_audio_count = (current_user.monthly_audio_count or 0) + char_count
-        current_user.rolling_audio_count = (current_user.rolling_audio_count or 0) + char_count
+        if current_user.plan in _PAID_PLANS:
+            current_user.rolling_audio_count = (current_user.rolling_audio_count or 0) + char_count
         db.add(current_user)
         db.commit()
 
