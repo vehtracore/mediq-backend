@@ -85,12 +85,17 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
   Future<void> _handlePayment() async {
     final userAsync = ref.read(userProvider);
     final user = userAsync.value;
-    final email = user?.email ?? 'customer@mediqplus.app';
+    final userId = widget.userId;
+
+    if (user == null || user.email.trim().isEmpty || userId == null || userId <= 0) {
+      await _showAuthRequiredDialog();
+      if (mounted) Navigator.of(context).maybePop();
+      return;
+    }
 
     setState(() => _isLoading = true);
 
     final appointmentId = widget.appointmentId ?? 0;
-    final userId = widget.userId ?? 0;
     final String dynamicReference = widget.paystackReference ??
         'MDQ-${widget.transactionType}-$appointmentId-$userId-'
             '${DateTime.now().millisecondsSinceEpoch}';
@@ -106,7 +111,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
       final response = await dio.post(
         '${ApiConstants.baseUrl}/api/v1/payments/initialize',
         data: {
-          'email': email,
+          'email': user.email.trim(),
           'amount': _totalAmountInKobo,
           'reference': dynamicReference,
           // Only included for subscription types; null is omitted by Dio
@@ -196,6 +201,26 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       duration: const Duration(seconds: 6),
     ));
+  }
+
+  Future<void> _showAuthRequiredDialog() async {
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Session Required'),
+        content: const Text(
+          'We could not verify your secure session. Please sign in again before starting payment.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   // ── Build ────────────────────────────────────────────────────────────────────

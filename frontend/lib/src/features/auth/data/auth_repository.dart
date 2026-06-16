@@ -120,8 +120,14 @@ class AuthRepository {
   }
 
   Future<User?> getCurrentUser() async {
-    final response = await _dio.get('/api/v1/auth/me');
-    return User.fromJson(response.data);
+    try {
+      final response = await _dio.get('/api/v1/auth/me');
+      return User.fromJson(response.data);
+    } catch (e, stacktrace) {
+      debugPrint('⚠️ ERROR PARSING USER JSON: $e');
+      debugPrint(stacktrace.toString());
+      return null;
+    }
   }
 
   Future<void> updateUser({

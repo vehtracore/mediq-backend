@@ -2,13 +2,14 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../../core/api/api_constants.dart';
+import '../../../core/api/dio_client.dart';
 
 // ─── Hardcoded fallback services ─────────────────────────────────────────────
 // Shown when the API fails, times out, or returns an empty list.
@@ -51,14 +52,14 @@ class _ServiceEntry {
 
 // ─── Widget ───────────────────────────────────────────────────────────────────
 
-class EmergencyScreen extends StatefulWidget {
+class EmergencyScreen extends ConsumerStatefulWidget {
   const EmergencyScreen({super.key});
 
   @override
-  State<EmergencyScreen> createState() => _EmergencyScreenState();
+  ConsumerState<EmergencyScreen> createState() => _EmergencyScreenState();
 }
 
-class _EmergencyScreenState extends State<EmergencyScreen> {
+class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
   // ── Location state ──────────────────────────────────────────────────────────
   String _locationMessage = 'Detecting location…';
   // ignore: unused_field
@@ -328,16 +329,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     required double lon,
   }) async {
     try {
-      final dio = Dio(BaseOptions(baseUrl: ApiConstants.baseUrl));
-
-      const storage = FlutterSecureStorage();
-      final token = await storage.read(
-          key: 'auth_token',
-          aOptions: const AndroidOptions(encryptedSharedPreferences: true));
-
-      if (token != null) {
-        dio.options.headers['Authorization'] = 'Bearer $token';
-      }
+      final dio = ref.read(dioProvider);
 
       // Only forward a human-readable address — skip the loading placeholder
       // and generic error strings that are not meaningful to the backend.

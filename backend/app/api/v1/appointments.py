@@ -71,7 +71,7 @@ def _close_stale_patient_consultations(db: Session, patient_id: int) -> int:
         db.query(Appointment)
         .filter(
             Appointment.patient_id == patient_id,
-            Appointment.status == "active",
+            Appointment.status == "confirmed",
             Appointment.start_time < cutoff,
         )
         .update({Appointment.status: "completed"}, synchronize_session=False)
@@ -81,7 +81,7 @@ def _close_stale_patient_consultations(db: Session, patient_id: int) -> int:
 
     if stale_count:
         logger.info(
-            "[APPT LAZY SWEEP] Closed %d stale active consultation(s) for patient_id=%s.",
+            "[APPT LAZY SWEEP] Closed %d stale confirmed consultation(s) for patient_id=%s.",
             stale_count,
             patient_id,
         )

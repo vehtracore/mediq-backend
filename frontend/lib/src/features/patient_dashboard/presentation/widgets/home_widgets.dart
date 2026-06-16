@@ -40,8 +40,8 @@ final nextAppointmentProvider =
 });
 
 class HomeHeader extends StatelessWidget {
-  final User user; // ✅ Accepts full User object for Avatar + Name
-  const HomeHeader({super.key, required this.user});
+  final User? user; // ✅ Accepts full User object for Avatar + Name
+  const HomeHeader({super.key, this.user});
 
   @override
   Widget build(BuildContext context) {
@@ -49,8 +49,8 @@ class HomeHeader extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     
     // Data Extraction
-    final userName = user.firstName;
-    final imageUrl = user.imageUrl;
+    final userName = user?.firstName ?? '...';
+    final imageUrl = user?.imageUrl ?? '';
 
     return Container(
       decoration: BoxDecoration(

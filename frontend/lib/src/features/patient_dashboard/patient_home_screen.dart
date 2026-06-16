@@ -98,78 +98,82 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
     final userAsync = ref.watch(userProvider);
     final theme = Theme.of(context);
 
-    return Stack(
-      children: [
-        RefreshIndicator(
-          onRefresh: () async {
-            ref.invalidate(userProvider);
-            ref.invalidate(nextAppointmentProvider);
-            // wait a bit for the UI to update
-            await Future.delayed(const Duration(milliseconds: 500));
-          },
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 24.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ✅ WIRED: Passes full user object to Header for Avatar + Name
-              userAsync.when(
-                data: (user) => HomeHeader(user: user),
-                loading: () => const HomeHeader(user: null),
-                error: (e, _) => const HomeHeader(user: null),
-              ),
-              const SizedBox(height: 32),
+    return userAsync.when(
+      data: (user) {
+        if (user == null) {
+          return const SizedBox.shrink();
+        }
 
-              const AppointmentCard(), // ✅ Real Data (via Provider in widget)
-
-              // --- AI CARD ---
-              const SizedBox(height: 24),
-              _buildAICard(theme),
-
-              const SizedBox(height: 24),
-              Text(
-                "Quick Actions",
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
+        return Stack(
+          children: [
+            RefreshIndicator(
+              onRefresh: () async {
+                ref.invalidate(userProvider);
+                ref.invalidate(nextAppointmentProvider);
+                await Future.delayed(const Duration(milliseconds: 500));
+              },
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24.0,
+                  vertical: 24.0,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    HomeHeader(user: user),
+                    const SizedBox(height: 32),
+                    const AppointmentCard(),
+                    const SizedBox(height: 24),
+                    _buildAICard(theme),
+                    const SizedBox(height: 24),
+                    Text(
+                      "Quick Actions",
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const QuickActionGrid(),
+                    const SizedBox(height: 180),
+                  ],
                 ),
               ),
-              const SizedBox(height: 16),
-              const QuickActionGrid(),
-              const SizedBox(height: 180),
-            ],
-          ),
-        ),
-        ),
-        NotificationListener<DraggableScrollableNotification>(
-          onNotification: (n) {
-            if (n.extent > 0.8 && !_showFab) {
-              setState(() => _showFab = true);
-            } else if (n.extent <= 0.8 && _showFab) {
-              setState(() => _showFab = false);
-            }
-            return true;
-          },
-          child: HealthTipsSheet(controller: _sheetController),
-        ),
-        AnimatedPositioned(
-          duration: const Duration(milliseconds: 300),
-          bottom: _showFab ? 20 : -100,
-          right: 20,
-          child: FloatingActionButton(
-            mini: true,
-            backgroundColor: const Color(0xFF4A90E2),
-            child: const Icon(Icons.keyboard_arrow_down, color: Colors.white),
-            onPressed: () {
-              _sheetController.animateTo(
-                0.15,
-                duration: const Duration(milliseconds: 400),
-                curve: Curves.easeOutBack,
-              );
-            },
-          ),
-        ),
-      ],
+            ),
+            NotificationListener<DraggableScrollableNotification>(
+              onNotification: (n) {
+                if (n.extent > 0.8 && !_showFab) {
+                  setState(() => _showFab = true);
+                } else if (n.extent <= 0.8 && _showFab) {
+                  setState(() => _showFab = false);
+                }
+                return true;
+              },
+              child: HealthTipsSheet(controller: _sheetController),
+            ),
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 300),
+              bottom: _showFab ? 20 : -100,
+              right: 20,
+              child: FloatingActionButton(
+                mini: true,
+                backgroundColor: const Color(0xFF4A90E2),
+                child:
+                    const Icon(Icons.keyboard_arrow_down, color: Colors.white),
+                onPressed: () {
+                  _sheetController.animateTo(
+                    0.15,
+                    duration: const Duration(milliseconds: 400),
+                    curve: Curves.easeOutBack,
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => const SizedBox.shrink(),
     );
   }
 

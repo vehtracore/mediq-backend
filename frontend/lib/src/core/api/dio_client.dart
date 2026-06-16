@@ -19,83 +19,12 @@ final dioProvider = Provider<Dio>((ref) {
 
   final dio = Dio(options);
   final storage = ref.read(storageServiceProvider);
-  Future<String?>? refreshInFlight;
-
-  bool isSessionExpiring(Session session) {
-    final expiresAt = session.expiresAt;
-    if (expiresAt == null) return false;
-
-    final expiry = DateTime.fromMillisecondsSinceEpoch(
-      expiresAt * 1000,
-      isUtc: true,
-    );
-    return expiry.isBefore(DateTime.now().toUtc().add(const Duration(minutes: 1)));
-  }
-
-  Future<void> persistSession(Session session) async {
-    await storage.saveToken(session.accessToken);
-
-    final refreshToken = session.refreshToken;
-    if (refreshToken != null && refreshToken.isNotEmpty) {
-      await storage.saveRefreshToken(refreshToken);
-    }
-  }
-
-  Future<String?> refreshAccessToken() {
-    if (refreshInFlight != null) return refreshInFlight!;
-
-    refreshInFlight = (() async {
-      final auth = Supabase.instance.client.auth;
-      final refreshToken =
-          auth.currentSession?.refreshToken ?? await storage.getRefreshToken();
-
-      if (refreshToken == null || refreshToken.isEmpty) {
-        return null;
-      }
-
-      final response = await auth.refreshSession(refreshToken);
-      final session = response.session ?? auth.currentSession;
-      if (session == null) return null;
-
-      await persistSession(session);
-      return session.accessToken;
-    })();
-
-    return refreshInFlight!.whenComplete(() {
-      refreshInFlight = null;
-    });
-  }
-
-  Future<String?> validAccessToken() async {
-    final session = Supabase.instance.client.auth.currentSession;
-    if (session == null) return null;
-
-    if (isSessionExpiring(session)) {
-      return refreshAccessToken();
-    }
-
-    await persistSession(session);
-    return session.accessToken;
-  }
-
-  Future<void> clearSessionAndRouteToLogin() async {
-    try {
-      await Supabase.instance.client.auth.signOut();
-    } catch (_) {}
-
-    await storage.deleteToken();
-
-    final context = rootNavigatorKey.currentContext;
-    if (context != null && context.mounted) {
-      GoRouter.of(context).go('/login');
-    }
-  }
 
   dio.interceptors.add(
-    QueuedInterceptorsWrapper(
+    InterceptorsWrapper(
       onRequest: (options, handler) async {
         try {
-          final token = await validAccessToken();
+          final token = Supabase.instance.client.auth.currentSession?.accessToken;
 
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
@@ -128,36 +57,12 @@ final dioProvider = Provider<Dio>((ref) {
           }
         }
 
-        // --- 401 UNAUTHORIZED CHECK: Silent Refresh ---
-        if (e.response?.statusCode == 401 &&
-            e.requestOptions.extra['authRetry'] != true) {
-          if (kDebugMode) {
-            print('⚠️ [AUTH] -> 401 Detected. Attempting silent token refresh.');
-          }
-
+        // --- 401 UNAUTHORIZED CHECK ---
+        if (e.response?.statusCode == 401) {
           try {
-            final refreshedToken = await refreshAccessToken();
-            if (refreshedToken != null && refreshedToken.isNotEmpty) {
-              final retryOptions = e.requestOptions.copyWith(
-                headers: {
-                  ...e.requestOptions.headers,
-                  'Authorization': 'Bearer $refreshedToken',
-                },
-                extra: {
-                  ...e.requestOptions.extra,
-                  'authRetry': true,
-                },
-              );
-              final retryResponse = await dio.fetch<dynamic>(retryOptions);
-              return handler.resolve(retryResponse);
-            }
-          } catch (refreshError) {
-            if (kDebugMode) {
-              print('⚠️ [AUTH] -> Silent refresh failed: $refreshError');
-            }
-          }
+            await Supabase.instance.client.auth.signOut();
+          } catch (_) {}
 
-          await clearSessionAndRouteToLogin();
           return handler.next(e);
         }
 
