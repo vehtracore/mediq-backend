@@ -692,7 +692,11 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
           if (!isMe)
             Padding(
               padding: const EdgeInsets.only(left: 4, bottom: 2),
-              child: _PremiumVoiceButton(text: text, isDark: isDark),
+              child: _PremiumVoiceButton(
+                text: text,
+                language: _selectedLanguage,
+                isDark: isDark,
+              ),
             ),
         ],
       ),
@@ -726,10 +730,12 @@ enum _VoiceState { idle, loading, playing }
 
 class _PremiumVoiceButton extends ConsumerStatefulWidget {
   final String text;
+  final String language;
   final bool isDark;
 
   const _PremiumVoiceButton({
     required this.text,
+    required this.language,
     required this.isDark,
   });
 
@@ -776,7 +782,11 @@ class _PremiumVoiceButtonState extends ConsumerState<_PremiumVoiceButton> {
         .trim();
 
       final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/temp_voice_${cleanText.hashCode}.mp3');
+      final languageKey = widget.language
+          .trim()
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+      final file = File('${dir.path}/temp_voice_${languageKey}_${cleanText.hashCode}.mp3');
 
       if (file.existsSync()) {
         await _player.setFilePath(file.path);
@@ -787,7 +797,10 @@ class _PremiumVoiceButtonState extends ConsumerState<_PremiumVoiceButton> {
 
       final response = await dio.post(
         '/api/v1/voice/speak',
-        data: {'text': cleanText},
+        data: {
+          'text': cleanText,
+          'language': widget.language,
+        },
         options: Options(responseType: ResponseType.bytes),
       );
 

@@ -69,6 +69,13 @@ class User(Base):
     monthly_lab_count = Column(Integer, default=0, nullable=False)
     last_lab_reset = Column(Date, nullable=True)
 
+    # Voice / TTS Limits
+    # Tracks generated audio characters in calendar-month and rolling 24h buckets.
+    monthly_audio_count = Column(Integer, default=0, nullable=False)
+    rolling_audio_count = Column(Integer, default=0, nullable=False)
+    rolling_audio_window_start = Column(DateTime, nullable=True)
+    last_audio_month_reset = Column(DateTime, nullable=True)
+
     # --- 👨‍👩‍👧 FAMILY PLAN ---
     # Self-referential FK. NULL → this user is a primary account holder.
     # Non-null → this user is a dependent linked to the given primary user ID.

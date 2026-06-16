@@ -139,6 +139,42 @@ def _apply_schema_patches():
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS last_chat_date DATE NULL;
         """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS monthly_chat_count INTEGER NOT NULL DEFAULT 0;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS monthly_chat_image_count INTEGER NOT NULL DEFAULT 0;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS last_chat_month_reset DATE NULL;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS rolling_chat_count INTEGER NOT NULL DEFAULT 0;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS rolling_chat_image_count INTEGER NOT NULL DEFAULT 0;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS rolling_chat_window_start TIMESTAMPTZ NULL;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS burst_chat_count INTEGER NOT NULL DEFAULT 0;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS burst_start_time TIMESTAMPTZ NULL;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS chat_blocked_until TIMESTAMPTZ NULL;
+        """,
         # monthly_lab_count — hard cap on Gemini Vision calls per calendar month
         """
         ALTER TABLE users
@@ -148,6 +184,23 @@ def _apply_schema_patches():
         """
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS last_lab_reset DATE NULL;
+        """,
+        # Voice / TTS quota tracking columns (added 2026-06-16)
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS monthly_audio_count INTEGER NOT NULL DEFAULT 0;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS rolling_audio_count INTEGER NOT NULL DEFAULT 0;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS rolling_audio_window_start TIMESTAMPTZ NULL;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS last_audio_month_reset TIMESTAMPTZ NULL;
         """,
         # ── Family Plan: self-referential account linking (added 2026-05-11) ──
         # primary_account_id = NULL  → primary account holder
@@ -175,8 +228,13 @@ def _apply_schema_patches():
     with engine.connect() as conn:
         from sqlalchemy import text
         for sql in patches:
-            conn.execute(text(sql))
-        conn.commit()
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                logger.exception("[SCHEMA PATCH] Failed applying startup schema patch: %s", exc)
+                raise
 
 _apply_schema_patches()
 

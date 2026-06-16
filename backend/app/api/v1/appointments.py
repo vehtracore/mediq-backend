@@ -578,6 +578,7 @@ def get_doctor_requests(db: Session = Depends(get_db), current_user: User = Depe
         .options(joinedload(Appointment.patient), joinedload(Appointment.slot))
         .filter(
             Appointment.doctor_id == doctor.id,
+            Appointment.slot_id == None,  # noqa: E711
             Appointment.status == "pending",
         )
         .all()
@@ -642,6 +643,7 @@ def get_general_queue(db: Session = Depends(get_db), current_user: User = Depend
         .options(joinedload(Appointment.patient))
         .filter(
             Appointment.doctor_id == None,  # noqa: E711
+            Appointment.slot_id == None,  # noqa: E711
             Appointment.status == "pending",
             Appointment.payment_status == "paid",
         )
@@ -686,7 +688,12 @@ def get_general_queue(db: Session = Depends(get_db), current_user: User = Depend
 @router.put("/doctor/queue/{appt_id}/claim", response_model=AppointmentResponse)
 def claim_appointment(appt_id: int, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
     doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-    appt = db.query(Appointment).filter(Appointment.id == appt_id, Appointment.doctor_id == None).first()
+    appt = db.query(Appointment).filter(
+        Appointment.id == appt_id,
+        Appointment.doctor_id == None,  # noqa: E711
+        Appointment.slot_id == None,  # noqa: E711
+        Appointment.payment_status == "paid",
+    ).first()
     if not appt: raise HTTPException(404)
     appt.doctor_id = doctor.id
     appt.status = "confirmed"
