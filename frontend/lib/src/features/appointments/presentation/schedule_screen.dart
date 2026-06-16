@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mediq_app/src/features/reviews/data/review_repository.dart';
 import 'package:mediq_app/src/features/patient_dashboard/presentation/widgets/home_widgets.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import '../data/appointment_model.dart';
 import '../data/appointment_repository.dart';
 import 'package:mediq_app/presentation/widgets/global_error_widget.dart';
@@ -411,12 +412,13 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                             }
                           } catch (e) {
                             if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Could not cancel: $e'),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content:
+                                        Text(UIErrorFormatter.getMessage(e)),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
                             }
                           } finally {
                             if (mounted) setState(() => _isLoading = false);

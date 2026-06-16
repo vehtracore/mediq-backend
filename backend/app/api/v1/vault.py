@@ -17,7 +17,6 @@ from app.models.doctor import Doctor
 from app.models.vault import AIChatSummary, ConsultationRecord
 from app.schemas.vault import AISummaryCreate, VaultExportRequest, VaultHistoryResponse
 from app.api import deps
-from app.core.notifications import dispatch_push
 
 logger = logging.getLogger(__name__)
 
@@ -84,27 +83,6 @@ def create_ai_summary(
         payload.topic,
         record.id,
     )
-
-    # ── FCM: notify the patient their summary is ready ────────────────────────
-    try:
-        dispatch_push(
-            token=current_user.fcm_token,
-            title="📋 Health Summary Ready",
-            body=f"Your AI health summary for '{payload.topic}' has been saved to your vault.",
-            data={
-                "type": "ai_summary_saved",
-                "summary_id": str(record.id),
-                "topic": payload.topic or "",
-            },
-            event_label="VAULT/AI_SUMMARY",
-        )
-    except Exception as notif_exc:
-        logger.error(
-            "[Vault] FCM summary notification failed — patient_id=%s: %s",
-            current_user.id,
-            notif_exc,
-            exc_info=True,
-        )
 
     return VaultHistoryResponse(
         id=record.id,

@@ -11,9 +11,6 @@ from app.core.database import engine, get_db
 from sqlalchemy.orm import sessionmaker, Session
 from app.models.message import Message
 from app.models.appointment import Appointment
-from app.models.doctor import Doctor
-from app.models.user import User
-from app.core.notifications import send_push_notification
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -161,75 +158,19 @@ def save_message_sync(appointment_id: int, user_id: int, content: str):
         db.close()
 
 
-# --- HELPER: Look up recipient and send FCM push ---
+# --- HELPER: chat pushes intentionally disabled by notification policy ---
 def send_chat_push_sync(appointment_id: int, sender_id: int, message_text: str):
     """
-    Determine the recipient of a chat message and fire an FCM push.
-    Runs in a threadpool so it doesn't block the WebSocket loop.
+    Per-message chat notifications are intentionally disabled.
+
+    The product notification policy reserves push notifications for major
+    lifecycle events only, so live chat delivery stays inside the WebSocket.
     """
-    logger.debug("[FCM-PUSH] ENTER — appt=%s, sender=%s", appointment_id, sender_id)
-    db = WsSession()
-    try:
-        appointment = (
-            db.query(Appointment)
-            .filter(Appointment.id == appointment_id)
-            .first()
-        )
-        if not appointment:
-            logger.warning("[FCM-PUSH] No appointment found for id=%s", appointment_id)
-            return
-
-        logger.debug("[FCM-PUSH] Appointment found — patient_id=%s, doctor_id=%s", appointment.patient_id, appointment.doctor_id)
-
-        # Determine the recipient's User ID
-        if sender_id == appointment.patient_id:
-            doctor = (
-                db.query(Doctor)
-                .filter(Doctor.id == appointment.doctor_id)
-                .first()
-            )
-            if not doctor:
-                logger.warning("[FCM-PUSH] No doctor found for doctor_id=%s", appointment.doctor_id)
-                return
-            recipient_user_id = doctor.user_id
-            sender_label = "Patient"
-        else:
-            recipient_user_id = appointment.patient_id
-            sender_label = "Doctor"
-
-        logger.debug("[FCM-PUSH] Recipient user_id=%s, sender_label=%s", recipient_user_id, sender_label)
-
-        recipient = db.query(User).filter(User.id == recipient_user_id).first()
-        sender = db.query(User).filter(User.id == sender_id).first()
-
-        if not recipient:
-            logger.warning("[FCM-PUSH] Recipient user not found — user_id=%s", recipient_user_id)
-            return
-
-        if not recipient.fcm_token:
-            logger.info("[FCM-PUSH] Recipient user_id=%s has no FCM token — skipping push", recipient_user_id)
-            return
-
-        sender_name = f"{sender.first_name} {sender.last_name}" if sender else sender_label
-        body_preview = message_text[:200] + "…" if len(message_text) > 200 else message_text
-
-        logger.info("[FCM-PUSH] Sending push to user_id=%s", recipient_user_id)
-
-        result = send_push_notification(
-            token=recipient.fcm_token,
-            title=f"New message from {sender_name}",
-            body=body_preview,
-            data={
-                "type": "chat_message",
-                "appointment_id": str(appointment_id),
-                "sender_id": str(sender_id),
-            },
-        )
-        logger.debug("[FCM-PUSH] send_push_notification returned: %s", result)
-    except Exception as e:
-        logger.error("[FCM-PUSH] Error sending push notification: %s", e, exc_info=True)
-    finally:
-        db.close()
+    logger.debug(
+        "[WS] Chat push skipped by major-events-only policy — appt=%s sender=%s",
+        appointment_id,
+        sender_id,
+    )
 
 
 # --- WebSocket Endpoint (PRODUCTION) ---
@@ -286,4 +227,4 @@ async def websocket_endpoint(
             await websocket.close(code=1011, reason="Internal server error")
         except Exception:
             pass
-
+

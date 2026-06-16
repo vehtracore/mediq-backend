@@ -5,11 +5,18 @@ import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/auth/presentation/auth_controller.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 
-class ProfileScreen extends ConsumerWidget {
+class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends ConsumerState<ProfileScreen> {
+  bool _isLoggingOut = false;
+
+  @override
+  Widget build(BuildContext context) {
     final userAsync = ref.watch(userProvider);
     final theme = Theme.of(context);
 
@@ -119,11 +126,17 @@ class ProfileScreen extends ConsumerWidget {
                 // ── Logout ─────────────────────────────────────────────────
                 _buildProfileItem(context,
                     icon: Icons.logout,
-                    text: "Logout",
+                    text: _isLoggingOut ? "Logging out..." : "Logout",
                     textColor: Colors.red,
-                    iconColor: Colors.red, onTap: () async {
-                  await ref.read(authControllerProvider.notifier).logout();
-                  if (context.mounted) context.go('/auth');
+                    iconColor: Colors.red,
+                    isLoading: _isLoggingOut, onTap: () async {
+                  setState(() => _isLoggingOut = true);
+                  try {
+                    await ref.read(authControllerProvider.notifier).logout();
+                    if (context.mounted) context.go('/auth');
+                  } finally {
+                    if (mounted) setState(() => _isLoggingOut = false);
+                  }
                 }),
               ],
             ),
@@ -138,9 +151,10 @@ class ProfileScreen extends ConsumerWidget {
   Widget _buildProfileItem(BuildContext context,
       {required IconData icon,
       required String text,
-      required VoidCallback onTap,
+      required VoidCallback? onTap,
       Color? textColor,
-      Color? iconColor}) {
+      Color? iconColor,
+      bool isLoading = false}) {
     final theme = Theme.of(context);
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -157,12 +171,20 @@ class ProfileScreen extends ConsumerWidget {
               ],
       ),
       child: ListTile(
-        leading: Icon(icon, color: iconColor ?? theme.iconTheme.color),
+        leading: isLoading
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Icon(icon, color: iconColor ?? theme.iconTheme.color),
         title: Text(text,
             style: theme.textTheme.bodyLarge
                 ?.copyWith(color: textColor, fontWeight: FontWeight.w500)),
-        trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-        onTap: onTap,
+        trailing: isLoading
+            ? null
+            : const Icon(Icons.chevron_right, color: Colors.grey),
+        onTap: isLoading ? null : onTap,
       ),
     );
   }
@@ -211,6 +233,7 @@ class ProfileScreen extends ConsumerWidget {
 
     // Only active hosts and solo-premium users can cancel.
     final bool canCancel = !isFamilyDep && !isCancelled;
+    bool isCancelling = false;
 
     showModalBottomSheet(
       context: context,
@@ -218,7 +241,9 @@ class ProfileScreen extends ConsumerWidget {
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (sheetCtx) {
-        return Padding(
+        return StatefulBuilder(
+          builder: (sheetCtx, setSheetState) {
+            return Padding(
           padding: const EdgeInsets.fromLTRB(24, 24, 24, 36),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -344,10 +369,19 @@ class ProfileScreen extends ConsumerWidget {
               // ── States A & B: cancel button ──────────────────────────────
               if (canCancel)
                 OutlinedButton.icon(
-                  icon: const Icon(Icons.cancel_outlined, color: Colors.red),
-                  label: const Text(
-                    'Cancel Subscription',
-                    style: TextStyle(
+                  icon: isCancelling
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.red,
+                          ),
+                        )
+                      : const Icon(Icons.cancel_outlined, color: Colors.red),
+                  label: Text(
+                    isCancelling ? 'Cancelling...' : 'Cancel Subscription',
+                    style: const TextStyle(
                         color: Colors.red, fontWeight: FontWeight.w600),
                   ),
                   style: OutlinedButton.styleFrom(
@@ -356,15 +390,14 @@ class ProfileScreen extends ConsumerWidget {
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10)),
                   ),
-                  onPressed: () async {
+                  onPressed: isCancelling
+                      ? null
+                      : () async {
                     // Snapshot the messenger from the OUTER (ProfileScreen)
                     // context before any pop. The sheet context (sheetCtx) will
                     // be unmounted the moment we pop it, so we must not use it
                     // for anything that runs asynchronously afterward.
                     final messenger = ScaffoldMessenger.of(context);
-
-                    // Close the bottom sheet; sheetCtx is now unmounted.
-                    Navigator.of(sheetCtx).pop();
 
                     // Use the outer `context` (ProfileScreen – always mounted)
                     // for the confirmation dialog.
@@ -394,15 +427,7 @@ class ProfileScreen extends ConsumerWidget {
                     );
 
                     if (confirm != true) return;
-
-                    // Show loading overlay using the outer context.
-                    if (!context.mounted) return;
-                    showDialog(
-                      context: context,
-                      barrierDismissible: false,
-                      builder: (_) =>
-                          const Center(child: CircularProgressIndicator()),
-                    );
+                    setSheetState(() => isCancelling = true);
 
                     try {
                       await ref
@@ -414,7 +439,7 @@ class ProfileScreen extends ConsumerWidget {
                       // internal invalidate was skipped due to Ref lifecycle.
                       ref.invalidate(userProvider);
 
-                      if (context.mounted) Navigator.of(context).pop();
+                      if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
                       messenger.showSnackBar(
                         const SnackBar(
                             content:
@@ -422,7 +447,9 @@ class ProfileScreen extends ConsumerWidget {
                             backgroundColor: Colors.green),
                       );
                     } catch (e) {
-                      if (context.mounted) Navigator.of(context).pop();
+                      if (sheetCtx.mounted) {
+                        setSheetState(() => isCancelling = false);
+                      }
                       messenger.showSnackBar(
                         SnackBar(
                             content: Text(e.toString()),
@@ -433,6 +460,8 @@ class ProfileScreen extends ConsumerWidget {
                 ),
             ],
           ),
+        );
+          },
         );
       },
     );

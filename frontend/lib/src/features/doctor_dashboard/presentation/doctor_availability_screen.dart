@@ -35,7 +35,10 @@ class _DoctorAvailabilityScreenState
   // Default to tomorrow
   DateTime _selectedDate = DateTime.now().add(const Duration(days: 1));
   final List<int> _standardHours = [9, 10, 11, 12, 13, 14, 15, 16, 17];
-  bool _isCreating = false;
+  int? _creatingHour;
+  int? _deletingSlotId;
+
+  bool get _isCreating => _creatingHour != null;
 
   Future<void> _selectDate(BuildContext context) async {
     final DateTime? picked = await showDatePicker(
@@ -61,7 +64,7 @@ class _DoctorAvailabilityScreenState
   }
 
   Future<void> _addSlot(int hour, int doctorId) async {
-    setState(() => _isCreating = true);
+    setState(() => _creatingHour = hour);
     try {
       final slotTime = DateTime(
         _selectedDate.year,
@@ -96,7 +99,7 @@ class _DoctorAvailabilityScreenState
         );
       }
     } finally {
-      if (mounted) setState(() => _isCreating = false);
+      if (mounted) setState(() => _creatingHour = null);
     }
   }
 
@@ -120,6 +123,7 @@ class _DoctorAvailabilityScreenState
       ),
     );
     if (confirmed != true || !mounted) return;
+    setState(() => _deletingSlotId = slotId);
     try {
       await ref.read(doctorRepositoryProvider).deleteSlot(slotId);
       ref.invalidate(myDoctorSlotsProvider);
@@ -141,6 +145,8 @@ class _DoctorAvailabilityScreenState
           ),
         );
       }
+    } finally {
+      if (mounted) setState(() => _deletingSlotId = null);
     }
   }
 
@@ -254,20 +260,32 @@ class _DoctorAvailabilityScreenState
                         final timeLabel = DateFormat(
                           'h:mm a',
                         ).format(DateTime(2023, 1, 1, hour));
+                        final isCreatingThisHour = _creatingHour == hour;
     
                         return ActionChip(
-                          label: Text(timeLabel, style: theme.textTheme.bodyMedium),
+                          label: Text(
+                            isCreatingThisHour ? 'Adding...' : timeLabel,
+                            style: theme.textTheme.bodyMedium,
+                          ),
                           backgroundColor: theme.cardColor,
                           surfaceTintColor: Colors.transparent,
                           elevation: 1,
                           onPressed: _isCreating
                               ? null
                               : () => _addSlot(hour, doctor.id),
-                          avatar: const Icon(
-                            Icons.add,
-                            size: 16,
-                            color: Color(0xFF4A90E2),
-                          ),
+                          avatar: isCreatingThisHour
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.add,
+                                  size: 16,
+                                  color: Color(0xFF4A90E2),
+                                ),
                         );
                       }).toList(),
                     ),
@@ -334,13 +352,28 @@ class _DoctorAvailabilityScreenState
                                   // but we guard explicitly for clarity).
                                   if (!slot.isBooked)
                                     IconButton(
-                                      icon: const Icon(
-                                          Icons.delete_outline,
-                                          color: Colors.red,
-                                          size: 20),
+                                      icon: _deletingSlotId == slot.id
+                                          ? const SizedBox(
+                                              width: 20,
+                                              height: 20,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: Colors.red,
+                                              ),
+                                            )
+                                          : const Icon(
+                                              Icons.delete_outline,
+                                              color: Colors.red,
+                                              size: 20,
+                                            ),
                                       tooltip: 'Delete slot',
-                                      onPressed: () => _deleteSlot(
-                                          context, slot.id, label),
+                                      onPressed: _deletingSlotId != null
+                                          ? null
+                                          : () => _deleteSlot(
+                                              context,
+                                              slot.id,
+                                              label,
+                                            ),
                                     ),
                                 ],
                               ),

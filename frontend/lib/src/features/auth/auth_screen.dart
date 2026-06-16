@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'presentation/auth_controller.dart';
 import 'presentation/user_controller.dart';
 import 'data/auth_repository.dart';
@@ -134,60 +135,89 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   void _showForgotPasswordDialog() {
     final emailController = TextEditingController(text: _emailController.text);
+    bool isSending = false;
+
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) {
-        return AlertDialog(
-          title: const Text("Reset Password"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text("Enter your email address to receive a password reset link."),
-              const SizedBox(height: 16),
-              TextField(
-                controller: emailController,
-                decoration: const InputDecoration(
-                  labelText: "Email",
-                  border: OutlineInputBorder(),
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            title: const Text("Reset Password"),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  "Enter your email address to receive a password reset link.",
                 ),
-                keyboardType: TextInputType.emailAddress,
+                const SizedBox(height: 16),
+                TextField(
+                  controller: emailController,
+                  enabled: !isSending,
+                  decoration: const InputDecoration(
+                    labelText: "Email",
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.emailAddress,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSending ? null : () => Navigator.pop(ctx),
+                child: const Text("Cancel"),
+              ),
+              ElevatedButton(
+                onPressed: isSending
+                    ? null
+                    : () async {
+                        final email = emailController.text.trim();
+                        if (email.isEmpty) return;
+
+                        setDialogState(() => isSending = true);
+                        try {
+                          await Supabase.instance.client.auth
+                              .resetPasswordForEmail(
+                            email,
+                            redirectTo:
+                                'io.supabase.mediqapp://login-callback',
+                          );
+                          if (ctx.mounted) {
+                            Navigator.pop(ctx);
+                          }
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  "Check your email for the reset link",
+                                ),
+                              ),
+                            );
+                          }
+                        } catch (e) {
+                          if (ctx.mounted) {
+                            setDialogState(() => isSending = false);
+                            ScaffoldMessenger.of(ctx).showSnackBar(
+                              SnackBar(
+                                content:
+                                    Text(UIErrorFormatter.getMessage(e)),
+                              ),
+                            );
+                          }
+                        }
+                      },
+                child: isSending
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Text("Send Link"),
               ),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text("Cancel"),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                final email = emailController.text.trim();
-                if (email.isEmpty) return;
-                
-                try {
-                  await Supabase.instance.client.auth.resetPasswordForEmail(
-                    email, 
-                    redirectTo: 'io.supabase.mediqapp://login-callback',
-                  );
-                  if (ctx.mounted) {
-                    Navigator.pop(ctx);
-                  }
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Check your email for the reset link")),
-                    );
-                  }
-                } catch (e) {
-                  if (ctx.mounted) {
-                    ScaffoldMessenger.of(ctx).showSnackBar(
-                      SnackBar(content: Text("Error: $e")),
-                    );
-                  }
-                }
-              },
-              child: const Text("Send Link"),
-            ),
-          ],
         );
       },
     );
@@ -201,16 +231,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     ref.listen<AsyncValue<void>>(authControllerProvider,
         (previous, next) {
       if (next.hasError) {
-        String errorMsg = next.error.toString();
-        // The Repository now throws clean Exceptions like "Exception: Email already registered"
-        // We just need to remove the "Exception: " prefix
-        if (errorMsg.startsWith("Exception: ")) {
-          errorMsg = errorMsg.replaceFirst("Exception: ", "");
-        }
+        final safeMsg = UIErrorFormatter.getMessage(next.error);
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(errorMsg),
+            content: Text(safeMsg),
             backgroundColor: Colors.red,
           ),
         );
@@ -440,7 +465,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open link: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(UIErrorFormatter.getMessage(e)),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }

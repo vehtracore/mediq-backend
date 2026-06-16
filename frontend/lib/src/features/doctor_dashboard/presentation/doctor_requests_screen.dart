@@ -180,15 +180,50 @@ class _DoctorRequestsScreenState extends ConsumerState<DoctorRequestsScreen>
 // ---------------------------------------------------------------------------
 // Request Card
 // ---------------------------------------------------------------------------
-class _RequestCard extends ConsumerWidget {
+class _RequestCard extends ConsumerStatefulWidget {
   final Appointment appointment;
   final bool isGeneral;
 
   const _RequestCard({required this.appointment, required this.isGeneral});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_RequestCard> createState() => _RequestCardState();
+}
+
+class _RequestCardState extends ConsumerState<_RequestCard> {
+  String? _loadingAction;
+
+  Future<void> _runAction(
+    String action,
+    Future<void> Function() task,
+  ) async {
+    if (_loadingAction != null) return;
+
+    setState(() => _loadingAction = action);
+    try {
+      await task();
+    } finally {
+      if (mounted) setState(() => _loadingAction = null);
+    }
+  }
+
+  Widget _buttonSpinner({Color color = Colors.white}) {
+    return SizedBox(
+      width: 18,
+      height: 18,
+      child: CircularProgressIndicator(
+        strokeWidth: 2,
+        color: color,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final controller = ref.read(requestsControllerProvider.notifier);
+    final appointment = widget.appointment;
+    final isGeneral = widget.isGeneral;
+    final isBusy = _loadingAction != null;
     final timeStr = appointment.startTime != null ? DateFormat('jm').format(appointment.startTime!) : 'Pending';
     final theme = Theme.of(context);
 
@@ -294,12 +329,19 @@ class _RequestCard extends ConsumerWidget {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: () => controller.claim(appointment.id),
+                onPressed: isBusy
+                    ? null
+                    : () => _runAction(
+                          'claim',
+                          () => controller.claim(appointment.id),
+                        ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.orange,
                   foregroundColor: Colors.white,
                 ),
-                child: const Text('Claim Patient'),
+                child: _loadingAction == 'claim'
+                    ? _buttonSpinner()
+                    : const Text('Claim Patient'),
               ),
             )
           else
@@ -307,17 +349,26 @@ class _RequestCard extends ConsumerWidget {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () => controller.decline(appointment.id),
+                    onPressed: isBusy
+                        ? null
+                        : () => _runAction(
+                              'decline',
+                              () => controller.decline(appointment.id),
+                            ),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.red,
                     ),
-                    child: const Text('Decline'),
+                    child: _loadingAction == 'decline'
+                        ? _buttonSpinner(color: Colors.red)
+                        : const Text('Decline'),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: () async {
+                    onPressed: isBusy
+                        ? null
+                        : () async {
                       final selectedDate = await showDatePicker(
                         context: context,
                         initialDate: DateTime.now(),
@@ -337,7 +388,10 @@ class _RequestCard extends ConsumerWidget {
                             selectedTime.hour,
                             selectedTime.minute,
                           );
-                          controller.proposeTime(appointment.id, dt);
+                          await _runAction(
+                            'accept',
+                            () => controller.proposeTime(appointment.id, dt),
+                          );
                         }
                       }
                     },
@@ -345,7 +399,9 @@ class _RequestCard extends ConsumerWidget {
                       backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
                     ),
-                    child: const Text('Accept (Propose Time)'),
+                    child: _loadingAction == 'accept'
+                        ? _buttonSpinner()
+                        : const Text('Accept (Propose Time)'),
                   ),
                 ),
               ],

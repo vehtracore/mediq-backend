@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/core/api/api_constants.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/core/constants/api_keys.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -153,13 +154,10 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
         setState(() => _awaitingWebhook = true);
       }
     } on DioException catch (e) {
-      final serverMsg = e.response?.data is Map
-          ? e.response?.data['detail'] ?? e.message
-          : e.message;
-      _showSnack('Payment error: $serverMsg', isError: true);
+      _showSnack(UIErrorFormatter.getMessage(e), isError: true);
       debugPrint('[PAYMENTS] DioException during initialize: $e');
     } catch (e) {
-      _showSnack('Unexpected error: ${e.toString()}', isError: true);
+      _showSnack(UIErrorFormatter.getMessage(e), isError: true);
       debugPrint('[PAYMENTS] Unexpected error during initialize: $e');
     } finally {
       if (mounted) setState(() => _isLoading = false);

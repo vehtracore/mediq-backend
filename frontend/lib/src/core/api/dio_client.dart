@@ -7,6 +7,7 @@ import 'api_constants.dart';
 import '../router/app_router.dart';
 import '../storage/storage_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
+import 'api_error_mapper.dart';
 import 'app_exception.dart';
 
 final dioProvider = Provider<Dio>((ref) {
@@ -104,26 +105,14 @@ final dioProvider = Provider<Dio>((ref) {
           }
         }
 
-        String? userFriendlyMessage;
-        if (e.type == DioExceptionType.connectionError ||
-            e.type == DioExceptionType.connectionTimeout ||
-            e.type == DioExceptionType.receiveTimeout) {
-          userFriendlyMessage = 'No internet connection. Please check your network and try again.';
-        } else if (e.response?.statusCode != null && e.response!.statusCode! >= 500) {
-          userFriendlyMessage = 'Our servers are experiencing a hiccup. Please try again in a moment.';
-        }
-
-        if (userFriendlyMessage != null) {
-          final customError = AppException(userFriendlyMessage, originalException: e);
-          return handler.next(
-            e.copyWith(
-              message: userFriendlyMessage,
-              error: customError,
-            ),
-          );
-        }
-
-        return handler.next(e);
+        final safeMessage = ApiErrorMapper.getSecureErrorMessage(e);
+        final customError = AppException(safeMessage, originalException: e);
+        return handler.next(
+          e.copyWith(
+            message: safeMessage,
+            error: customError,
+          ),
+        );
       },
     ),
   );

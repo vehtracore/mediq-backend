@@ -31,7 +31,6 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.core.database import get_db
 from app.models.user import User
-from app.core.notifications import dispatch_push
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -271,27 +270,6 @@ def join_family(
         _FAMILY_PLAN_NAME,
         primary_user.subscription_expiry,
     )
-
-    # ── FCM: notify the new dependent they have joined the family plan ──────
-    try:
-        primary_name = f"{primary_user.first_name} {primary_user.last_name}".strip() or "your primary account"
-        dispatch_push(
-            token=current_user.fcm_token,
-            title="👨‍👩‍👧 You've Joined a Family Plan!",
-            body=f"You are now a member of {primary_name}'s MDQ+ Family Plan. Enjoy shared benefits!",
-            data={
-                "type": "family_plan_joined",
-                "primary_account_id": str(primary_user.id),
-            },
-            event_label="FAMILY/JOIN",
-        )
-    except Exception as notif_exc:
-        logger.error(
-            "[FAMILY] FCM join notification failed — user_id=%s: %s",
-            current_user.id,
-            notif_exc,
-            exc_info=True,
-        )
 
     return JoinResponse(
         message="Successfully joined the family plan.",

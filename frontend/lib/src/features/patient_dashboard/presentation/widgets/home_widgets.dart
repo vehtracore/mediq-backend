@@ -6,6 +6,7 @@ import 'package:mediq_app/src/features/appointments/data/appointment_repository.
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_model.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart'; // ✅ Added for User type
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:mediq_app/src/shared/presentation/widgets/skeleton_loader.dart';
 import 'package:mediq_app/src/shared/presentation/widgets/error_state_widget.dart';
 import 'package:mediq_app/src/core/api/app_exception.dart';
@@ -339,7 +340,7 @@ class QuickActionGrid extends ConsumerWidget {
                       if (context.mounted) {
                         setModalState(() => isLoading = false);
                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                            content: Text("Error: $e"),
+                            content: Text(UIErrorFormatter.getMessage(e)),
                             backgroundColor: Colors.red));
                       }
                     }

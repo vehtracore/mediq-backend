@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 class GlobalErrorWidget extends StatelessWidget {
   final dynamic error;
@@ -10,28 +12,21 @@ class GlobalErrorWidget extends StatelessWidget {
     required this.onRetry,
   });
 
+  static final RegExp _unsafeDetailPattern = RegExp(
+    r'<html|traceback|sql|exception:',
+    caseSensitive: false,
+  );
+
   String _cleanErrorMessage(dynamic err) {
-    String message = err.toString();
-
-    if (message.startsWith('Exception: ')) {
-      message = message.substring('Exception: '.length);
+    if (kDebugMode) {
+      return err.toString();
     }
 
-    if (message.contains('DioException')) {
-      final exp = RegExp(r'\[.+\]\s*(.+)');
-      final match = exp.firstMatch(message);
-      if (match != null && match.group(1) != null) {
-        message = match.group(1)!.trim();
-      } else {
-        message = 'A network connection error occurred.';
-      }
-    }
+    final message = UIErrorFormatter.getMessage(err).trim();
 
-    if (message.contains('Exception:')) {
-      message = message.replaceAll('Exception:', '').trim();
-    }
-
-    if (message.isEmpty || message.length > 150) {
+    if (message.isEmpty ||
+        message.length > 150 ||
+        _unsafeDetailPattern.hasMatch(message)) {
       return 'An unexpected error occurred. Please try again.';
     }
 

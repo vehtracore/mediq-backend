@@ -42,7 +42,7 @@ from app.core.limiter import limiter
 from app.core.database import engine, Base, SessionLocal
 
 # ✅ KEEP "app." prefix because your main.py is inside the app folder
-from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab, vault, voice
+from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab, vault, voice, notifications
 
 from app.api.v1 import emergency
 from app.api.v1 import payments
@@ -50,7 +50,7 @@ from app.api.v1 import family
 from app.api.v1 import support
 from app.api.v1.auth import scrub_expired_accounts
 from app.services.watchdog_service import sweep_pending_transactions
-from app.core.scheduler import cleanup_expired_slots, sweep_stale_appointments, send_appointment_reminders
+from app.core.scheduler import cleanup_expired_slots, sweep_stale_appointments
 
 Base.metadata.create_all(bind=engine)
 
@@ -248,23 +248,13 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
-    # Job 5: Daily appointment reminders — every morning at 07:00 UTC
-    scheduler.add_job(
-        send_appointment_reminders,
-        trigger=CronTrigger(hour=7, minute=0, timezone="UTC"),
-        id="appointment_reminders",
-        name="Daily appointment reminder push notifications (07:00 UTC)",
-        replace_existing=True,
-    )
-
     scheduler.start()
     _sched_log.info(
         "[SCHEDULER] AsyncIOScheduler started. "
         "NDPA scrubber @ 02:00 UTC daily | "
         "Payment watchdog every 5 min | "
         "Doctor-slot cleanup @ 00:00 UTC daily | "
-        "Stale-appointment sweep every 1 hour | "
-        "Appointment reminders @ 07:00 UTC daily."
+        "Stale-appointment sweep every 1 hour."
     )
 
     yield  # ← application runs here
@@ -346,6 +336,7 @@ app.include_router(family.router, prefix="/api/v1/family", tags=["Family Plan"])
 app.include_router(vault.router, prefix="/api/v1/vault", tags=["Vault"])
 app.include_router(voice.router, prefix="/api/v1/voice", tags=["Voice"])
 app.include_router(support.router, prefix="/api/v1/support", tags=["Support"])
+app.include_router(notifications.router, prefix="/api/v1/notifications", tags=["Notifications"])
 
 # --- STATIC FILES ---
 static_dir = "static"

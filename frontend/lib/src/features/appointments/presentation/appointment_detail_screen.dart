@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_model.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_repository.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:intl/intl.dart';
 
 // Use a family provider to fetch the specific appointment by ID
@@ -32,7 +33,8 @@ class AppointmentDetailScreen extends ConsumerWidget {
       ),
       body: asyncAppointment.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (err, stack) => Center(child: Text("Error loading details: $err")),
+        error: (err, stack) =>
+            Center(child: Text(UIErrorFormatter.getMessage(err))),
         data: (appointment) {
           final dateStr = appointment.startTime != null 
               ? DateFormat('MMM dd, yyyy').format(appointment.startTime!) 

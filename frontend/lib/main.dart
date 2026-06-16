@@ -28,8 +28,9 @@ void main() async {
         'SENTRY_DSN',
         defaultValue: '', // Fails open — no data sent when DSN is absent
       );
-      options.tracesSampleRate = 1.0;   // 100 % → lower to 0.1 in high-traffic prod
-      options.profilesSampleRate = 1.0; // CPU profiling (requires tracesSampleRate > 0)
+      final sampleRate = kDebugMode ? 1.0 : 0.1;
+      options.tracesSampleRate = sampleRate;
+      options.profilesSampleRate = sampleRate;
       options.debug = kDebugMode;       // Verbose Sentry logs only in debug builds
     },
     appRunner: () async {

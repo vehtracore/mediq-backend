@@ -17,6 +17,7 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
   // State
   bool _isLoading = true;
   bool _isSubmitting = false;
+  bool _isLoggingOut = false;
   String? _rejectionReason;
   String? _errorMessage;
 
@@ -106,8 +107,13 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
 
   // ── Logout ───────────────────────────────────────────────────────────────────
   Future<void> _logout() async {
-    await ref.read(authControllerProvider.notifier).logout();
-    if (mounted) context.go('/auth');
+    setState(() => _isLoggingOut = true);
+    try {
+      await ref.read(authControllerProvider.notifier).logout();
+      if (mounted) context.go('/auth');
+    } finally {
+      if (mounted) setState(() => _isLoggingOut = false);
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -142,10 +148,20 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
                     ),
                     actions: [
                       TextButton.icon(
-                        onPressed: _logout,
-                        icon: const Icon(Icons.logout,
-                            color: _textMuted, size: 18),
-                        label: Text('Logout',
+                        onPressed:
+                            _isSubmitting || _isLoggingOut ? null : _logout,
+                        icon: _isLoggingOut
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  color: _textMuted,
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.logout,
+                                color: _textMuted, size: 18),
+                        label: Text(_isLoggingOut ? 'Logging out...' : 'Logout',
                             style: GoogleFonts.poppins(
                                 color: _textMuted, fontSize: 13)),
                       ),

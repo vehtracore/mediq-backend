@@ -54,6 +54,31 @@ from app.core.notifications import dispatch_push
 
 logger = logging.getLogger(__name__)
 
+
+def _push_user(
+    user: User | None,
+    *,
+    title: str,
+    body: str,
+    data: dict | None,
+    event_label: str,
+):
+    if not user:
+        return
+    dispatch_push(
+        token=user.fcm_token,
+        title=title,
+        body=body,
+        data=data,
+        event_label=event_label,
+    )
+
+
+def _display_name(user: User | None) -> str:
+    if not user:
+        return "A patient"
+    return f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email or "A patient"
+
 # ── Paystack credentials ───────────────────────────────────────────────────────
 PAYSTACK_SECRET_KEY: str = os.environ.get("PAYSTACK_SECRET_KEY", "")
 if not PAYSTACK_SECRET_KEY:
@@ -310,10 +335,11 @@ def _apply_db_update(
                     user.id,
                 )
 
+        plan_label = "MDQ+ Family Plan" if transaction_type == "family_subscription" else "MDQ+ Premium"
+
         # ── Queue confirmation email ───────────────────────────────────────────
         if background_tasks and user.email:
             expiry_str = user.subscription_expiry.strftime('%d %B %Y')
-            plan_label = "MDQ+ Family Plan" if transaction_type == "family_subscription" else "MDQ+ Premium"
             family_note = (
                 f"<p>This plan also covers <strong>{len(upgraded_dependents)} linked member(s)</strong> "
                 f"on your family account.</p>"
@@ -345,6 +371,15 @@ def _apply_db_update(
                 html_body=html_body,
             )
 
+        expiry_str = user.subscription_expiry.strftime("%d %b %Y") if user.subscription_expiry else "N/A"
+        _push_user(
+            user,
+            title="Subscription Activated",
+            body=f"Your {plan_label} subscription is active until {expiry_str}.",
+            data={"type": "subscription_successful", "plan": str(user.plan)},
+            event_label="PAYMENTS/SUBSCRIPTION_SUCCESS",
+        )
+
         return {
             "action": "subscription_upgraded",
             "plan": transaction_type,
@@ -374,6 +409,12 @@ def _apply_db_update(
                 f"{transaction_type}: appointment id={ref_appointment_id} not found"
             )
 
+        was_schedule_confirmed = (
+            appt.doctor_id is not None
+            and appt.payment_status == "paid"
+            and appt.status == "confirmed"
+        )
+
         appt.payment_status = "paid"
 
         # Dual-pipeline confirmation:
@@ -396,12 +437,15 @@ def _apply_db_update(
             appt.patient_id,
         )
 
+        patient: User | None = (
+            db.query(User).filter(User.id == appt.patient_id).first()
+            if appt.patient_id
+            else None
+        )
+
         # ── Queue appointment confirmation email ───────────────────────────
         # Look up the patient's email from the User table using patient_id.
-        if background_tasks and appt.patient_id:
-            patient: User | None = (
-                db.query(User).filter(User.id == appt.patient_id).first()
-            )
+        if background_tasks and patient:
             if patient and patient.email:
                 type_label = (
                     "GP Consultation"
@@ -442,6 +486,29 @@ def _apply_db_update(
                     subject="MDQ+ Appointment Confirmed ✅",
                     html_body=html_body,
                 )
+
+        if appt.doctor_id is not None and not was_schedule_confirmed:
+            _push_user(
+                patient,
+                title="Appointment Confirmed",
+                body="Your consultation payment is confirmed and your appointment is booked.",
+                data={"type": "schedule_confirmed", "appointment_id": str(appt.id)},
+                event_label="PAYMENTS/APPOINTMENT_CONFIRMED_PATIENT",
+            )
+
+            doctor: Doctor | None = db.query(Doctor).filter(Doctor.id == appt.doctor_id).first()
+            doctor_user: User | None = (
+                db.query(User).filter(User.id == doctor.user_id).first()
+                if doctor
+                else None
+            )
+            _push_user(
+                doctor_user,
+                title="Appointment Booked",
+                body=f"{_display_name(patient)} booked a consultation.",
+                data={"type": "appointment_booked", "appointment_id": str(appt.id)},
+                event_label="PAYMENTS/APPOINTMENT_BOOKED_DOCTOR",
+            )
 
         return {
             "action": "appointment_confirmed",
@@ -548,7 +615,7 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
             token=user.fcm_token,
             title="🎉 MDQ+ Premium Activated!",
             body=f"Your subscription is active until {expiry_str}. Enjoy unlimited access!",
-            data={"type": "subscription_active", "plan": "premium"},
+            data={"type": "subscription_successful", "plan": "premium"},
             event_label="PAYMENTS/CHARGE_SUCCESS",
         )
     except Exception as notif_exc:
@@ -571,8 +638,7 @@ def _handle_subscription_disable(data: dict, db: Session) -> dict:
     """
     Handle subscription.disable (and subscription.not_renew) events from Paystack.
 
-    Downgrades the user's plan back to 'free' and fires a push notification
-    so they are immediately aware their access has been revoked.
+    Downgrades the user's plan back to 'free'.
 
     Raises ValueError when required fields are missing or the user is not found.
     """
@@ -606,23 +672,6 @@ def _handle_subscription_disable(data: dict, db: Session) -> dict:
         "[WEBHOOK] subscription.disable — downgraded user_id=%s to free tier.",
         user.id,
     )
-
-    # ── FCM: notify the user their subscription has expired / been disabled ──
-    try:
-        dispatch_push(
-            token=user.fcm_token,
-            title="⚠️ Subscription Ended",
-            body="Your MDQ+ subscription has expired. Renew now to restore full access.",
-            data={"type": "subscription_disabled", "plan": "free"},
-            event_label="PAYMENTS/SUB_DISABLE",
-        )
-    except Exception as notif_exc:
-        logger.error(
-            "[WEBHOOK] subscription.disable FCM push failed — user_id=%s: %s",
-            user.id,
-            notif_exc,
-            exc_info=True,
-        )
 
     return {
         "action": "subscription_disabled",
@@ -734,6 +783,20 @@ def _handle_transfer_success(data: dict, db: Session) -> dict:
         amount_naira,
         doctor.total_earnings,
     )
+
+    doctor_user: User | None = (
+        db.query(User).filter(User.id == doctor.user_id).first()
+        if doctor.user_id
+        else None
+    )
+    _push_user(
+        doctor_user,
+        title="Payout Sent",
+        body=f"Your payout of ₦{amount_naira:,.2f} has been processed.",
+        data={"type": "payout_sent", "doctor_id": str(doctor.id)},
+        event_label="PAYMENTS/PAYOUT_SENT",
+    )
+
     return {
         "action": "doctor_earnings_credited",
         "doctor_id": doctor.id,

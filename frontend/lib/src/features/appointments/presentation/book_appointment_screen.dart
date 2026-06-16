@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_model.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_repository.dart';
 import 'package:mediq_app/src/features/appointments/data/slot_model.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:mediq_app/src/shared/presentation/widgets/doctor_avatar.dart';
 
 /// Purpose: Drives the calendar and time selection grid on the Book Appointment screen,
@@ -76,7 +77,11 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
+          SnackBar(
+            content: Text(UIErrorFormatter.getMessage(e)),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _isBooking = false);
@@ -99,7 +104,8 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
       ),
       body: slotsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (err, stack) => Center(child: Text("Error: $err")),
+        error: (err, stack) =>
+            Center(child: Text(UIErrorFormatter.getMessage(err))),
         data: (allSlots) {
           final availableSlots = allSlots.where((s) => !s.isBooked).toList();
           if (availableSlots.isEmpty) {
@@ -380,7 +386,8 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                             if (ctx.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
-                                    content: Text("Error: $e"),
+                                    content:
+                                        Text(UIErrorFormatter.getMessage(e)),
                                     backgroundColor: Colors.red),
                               );
                             }

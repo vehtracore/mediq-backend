@@ -7,8 +7,19 @@ class GlobalErrorWidget extends StatelessWidget {
 
   const GlobalErrorWidget({super.key, required this.details, this.onRetry});
 
+  static const _releaseMessage =
+      "Oops! Something unexpected happened. We've been notified and are working on it.";
+
   @override
   Widget build(BuildContext context) {
+    final displayMessage = kDebugMode
+        ? "Oops, something went wrong displaying this page."
+        : _releaseMessage;
+    final debugDetails = [
+      details.exceptionAsString(),
+      details.stack?.toString() ?? 'No stack trace available.',
+    ].join('\n\n');
+
     // If the error happens during the build phase of a widget deep in the tree,
     // we still want to show a clean UI. We wrap it in a Material to ensure
     // text styles and spacing work correctly even outside a Scaffold context.
@@ -26,10 +37,10 @@ class GlobalErrorWidget extends StatelessWidget {
                 size: 64,
               ),
               const SizedBox(height: 16),
-              const Text(
-                "Oops, something went wrong displaying this page.",
+              Text(
+                displayMessage,
                 textAlign: TextAlign.center,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
                   color: Colors.black87,
@@ -67,10 +78,16 @@ class GlobalErrorWidget extends StatelessWidget {
                   style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red),
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  details.exceptionAsString(),
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 240),
+                  child: SingleChildScrollView(
+                    child: Text(
+                      debugDetails,
+                      textAlign: TextAlign.left,
+                      style:
+                          const TextStyle(fontSize: 12, color: Colors.black54),
+                    ),
+                  ),
                 ),
               ]
             ],

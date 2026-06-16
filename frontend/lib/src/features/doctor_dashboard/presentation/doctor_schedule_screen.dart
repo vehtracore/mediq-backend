@@ -106,57 +106,132 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
   }
 
   void _confirmCompletion(BuildContext context, WidgetRef ref) {
+    bool isSubmitting = false;
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Complete Consultation?"),
-        content: const Text("This will mark the session as finished."),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              showDialog(
-                context: context,
-                barrierDismissible: false,
-                builder: (c) => const Center(child: CircularProgressIndicator()),
-              );
-              await ref
-                  .read(appointmentRepositoryProvider)
-                  .completeAppointment(widget.appointment.id);
-              if (context.mounted) Navigator.pop(context); // close loader
-              if (context.mounted) ref.refresh(doctorScheduleProvider);
-            },
-            child: const Text("Confirm", style: TextStyle(color: Colors.green)),
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            title: const Text("Complete Consultation?"),
+            content: const Text("This will mark the session as finished."),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+                child: const Text("Cancel"),
+              ),
+              TextButton(
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        setDialogState(() => isSubmitting = true);
+                        try {
+                          await ref
+                              .read(appointmentRepositoryProvider)
+                              .completeAppointment(widget.appointment.id);
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          if (context.mounted) {
+                            ref.refresh(doctorScheduleProvider);
+                          }
+                        } catch (_) {
+                          setDialogState(() => isSubmitting = false);
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  "Could not complete consultation. Please try again.",
+                                ),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
+                        }
+                      },
+                child: isSubmitting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.green,
+                        ),
+                      )
+                    : const Text(
+                        "Confirm",
+                        style: TextStyle(color: Colors.green),
+                      ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
   void _confirmCancellation(BuildContext context, WidgetRef ref) {
+    bool isSubmitting = false;
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Cancel Consultation"),
-        content: const Text("Are you sure you want to cancel this consultation? This action cannot be undone and will alert administration."),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text("Keep Appointment")),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              await ref
-                  .read(appointmentRepositoryProvider)
-                  .cancelMyAppointment(widget.appointment.id);
-              if (context.mounted) ref.refresh(doctorScheduleProvider);
-            },
-            child: const Text("Confirm Cancel",
-                style: TextStyle(color: Colors.red)),
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            title: const Text("Cancel Consultation"),
+            content: const Text(
+              "Are you sure you want to cancel this consultation? This action cannot be undone and will alert administration.",
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+                child: const Text("Keep Appointment"),
+              ),
+              TextButton(
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        setDialogState(() => isSubmitting = true);
+                        try {
+                          await ref
+                              .read(appointmentRepositoryProvider)
+                              .cancelMyAppointment(widget.appointment.id);
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          if (context.mounted) {
+                            ref.refresh(doctorScheduleProvider);
+                          }
+                        } catch (_) {
+                          setDialogState(() => isSubmitting = false);
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  "Could not cancel consultation. Please try again.",
+                                ),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
+                        }
+                      },
+                child: isSubmitting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.red,
+                        ),
+                      )
+                    : const Text(
+                        "Confirm Cancel",
+                        style: TextStyle(color: Colors.red),
+                      ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 

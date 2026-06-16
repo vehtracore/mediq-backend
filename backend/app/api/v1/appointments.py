@@ -15,6 +15,7 @@ from app.models.review import Review
 from app.models.vault import ConsultationRecord
 from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, AppointmentUpdate, GeneralBookRequest, ReferralRequest, ReferralResponse, AppointmentProposeRequest, VIPBookRequest, ReferralCreate
 from app.api import deps
+from app.core.notifications import dispatch_push
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,78 @@ def _close_stale_patient_consultations(db: Session, patient_id: int) -> int:
         )
 
     return stale_count
+
+
+def _display_name(user: User | None) -> str:
+    if not user:
+        return "A patient"
+    return f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email or "A patient"
+
+
+def _notify_user(
+    user: User | None,
+    *,
+    title: str,
+    body: str,
+    notification_type: str,
+    event_label: str,
+    appointment_id: int | None = None,
+):
+    if not user:
+        return
+
+    data = {"type": notification_type}
+    if appointment_id is not None:
+        data["appointment_id"] = str(appointment_id)
+
+    dispatch_push(
+        token=user.fcm_token,
+        title=title,
+        body=body,
+        data=data,
+        event_label=event_label,
+    )
+
+
+def _notify_patient(
+    db: Session,
+    appt: Appointment,
+    *,
+    title: str,
+    body: str,
+    notification_type: str,
+    event_label: str,
+):
+    patient = db.query(User).filter(User.id == appt.patient_id).first() if appt.patient_id else None
+    _notify_user(
+        patient,
+        title=title,
+        body=body,
+        notification_type=notification_type,
+        event_label=event_label,
+        appointment_id=appt.id,
+    )
+
+
+def _notify_doctor(
+    db: Session,
+    doctor: Doctor | None,
+    *,
+    title: str,
+    body: str,
+    notification_type: str,
+    event_label: str,
+    appointment_id: int | None = None,
+):
+    doctor_user = db.query(User).filter(User.id == doctor.user_id).first() if doctor else None
+    _notify_user(
+        doctor_user,
+        title=title,
+        body=body,
+        notification_type=notification_type,
+        event_label=event_label,
+        appointment_id=appointment_id,
+    )
 
 # ---------------------------------------------------------------------------
 # Historical Context: Fetch the last 3 completed consultations for a patient
@@ -443,6 +516,15 @@ def request_vip_appointment(
         "[VIP Request] patient_id=%s -> doctor_id=%s appt_id=%s",
         current_user.id, req.doctor_id, new_appt.id
     )
+    _notify_doctor(
+        db,
+        doctor,
+        title="VIP Request Received",
+        body=f"{_display_name(current_user)} requested a VIP appointment.",
+        notification_type="vip_request_received",
+        event_label="APPOINTMENTS/VIP_REQUEST",
+        appointment_id=new_appt.id,
+    )
     return map_appt(new_appt)
 
 @router.get("/my", response_model=List[AppointmentResponse])
@@ -610,6 +692,14 @@ def claim_appointment(appt_id: int, db: Session = Depends(get_db), current_user:
     appt.status = "confirmed"
     db.commit()
     db.refresh(appt)
+    _notify_patient(
+        db,
+        appt,
+        title="Appointment Confirmed",
+        body="Your consultation has been confirmed.",
+        notification_type="schedule_confirmed",
+        event_label="APPOINTMENTS/QUEUE_CLAIMED",
+    )
     return map_appt(appt, doctor.full_name)
 
 @router.put("/doctor/appointments/{appt_id}/accept", response_model=AppointmentResponse)
@@ -617,9 +707,19 @@ def accept_appointment(appt_id: int, db: Session = Depends(get_db), current_user
     doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
     if not appt: raise HTTPException(404)
+    was_confirmed = appt.status == "confirmed"
     appt.status = "confirmed"
     db.commit()
     db.refresh(appt)
+    if not was_confirmed:
+        _notify_patient(
+            db,
+            appt,
+            title="Appointment Confirmed",
+            body="Your consultation has been confirmed.",
+            notification_type="schedule_confirmed",
+            event_label="APPOINTMENTS/ACCEPTED",
+        )
     return map_appt(appt, doctor.full_name)
 
 @router.put("/doctor/appointments/{appt_id}/decline", response_model=AppointmentResponse)
@@ -627,10 +727,20 @@ def decline_appointment(appt_id: int, db: Session = Depends(get_db), current_use
     doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
     if not appt: raise HTTPException(404)
+    was_cancelled = appt.status == "cancelled"
     appt.status = "cancelled"
     if appt.slot: appt.slot.is_booked = False
     db.commit()
     db.refresh(appt)
+    if not was_cancelled:
+        _notify_patient(
+            db,
+            appt,
+            title="Appointment Cancelled",
+            body="Your appointment request was declined.",
+            notification_type="schedule_cancelled",
+            event_label="APPOINTMENTS/DECLINED",
+        )
     return map_appt(appt, doctor.full_name)
 
 @router.put("/doctor/appointments/{appt_id}/cancel", response_model=AppointmentResponse)
@@ -638,10 +748,20 @@ def cancel_appointment_by_doctor(appt_id: int, db: Session = Depends(get_db), cu
     doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
     if not appt: raise HTTPException(404)
+    was_cancelled = appt.status == "cancelled"
     appt.status = "cancelled"
     if appt.slot: appt.slot.is_booked = False
     db.commit()
     db.refresh(appt)
+    if not was_cancelled:
+        _notify_patient(
+            db,
+            appt,
+            title="Appointment Cancelled",
+            body="Your appointment was cancelled by the doctor.",
+            notification_type="schedule_cancelled",
+            event_label="APPOINTMENTS/CANCELLED_BY_DOCTOR",
+        )
     return map_appt(appt, doctor.full_name)
 
 @router.put("/doctor/appointments/{appt_id}/complete", response_model=AppointmentResponse)
@@ -649,6 +769,7 @@ def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_us
     doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
     if not appt: raise HTTPException(404)
+    was_completed = appt.status == "completed"
     appt.status = "completed"
 
     # ── Compile referral data if the doctor issued a hospital referral ───
@@ -695,6 +816,15 @@ def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_us
 
     db.commit()
     db.refresh(appt)
+    if not was_completed:
+        _notify_patient(
+            db,
+            appt,
+            title="Consultation Complete",
+            body="Your consultation is complete. Any notes or prescriptions are available in your health vault.",
+            notification_type="consultation_complete",
+            event_label="APPOINTMENTS/COMPLETED",
+        )
     return map_appt(appt, doctor.full_name)
 
 
@@ -722,8 +852,11 @@ def prescribe_appointment(
     if appt.doctor_id != doctor.id:
         raise HTTPException(status_code=403, detail="You are not the doctor for this appointment.")
 
+    previous_prescription = appt.prescription
+    prescription_added = False
     if payload.prescription is not None:
         appt.prescription = payload.prescription.strip() or None
+        prescription_added = bool(appt.prescription) and appt.prescription != previous_prescription
 
     # If a ConsultationRecord already exists (appointment already completed),
     # update it immediately so the vault stays in sync.
@@ -742,6 +875,15 @@ def prescribe_appointment(
         "[Prescribe] doctor_id=%s wrote prescription for appt_id=%s",
         doctor.id, appt.id,
     )
+    if prescription_added:
+        _notify_patient(
+            db,
+            appt,
+            title="Prescription Added",
+            body="Your doctor added a prescription to your consultation.",
+            notification_type="prescription_added",
+            event_label="APPOINTMENTS/PRESCRIPTION_ADDED",
+        )
     return map_appt(appt, doctor.full_name)
 
 

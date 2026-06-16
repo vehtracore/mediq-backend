@@ -15,6 +15,7 @@ class DoctorPendingScreen extends ConsumerStatefulWidget {
 
 class _DoctorPendingScreenState extends ConsumerState<DoctorPendingScreen> {
   bool _isLoading = false;
+  bool _isLoggingOut = false;
 
   Future<void> _checkStatus() async {
     setState(() => _isLoading = true);
@@ -59,8 +60,13 @@ class _DoctorPendingScreenState extends ConsumerState<DoctorPendingScreen> {
   }
 
   Future<void> _handleLogout() async {
-    await ref.read(authControllerProvider.notifier).logout();
-    if (mounted) context.go('/auth');
+    setState(() => _isLoggingOut = true);
+    try {
+      await ref.read(authControllerProvider.notifier).logout();
+      if (mounted) context.go('/auth');
+    } finally {
+      if (mounted) setState(() => _isLoggingOut = false);
+    }
   }
 
   @override
@@ -130,9 +136,15 @@ class _DoctorPendingScreenState extends ConsumerState<DoctorPendingScreen> {
 
             // Logout
             TextButton(
-              onPressed: _handleLogout,
+              onPressed: _isLoading || _isLoggingOut ? null : _handleLogout,
               style: TextButton.styleFrom(foregroundColor: Colors.grey),
-              child: const Text("Logout"),
+              child: _isLoggingOut
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text("Logout"),
             ),
           ],
         ),
