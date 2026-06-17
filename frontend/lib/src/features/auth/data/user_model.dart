@@ -1,3 +1,5 @@
+import 'package:mediq_app/src/core/api/api_constants.dart';
+
 class User {
   final String id;
   final String email;
@@ -73,12 +75,9 @@ class User {
       if (rawImage.startsWith('http')) {
         finalUrl = rawImage;
       } else {
-        // ✅ YOUR REAL BACKEND URL
-        const String baseUrl = "https://mediq-backend-m3ik.onrender.com"; 
-        
         // Strip leading slash if present
         final cleanPath = rawImage.startsWith('/') ? rawImage.substring(1) : rawImage;
-        finalUrl = "$baseUrl/$cleanPath";
+        finalUrl = "${ApiConstants.baseUrl}/$cleanPath";
       }
     }
 
@@ -169,9 +168,8 @@ class DependentUser {
       if (rawImage.startsWith('http')) {
         finalUrl = rawImage;
       } else {
-        const String baseUrl = "https://mediq-backend-m3ik.onrender.com"; 
         final cleanPath = rawImage.startsWith('/') ? rawImage.substring(1) : rawImage;
-        finalUrl = "\$baseUrl/\$cleanPath";
+        finalUrl = "${ApiConstants.baseUrl}/$cleanPath";
       }
     }
 

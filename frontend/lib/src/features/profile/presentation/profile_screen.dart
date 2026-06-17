@@ -245,6 +245,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     final bool canCancel = !isFamilyDep && !isCancelled;
     bool isCancelling = false;
     bool isRestoring = false;
+    String? restoreInlineError;
 
     showModalBottomSheet(
       context: context,
@@ -389,18 +390,17 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                                 if ((user.paystackSubscriptionCode ?? '')
                                     .trim()
                                     .isEmpty) {
-                                  messenger.showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'Auto-renew cannot be restored automatically for this subscription. Please contact support.',
-                                      ),
-                                      backgroundColor: Colors.red,
-                                    ),
-                                  );
+                                  setSheetState(() {
+                                    restoreInlineError =
+                                        'Auto-renew cannot be restored automatically for this subscription. Please contact support.';
+                                  });
                                   return;
                                 }
 
-                                setSheetState(() => isRestoring = true);
+                                setSheetState(() {
+                                  isRestoring = true;
+                                  restoreInlineError = null;
+                                });
                                 try {
                                   await ref
                                       .read(authControllerProvider.notifier)
@@ -470,6 +470,41 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                                 ),
                               ),
                         ),
+                      if (restoreInlineError != null) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: colorScheme.errorContainer.withOpacity(0.7),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: colorScheme.error.withOpacity(0.25),
+                            ),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.info_outline_rounded,
+                                size: 16,
+                                color: colorScheme.onErrorContainer,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  restoreInlineError!,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: colorScheme.onErrorContainer,
+                                    height: 1.3,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

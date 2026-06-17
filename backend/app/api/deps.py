@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, status
@@ -33,9 +34,12 @@ def _is_subscription_expired(user: User) -> bool:
 # The client is initialised once at module load time and caches the JWKS
 # response internally, refreshing only when it encounters an unknown key ID.
 # ---------------------------------------------------------------------------
-SUPABASE_URL: str = "https://hzrjaquqlpkbggwdcres.supabase.co"
+SUPABASE_URL: str = os.getenv(
+    "SUPABASE_URL",
+    "https://hzrjaquqlpkbggwdcres.supabase.co",
+).rstrip("/")
 JWKS_URL: str = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json"
-SUPABASE_JWT_AUDIENCE: str = "authenticated"
+SUPABASE_JWT_AUDIENCE: str = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
 
 jwks_client = PyJWKClient(JWKS_URL)
 

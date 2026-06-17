@@ -26,22 +26,43 @@ _FIREBASE_APP = None
 _cred_raw = os.getenv("FIREBASE_CREDENTIALS")
 
 if _cred_raw:
-    try:
-        # Try parsing as a JSON string first (Render / cloud deploys)
-        cred_dict = json.loads(_cred_raw)
-        _cred = credentials.Certificate(cred_dict)
-        _FIREBASE_APP = firebase_admin.initialize_app(_cred)
-        logger.info("[FCM] Firebase Admin SDK initialised (from JSON env var)")
-    except (json.JSONDecodeError, ValueError):
-        # Fall back to treating it as a file path (local development)
+    _cred_value = _cred_raw.strip()
+    looks_like_json = _cred_value.startswith("{")
+
+    if looks_like_json:
         try:
-            _cred = credentials.Certificate(_cred_raw)
+            cred_dict = json.loads(_cred_value)
+            if not isinstance(cred_dict, dict):
+                raise ValueError("FIREBASE_CREDENTIALS JSON must be an object.")
+
+            private_key = cred_dict.get("private_key")
+            if isinstance(private_key, str):
+                cred_dict["private_key"] = private_key.replace("\\n", "\n")
+
+            _cred = credentials.Certificate(cred_dict)
             _FIREBASE_APP = firebase_admin.initialize_app(_cred)
-            logger.info(f"[FCM] Firebase Admin SDK initialised (from file: {_cred_raw})")
+            logger.info("[FCM] Firebase Admin SDK initialised (from JSON env var)")
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "[FCM] Invalid FCM JSON format in FIREBASE_CREDENTIALS: %s",
+                exc,
+            )
         except Exception as exc:
-            logger.error(f"[FCM] Failed to initialise Firebase Admin SDK: {exc}")
-    except Exception as exc:
-        logger.error(f"[FCM] Failed to initialise Firebase Admin SDK: {exc}")
+            logger.error(
+                "[FCM] Failed to initialise Firebase Admin SDK from JSON env var: %s",
+                exc,
+            )
+    else:
+        # Local development can still point FIREBASE_CREDENTIALS to a JSON file.
+        try:
+            _cred = credentials.Certificate(_cred_value)
+            _FIREBASE_APP = firebase_admin.initialize_app(_cred)
+            logger.info("[FCM] Firebase Admin SDK initialised (from file path)")
+        except Exception as exc:
+            logger.error(
+                "[FCM] Failed to initialise Firebase Admin SDK from file path: %s",
+                exc,
+            )
 else:
     logger.warning(
         "[FCM] FIREBASE_CREDENTIALS env var not set — push notifications disabled."
