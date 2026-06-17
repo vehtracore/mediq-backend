@@ -38,6 +38,7 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
   DateTime? _selectedDate;
   int? _selectedSlotId;
   final TextEditingController _notesController = TextEditingController();
+  String? _notesError;
   bool _isBooking = false;
 
   @override
@@ -49,18 +50,33 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
   bool _isSameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
+  void _showReasonRequiredSnack([BuildContext? snackContext]) {
+    final messenger = ScaffoldMessenger.of(snackContext ?? context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text("Please fill reason for visit"),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
   Future<void> _handleBooking() async {
-    if (_selectedSlotId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Please select a time slot")));
+    final notes = _notesController.text.trim();
+    if (notes.isEmpty) {
+      setState(() => _notesError = "Please fill reason for visit");
+      _showReasonRequiredSnack();
       return;
     }
 
-    final notes = _notesController.text.trim();
-    if (notes.isEmpty) {
+    if (_notesError != null) {
+      setState(() => _notesError = null);
+    }
+
+    if (_selectedSlotId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please provide a reason for your visit")),
-      );
+          const SnackBar(content: Text("Please select a time slot")));
       return;
     }
 
@@ -297,10 +313,16 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                 TextField(
                   controller: _notesController,
                   maxLines: 3,
+                  onChanged: (value) {
+                    if (_notesError != null && value.trim().isNotEmpty) {
+                      setState(() => _notesError = null);
+                    }
+                  },
                   style: theme.textTheme.bodyLarge, // ✅ Dynamic Input Text
                   decoration: InputDecoration(
                     hintText: "Briefly describe your symptoms...",
                     hintStyle: TextStyle(color: Colors.grey[400]),
+                    errorText: _notesError,
                     filled: true,
                     fillColor:
                         theme.inputDecorationTheme.fillColor, // ✅ Dynamic Fill
@@ -337,6 +359,7 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
   void _showVIPRequestSheet(BuildContext context, WidgetRef ref, int doctorId) {
     final reasonController = TextEditingController();
     String preferredTime = "Morning";
+    String? reasonError;
     bool isSubmitting = false;
 
     showModalBottomSheet(
@@ -378,9 +401,15 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                 controller: reasonController,
                 maxLines: 3,
                 maxLength: 500,
-                decoration: const InputDecoration(
+                onChanged: (value) {
+                  if (reasonError != null && value.trim().isNotEmpty) {
+                    setModalState(() => reasonError = null);
+                  }
+                },
+                decoration: InputDecoration(
                   labelText: "Reason for Visit / Symptoms",
-                  border: OutlineInputBorder(),
+                  errorText: reasonError,
+                  border: const OutlineInputBorder(),
                   alignLabelWithHint: true,
                 ),
               ),
@@ -394,11 +423,9 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                       : () async {
                           final reason = reasonController.text.trim();
                           if (reason.isEmpty) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                  content: Text(
-                                      "Please provide a reason for your visit")),
-                            );
+                            setModalState(() =>
+                                reasonError = "Please fill reason for visit");
+                            _showReasonRequiredSnack(ctx);
                             return;
                           }
 

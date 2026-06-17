@@ -136,7 +136,6 @@ def get_current_user(
         user.plan = "free"
         user.subscription_expiry = None
         user.auto_renew = False
-        user.paystack_subscription_code = None
         # Cascade downgrade to all dependents
         db.query(User).filter(User.primary_account_id == user.id).update(
             {

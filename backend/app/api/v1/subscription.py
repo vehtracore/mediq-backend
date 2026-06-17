@@ -87,54 +87,73 @@ async def cancel_subscription(
          naturally; no artificial downgrade is applied here.
     4. Returns the updated UserResponse so the frontend can refresh state.
 
-    Returns 200 only when Paystack cancellation succeeds, or when a legacy
-    manually-granted plan has no billing code to disable.
+    Returns 200 only when Paystack cancellation succeeds. If billing
+    identifiers are missing, returns 400 without mutating local renewal state.
     """
-    # ── 1. Guard: no billing codes at all ────────────────────────────────────
-    # Unlike the original hard-stop, we now log and fall through so that
-    # manually-granted plans (common in testing) can still be "cancelled"
-    # cleanly via the UI without a confusing 400 error.
+    # ── 1. Guard: recurring billing identifiers are required ─────────────────
+    # Without these identifiers we cannot disable Paystack recurring billing,
+    # and pretending the cancellation succeeded creates a broken "cancelled but
+    # unrestorable" state in the UI.
     if not current_user.paystack_subscription_code:
         logger.warning(
-            "[SUBSCRIPTION] Cancel: no paystack_subscription_code on user_id=%s — "
-            "skipping Paystack call, applying local DB cleanup only.",
+            "[SUBSCRIPTION] Cancel blocked: no paystack_subscription_code on user_id=%s.",
             current_user.id,
         )
-    else:
-        sub_code: str = current_user.paystack_subscription_code
-        email_token: str = current_user.paystack_email_token or ""
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No saved billing subscription was found for this account. "
+                "Please renew from checkout or contact support."
+            ),
+        )
 
-        logger.info(
-            "[SUBSCRIPTION] Cancellation requested — user_id=%s | sub_code='%s'",
+    if not current_user.paystack_email_token:
+        logger.warning(
+            "[SUBSCRIPTION] Cancel blocked: no paystack_email_token on user_id=%s.",
             current_user.id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Subscription cancellation token is missing. "
+                "Please contact support."
+            ),
+        )
+
+    sub_code: str = current_user.paystack_subscription_code
+    email_token: str = current_user.paystack_email_token
+
+    logger.info(
+        "[SUBSCRIPTION] Cancellation requested — user_id=%s | sub_code='%s'",
+        current_user.id,
+        sub_code,
+    )
+
+    # ── 2. Call Paystack ─────────────────────────────────────────────────
+    # PaystackService raises HTTPException(400) on business-logic failures
+    # (e.g. "No active recurring subscription found", invalid token) and
+    # HTTPException(503) on network-level errors. Local auto_renew is only
+    # changed after Paystack confirms disable, keeping billing state honest.
+    try:
+        await paystack_service.disable_subscription(
+            subscription_code=sub_code,
+            email_token=email_token,
+        )
+        logger.info(
+            "[SUBSCRIPTION] ✅ Paystack confirmed disable — sub_code='%s'",
             sub_code,
         )
-
-        # ── 2. Call Paystack ─────────────────────────────────────────────────
-        # PaystackService raises HTTPException(400) on business-logic failures
-        # (e.g. "No active recurring subscription found", invalid token) and
-        # HTTPException(503) on network-level errors. Local auto_renew is only
-        # changed after Paystack confirms disable, keeping billing state honest.
-        try:
-            await paystack_service.disable_subscription(
-                subscription_code=sub_code,
-                email_token=email_token,
-            )
-            logger.info(
-                "[SUBSCRIPTION] ✅ Paystack confirmed disable — sub_code='%s'",
-                sub_code,
-            )
-        except HTTPException as paystack_exc:
-            # Log enough context for ops to diagnose without alarming the user.
-            logger.warning(
-                "[SUBSCRIPTION] ⚠️  Paystack disable failed for user_id=%s "
-                "(sub_code='%s') — HTTP %s: %s. Local auto_renew unchanged.",
-                current_user.id,
-                sub_code,
-                paystack_exc.status_code,
-                paystack_exc.detail,
-            )
-            raise
+    except HTTPException as paystack_exc:
+        # Log enough context for ops to diagnose without alarming the user.
+        logger.warning(
+            "[SUBSCRIPTION] ⚠️  Paystack disable failed for user_id=%s "
+            "(sub_code='%s') — HTTP %s: %s. Local auto_renew unchanged.",
+            current_user.id,
+            sub_code,
+            paystack_exc.status_code,
+            paystack_exc.detail,
+        )
+        raise
 
     # ── 3. Local DB state (always runs) ───────────────────────────────────────
     # Keep the Paystack subscription identifiers so an unexpired cancellation

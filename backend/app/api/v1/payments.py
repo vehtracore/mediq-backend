@@ -169,6 +169,20 @@ async def initialize_transaction(payload: PaymentInitializeRequest):
         "amount": payload.amount,
         "reference": payload.reference,
     }
+
+    transaction_type, ref_appointment_id, ref_user_id = _parse_reference(
+        payload.reference
+    )
+    metadata: dict = {
+        "reference": payload.reference,
+        "transaction_type": transaction_type,
+    }
+    if ref_user_id:
+        metadata["user_id"] = ref_user_id
+    if ref_appointment_id:
+        metadata["appointment_id"] = ref_appointment_id
+    body["metadata"] = metadata
+
     # Conditionally attach the Plan Code for recurring subscriptions.
     if payload.plan:
         body["plan"] = payload.plan
@@ -262,6 +276,45 @@ def _parse_reference(reference: str) -> tuple[str, str | None, str | None]:
     return transaction_type, ref_appointment_id, ref_user_id
 
 
+def _persist_subscription_identifiers(user: User, paystack_data: dict | None) -> bool:
+    """
+    Persist Paystack subscription identifiers when they are present on a
+    transaction or webhook payload. Paystack may return `subscription` as a
+    nested object or as a plain subscription code depending on the event.
+    """
+    if not paystack_data:
+        return False
+
+    subscription_obj = paystack_data.get("subscription") or {}
+    subscription_code: str | None = None
+    email_token: str | None = None
+
+    if isinstance(subscription_obj, dict):
+        subscription_code = (
+            subscription_obj.get("subscription_code")
+            or subscription_obj.get("code")
+        )
+        email_token = subscription_obj.get("email_token")
+    elif isinstance(subscription_obj, str):
+        subscription_code = subscription_obj
+
+    subscription_code = (
+        subscription_code
+        or paystack_data.get("subscription_code")
+    )
+    email_token = email_token or paystack_data.get("email_token")
+
+    changed = False
+    if subscription_code and user.paystack_subscription_code != subscription_code:
+        user.paystack_subscription_code = subscription_code
+        changed = True
+    if email_token and user.paystack_email_token != email_token:
+        user.paystack_email_token = email_token
+        changed = True
+
+    return changed
+
+
 def _apply_db_update(
     transaction_type: str,
     ref_appointment_id: str | None,
@@ -269,6 +322,7 @@ def _apply_db_update(
     reference: str,
     db: Session,
     background_tasks: BackgroundTasks | None = None,
+    paystack_data: dict | None = None,
 ) -> dict:
     """
     Execute the database update for a confirmed Paystack transaction.
@@ -298,6 +352,7 @@ def _apply_db_update(
         user.plan = "family" if transaction_type == "family_subscription" else "premium"
         user.subscription_expiry = expiry
         user.auto_renew = True
+        identifiers_saved = _persist_subscription_identifiers(user, paystack_data)
         db.commit()
         db.refresh(user)
 
@@ -308,6 +363,11 @@ def _apply_db_update(
             transaction_type,
             user.subscription_expiry,
         )
+        if identifiers_saved:
+            logger.info(
+                "[PAYMENTS] ✅ Stored Paystack subscription identifiers for user_id=%s",
+                user.id,
+            )
 
         # ── Flow A2 only: Bulk-upgrade all linked dependents ───────────────────
         upgraded_dependents: list[int] = []
@@ -586,20 +646,14 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
     user.burst_chat_count = 0
 
     # ── Capture subscription codes if Paystack includes them ───────────────────
-    # charge.success events sometimes embed a nested `subscription` object.
-    # Extract and persist both values so the cancel endpoint can use them.
-    sub_obj: dict = data.get("subscription") or {}
-    sub_code: str | None = sub_obj.get("subscription_code") or data.get("subscription_code")
-    email_token: str | None = sub_obj.get("email_token") or data.get("email_token")
-    if sub_code:
-        user.paystack_subscription_code = sub_code
+    # charge.success events may embed `subscription` as either an object or a
+    # plain code string, so use the shared tolerant parser.
+    identifiers_saved = _persist_subscription_identifiers(user, data)
+    if identifiers_saved:
         logger.info(
-            "[WEBHOOK] charge.success — captured subscription_code='%s' for user_id=%s",
-            sub_code,
+            "[WEBHOOK] charge.success — captured subscription identifiers for user_id=%s",
             user.id,
         )
-    if email_token:
-        user.paystack_email_token = email_token
 
     db.commit()
     db.refresh(user)
@@ -897,6 +951,7 @@ async def paystack_webhook(
                 reference=reference,
                 db=db,
                 background_tasks=background_tasks,
+                paystack_data=data,
             )
     except Exception as exc:
         db.rollback()  # ensure the session is clean before the DLQ write
@@ -1005,6 +1060,7 @@ async def verify_transaction(
             reference=reference,
             db=db,
             background_tasks=background_tasks,
+            paystack_data=tx_data,
         )
     except Exception as exc:
         db.rollback()

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http_parser/http_parser.dart';
+import 'package:mediq_app/src/core/api/app_exception.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_model.dart';
@@ -282,13 +283,24 @@ class AuthRepository {
     try {
       final response = await _dio.post('/api/v1/subscription/cancel-subscription');
       if (response.statusCode != null && response.statusCode! >= 400) {
-        throw Exception("Failed to cancel subscription.");
+        throw AppException("Failed to cancel subscription.");
       }
+    } on AppException {
+      rethrow;
     } on DioException catch (e) {
-      final msg = e.response?.data['detail'] ?? "Cancel subscription failed. Please try again.";
-      throw Exception(msg);
+      final data = e.response?.data;
+      final msg = data is Map
+          ? data['detail']?.toString()
+          : null;
+      throw AppException(
+        msg ?? "Cancel subscription failed. Please try again.",
+        originalException: e,
+      );
     } catch (e) {
-      throw Exception("Cancel subscription failed: $e");
+      throw AppException(
+        "Cancel subscription failed. Please try again.",
+        originalException: e,
+      );
     }
   }
 
@@ -296,14 +308,24 @@ class AuthRepository {
     try {
       final response = await _dio.post('/api/v1/subscription/restore');
       if (response.statusCode != null && response.statusCode! >= 400) {
-        throw Exception("Failed to restore subscription.");
+        throw AppException("Failed to restore subscription.");
       }
+    } on AppException {
+      rethrow;
     } on DioException catch (e) {
-      final msg = e.response?.data['detail'] ??
-          "Restore subscription failed. Please try again.";
-      throw Exception(msg);
+      final data = e.response?.data;
+      final msg = data is Map
+          ? data['detail']?.toString()
+          : null;
+      throw AppException(
+        msg ?? "Restore subscription failed. Please try again.",
+        originalException: e,
+      );
     } catch (e) {
-      throw Exception("Restore subscription failed: $e");
+      throw AppException(
+        "Restore subscription failed. Please try again.",
+        originalException: e,
+      );
     }
   }
 

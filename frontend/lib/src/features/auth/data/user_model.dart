@@ -10,6 +10,7 @@ class User {
   final bool isBanned;
   final bool autoRenew;
   final String? subscriptionExpiry;
+  final String? paystackSubscriptionCode;
 
   // --- 🏥 Medical History ---
   final String? bloodType;
@@ -47,6 +48,7 @@ class User {
     this.isBanned = false,
     this.autoRenew = false,
     this.subscriptionExpiry,
+    this.paystackSubscriptionCode,
     this.bloodType,
     this.allergies,
     this.chronicConditions,
@@ -92,6 +94,7 @@ class User {
       isBanned: json['is_banned'] ?? false,
       autoRenew: json['auto_renew'] ?? false,
       subscriptionExpiry: json['subscription_expiry']?.toString(),
+      paystackSubscriptionCode: json['paystack_subscription_code']?.toString(),
 
       bloodType: json['blood_type'],
       allergies: json['allergies'],
@@ -125,6 +128,7 @@ class User {
       'is_banned': isBanned,
       'auto_renew': autoRenew,
       'subscription_expiry': subscriptionExpiry,
+      'paystack_subscription_code': paystackSubscriptionCode,
       'blood_type': bloodType,
       'allergies': allergies,
       'chronic_conditions': chronicConditions,
