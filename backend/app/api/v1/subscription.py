@@ -188,7 +188,11 @@ async def restore_subscription(
     if not current_user.paystack_subscription_code:
         raise HTTPException(
             status_code=400,
-            detail="No saved subscription found to restore.",
+            detail=(
+                "Auto-renew cannot be restored automatically for this "
+                "subscription because the Paystack billing authorization was "
+                "not saved. Please contact support."
+            ),
         )
 
     if not current_user.paystack_email_token:

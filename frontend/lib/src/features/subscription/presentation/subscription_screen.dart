@@ -220,6 +220,16 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                 style: TextStyle(decoration: TextDecoration.underline),
               ),
             ),
+            const SizedBox(height: 10),
+            Text(
+              'Subscriptions automatically renew unless cancelled. Use the cancel button to stop recurring charges. Terms and conditions apply.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 10.5,
+                color: Colors.grey[500],
+                height: 1.35,
+              ),
+            ),
             const SizedBox(height: 16),
           ],
         ),

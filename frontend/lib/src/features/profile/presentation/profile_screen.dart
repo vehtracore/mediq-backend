@@ -82,7 +82,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     onTap: () => context.push('/medical_history')),
                 _buildProfileItem(context,
                     icon: Icons.star_border,
-                    text: "Manage Subscription",
+                    text: user == null || user.subscriptionTier == 'free'
+                        ? "Subscription"
+                        : "Manage Subscription",
                     iconColor: Colors.amber,
                     onTap: () {
                       if (user == null || user.subscriptionTier == 'free') {
@@ -238,8 +240,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             : null;
 
     final bool isCancelled = !isFamilyDep && !user.autoRenew && (user.subscriptionTier == 'premium' || user.subscriptionTier == 'family');
-    final bool hasSavedSubscriptionCode =
-        (user.paystackSubscriptionCode ?? '').trim().isNotEmpty;
 
     // Only active hosts and solo-premium users can cancel.
     final bool canCancel = !isFamilyDep && !isCancelled;
@@ -380,105 +380,95 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      if (hasSavedSubscriptionCode)
-                        TextButton(
-                          onPressed: isRestoring
-                              ? null
-                              : () async {
-                                  final messenger =
-                                      ScaffoldMessenger.of(context);
-                                  setSheetState(() => isRestoring = true);
-                                  try {
-                                    await ref
-                                        .read(authControllerProvider.notifier)
-                                        .restoreSubscription();
-                                    ref.invalidate(userProvider);
+                      TextButton(
+                        onPressed: isRestoring
+                            ? null
+                            : () async {
+                                final messenger =
+                                    ScaffoldMessenger.of(context);
+                                if ((user.paystackSubscriptionCode ?? '')
+                                    .trim()
+                                    .isEmpty) {
+                                  messenger.showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Auto-renew cannot be restored automatically for this subscription. Please contact support.',
+                                      ),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                  return;
+                                }
 
-                                    if (sheetCtx.mounted) {
-                                      Navigator.of(sheetCtx).pop();
-                                    }
-                                    if (!context.mounted) return;
-                                    messenger.showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                            'Subscription auto-renew restored!'),
-                                        backgroundColor: Colors.green,
-                                      ),
-                                    );
-                                  } catch (e) {
-                                    if (sheetCtx.mounted) {
-                                      setSheetState(() => isRestoring = false);
-                                    }
-                                    if (!context.mounted) return;
-                                    messenger.showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                            UIErrorFormatter.getMessage(e)),
-                                        backgroundColor: Colors.red,
-                                      ),
-                                    );
+                                setSheetState(() => isRestoring = true);
+                                try {
+                                  await ref
+                                      .read(authControllerProvider.notifier)
+                                      .restoreSubscription();
+                                  ref.invalidate(userProvider);
+
+                                  if (sheetCtx.mounted) {
+                                    Navigator.of(sheetCtx).pop();
                                   }
-                                },
-                          style: TextButton.styleFrom(
-                            padding: EdgeInsets.zero,
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            foregroundColor: cancelledActionColor,
-                          ),
-                          child: isRestoring
-                              ? Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    SizedBox(
-                                      width: 14,
-                                      height: 14,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: cancelledActionColor,
-                                      ),
+                                  if (!context.mounted) return;
+                                  messenger.showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                          'Subscription auto-renew restored!'),
+                                      backgroundColor: Colors.green,
                                     ),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      'Restoring...',
-                                      style: TextStyle(
-                                        color: cancelledActionColor,
-                                        decoration: TextDecoration.underline,
-                                        fontWeight: FontWeight.w600,
-                                      ),
+                                  );
+                                } catch (e) {
+                                  if (sheetCtx.mounted) {
+                                    setSheetState(() => isRestoring = false);
+                                  }
+                                  if (!context.mounted) return;
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                          UIErrorFormatter.getMessage(e)),
+                                      backgroundColor: Colors.red,
                                     ),
-                                  ],
-                                )
-                              : Text(
-                                  'Restore Subscription',
-                                  style: TextStyle(
-                                    color: cancelledActionColor,
-                                    decoration: TextDecoration.underline,
-                                    fontWeight: FontWeight.w600,
+                                  );
+                                }
+                              },
+                        style: TextButton.styleFrom(
+                          padding: EdgeInsets.zero,
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          foregroundColor: cancelledActionColor,
+                        ),
+                        child: isRestoring
+                            ? Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: cancelledActionColor,
+                                    ),
                                   ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Restoring...',
+                                    style: TextStyle(
+                                      color: cancelledActionColor,
+                                      decoration: TextDecoration.underline,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : Text(
+                                'Restore Subscription',
+                                style: TextStyle(
+                                  color: cancelledActionColor,
+                                  decoration: TextDecoration.underline,
+                                  fontWeight: FontWeight.w600,
                                 ),
-                          )
-                      else
-                        TextButton(
-                          onPressed: () {
-                            if (sheetCtx.mounted) {
-                              Navigator.of(sheetCtx).pop();
-                            }
-                            context.push('/subscription');
-                          },
-                          style: TextButton.styleFrom(
-                            padding: EdgeInsets.zero,
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            foregroundColor: cancelledActionColor,
-                          ),
-                          child: Text(
-                            'Renew Subscription',
-                            style: TextStyle(
-                              color: cancelledActionColor,
-                              decoration: TextDecoration.underline,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
+                              ),
                         ),
                     ],
                   ),
@@ -576,16 +566,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     }
                   },
                 ),
-              const SizedBox(height: 14),
-              Text(
-                'Subscriptions automatically renew unless cancelled. Use the cancel button to stop recurring charges. Terms and conditions apply.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 10.5,
-                  color: Colors.grey[500],
-                  height: 1.35,
-                ),
-              ),
             ],
           ),
         );
