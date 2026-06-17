@@ -222,6 +222,13 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     // Accent colour: gold for family tiers, brand blue for premium.
     final Color accentColor =
         isFamilyTier ? const Color(0xFFD4AF37) : const Color(0xFF4A90E2);
+    final colorScheme = Theme.of(context).colorScheme;
+    final Color cancelledBgColor =
+        colorScheme.surfaceContainerHighest.withOpacity(0.55);
+    final Color cancelledBorderColor =
+        colorScheme.outlineVariant.withOpacity(0.7);
+    final Color cancelledTextColor = colorScheme.onSurfaceVariant;
+    final Color cancelledActionColor = colorScheme.primary;
 
     // Role badge label shown below the plan name.
     final String? roleBadge = isFamilyHost
@@ -351,9 +358,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.08),
+                    color: cancelledBgColor,
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                    border: Border.all(color: cancelledBorderColor),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -361,13 +368,13 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       Row(
                         children: [
                           const Icon(Icons.info_outline_rounded,
-                              size: 18, color: Colors.orange),
+                              size: 18, color: Color(0xFF6B7280)),
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
                               "Subscription Cancelled. Access remains until ${user.subscriptionExpiry?.split('T')[0] ?? 'the end of your billing cycle'}.",
-                              style: const TextStyle(
-                                  fontSize: 13, color: Colors.orange),
+                              style: TextStyle(
+                                  fontSize: 13, color: cancelledTextColor),
                             ),
                           ),
                         ],
@@ -416,7 +423,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                             padding: EdgeInsets.zero,
                             minimumSize: Size.zero,
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            foregroundColor: Colors.orange.shade700,
+                            foregroundColor: cancelledActionColor,
                           ),
                           child: isRestoring
                               ? Row(
@@ -427,14 +434,14 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                                       height: 14,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
-                                        color: Colors.orange.shade700,
+                                        color: cancelledActionColor,
                                       ),
                                     ),
                                     const SizedBox(width: 8),
                                     Text(
                                       'Restoring...',
                                       style: TextStyle(
-                                        color: Colors.orange.shade700,
+                                        color: cancelledActionColor,
                                         decoration: TextDecoration.underline,
                                         fontWeight: FontWeight.w600,
                                       ),
@@ -444,7 +451,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                               : Text(
                                   'Restore Subscription',
                                   style: TextStyle(
-                                    color: Colors.orange.shade700,
+                                    color: cancelledActionColor,
                                     decoration: TextDecoration.underline,
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -462,12 +469,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                             padding: EdgeInsets.zero,
                             minimumSize: Size.zero,
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            foregroundColor: Colors.orange.shade700,
+                            foregroundColor: cancelledActionColor,
                           ),
                           child: Text(
                             'Renew Subscription',
                             style: TextStyle(
-                              color: Colors.orange.shade700,
+                              color: cancelledActionColor,
                               decoration: TextDecoration.underline,
                               fontWeight: FontWeight.w600,
                             ),
@@ -569,6 +576,16 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     }
                   },
                 ),
+              const SizedBox(height: 14),
+              Text(
+                'Subscriptions automatically renew unless cancelled. Use the cancel button to stop recurring charges. Terms and conditions apply.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  color: Colors.grey[500],
+                  height: 1.35,
+                ),
+              ),
             ],
           ),
         );

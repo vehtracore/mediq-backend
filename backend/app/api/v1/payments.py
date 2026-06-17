@@ -36,7 +36,7 @@ import hmac
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -315,6 +315,75 @@ def _persist_subscription_identifiers(user: User, paystack_data: dict | None) ->
     return changed
 
 
+def _parse_paystack_datetime(value: str | None) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if parsed.tzinfo:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _payment_timestamp(paystack_data: dict | None) -> datetime | None:
+    if not paystack_data:
+        return None
+
+    for key in ("paid_at", "paidAt", "transaction_date", "created_at"):
+        parsed = _parse_paystack_datetime(paystack_data.get(key))
+        if parsed:
+            return parsed
+    return None
+
+
+def _next_subscription_expiry(
+    current_expiry: datetime | None,
+    payment_time: datetime | None = None,
+) -> datetime:
+    """
+    Extend access from the current paid-through date when still active, or from
+    now when the previous entitlement has already expired. When a Paystack
+    payment timestamp is available, use it as an idempotent anchor so processing
+    the same reference via webhook and manual verify does not add two months.
+    """
+    now = datetime.utcnow()
+    if current_expiry and current_expiry.tzinfo:
+        current_expiry = current_expiry.astimezone(timezone.utc).replace(
+            tzinfo=None
+        )
+
+    if payment_time is not None:
+        candidate = payment_time + timedelta(days=30)
+        if current_expiry and current_expiry > candidate:
+            return current_expiry
+        return candidate
+
+    if current_expiry is None:
+        return now + timedelta(days=30)
+
+    comparison_now = (
+        datetime.now(current_expiry.tzinfo)
+        if current_expiry.tzinfo
+        else now
+    )
+    base = current_expiry if current_expiry > comparison_now else comparison_now
+    return base + timedelta(days=30)
+
+
+def _is_subscription_entitlement_expired(expiry: datetime | None) -> bool:
+    if expiry is None:
+        return True
+
+    if expiry.tzinfo:
+        expiry = expiry.astimezone(timezone.utc).replace(tzinfo=None)
+    now = datetime.utcnow()
+    return expiry <= now
+
+
 def _apply_db_update(
     transaction_type: str,
     ref_appointment_id: str | None,
@@ -348,7 +417,10 @@ def _apply_db_update(
             )
 
         # ── Upgrade the primary payer ──────────────────────────────────────────
-        expiry = datetime.utcnow() + timedelta(days=30)
+        expiry = _next_subscription_expiry(
+            user.subscription_expiry,
+            _payment_timestamp(paystack_data),
+        )
         user.plan = "family" if transaction_type == "family_subscription" else "premium"
         user.subscription_expiry = expiry
         user.auto_renew = True
@@ -623,8 +695,9 @@ def _write_dlq(
 def _handle_charge_success(data: dict, db: Session) -> dict:
     """
     Handle charge.success events that carry a user_id in data.metadata.
-    Upgrades the user plan to "premium", sets a 30-day expiry, and resets
-    burst_chat_count so the user gets a clean AI-chat allowance immediately.
+    Upgrades or renews the user's subscription, extends the paid-through date,
+    and resets burst_chat_count so the user gets a clean AI-chat allowance
+    immediately.
 
     Raises ValueError when metadata is absent or the user is not found.
     """
@@ -640,8 +713,15 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
     if not user:
         raise ValueError(f"charge.success: user id={user_id_raw} not found.")
 
-    user.plan = "premium"
-    user.subscription_expiry = datetime.utcnow() + timedelta(days=30)
+    transaction_type = str(metadata.get("transaction_type") or "")
+    is_family_subscription = transaction_type == "family_subscription"
+    expiry = _next_subscription_expiry(
+        user.subscription_expiry,
+        _payment_timestamp(data),
+    )
+
+    user.plan = "family" if is_family_subscription else "premium"
+    user.subscription_expiry = expiry
     user.auto_renew = True
     user.burst_chat_count = 0
 
@@ -655,13 +735,27 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
             user.id,
         )
 
+    upgraded_dependents: list[int] = []
+    if is_family_subscription:
+        dependents: list[User] = (
+            db.query(User)
+            .filter(User.primary_account_id == user.id)
+            .all()
+        )
+        for dep in dependents:
+            dep.plan = "family"
+            dep.subscription_expiry = expiry
+        upgraded_dependents = [dep.id for dep in dependents]
+
     db.commit()
     db.refresh(user)
 
     logger.info(
-        "[WEBHOOK] charge.success — upgraded user_id=%s to premium | expiry=%s",
+        "[WEBHOOK] charge.success — upgraded user_id=%s to %s | expiry=%s | dependents=%s",
         user.id,
+        user.plan,
         user.subscription_expiry,
+        upgraded_dependents,
     )
 
     # ── FCM: notify the user their subscription is now active ──────────────
@@ -669,9 +763,9 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
         expiry_str = user.subscription_expiry.strftime("%d %b %Y") if user.subscription_expiry else "N/A"
         dispatch_push(
             token=user.fcm_token,
-            title="🎉 MDQ+ Premium Activated!",
+            title="🎉 MDQ+ Subscription Activated!",
             body=f"Your subscription is active until {expiry_str}. Enjoy unlimited access!",
-            data={"type": "subscription_successful", "plan": "premium"},
+            data={"type": "subscription_successful", "plan": str(user.plan)},
             event_label="PAYMENTS/CHARGE_SUCCESS",
         )
     except Exception as notif_exc:
@@ -685,8 +779,9 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
     return {
         "action": "subscription_upgraded_via_charge",
         "user_id": user.id,
-        "plan": "premium",
+        "plan": user.plan,
         "expiry": str(user.subscription_expiry),
+        "dependents_upgraded": upgraded_dependents,
     }
 
 
@@ -694,10 +789,16 @@ def _handle_subscription_disable(data: dict, db: Session) -> dict:
     """
     Handle subscription.disable (and subscription.not_renew) events from Paystack.
 
-    Marks auto-renew disabled while preserving paid access until expiry.
+    Paystack owns the failed-renewal retry schedule. When Paystack emits this
+    event, MDQ+ turns off local auto-renew immediately. Access is still governed
+    by subscription_expiry, so a user who cancelled early keeps paid access
+    until their paid-through date, while an already-expired entitlement is
+    downgraded immediately.
 
     Raises ValueError when required fields are missing or the user is not found.
     """
+    subscription_code: str | None = data.get("subscription_code") or data.get("code")
+
     # Resolve user_id from customer.metadata (same path as subscription.create)
     customer: dict = data.get("customer") or {}
     customer_meta: dict = customer.get("metadata") or {}
@@ -708,31 +809,67 @@ def _handle_subscription_disable(data: dict, db: Session) -> dict:
         top_meta: dict = data.get("metadata") or {}
         user_id_raw = top_meta.get("user_id")
 
-    if not user_id_raw:
+    user: User | None = None
+    if user_id_raw:
+        user = db.query(User).filter(User.id == int(user_id_raw)).first()
+    elif subscription_code:
+        user = (
+            db.query(User)
+            .filter(User.paystack_subscription_code == subscription_code)
+            .first()
+        )
+
+    if not user_id_raw and not subscription_code:
         raise ValueError(
-            "subscription.disable: user_id not found in customer.metadata or metadata — "
+            "subscription.disable: user_id/subscription_code not found in payload — "
             "cannot downgrade subscription."
         )
 
-    user: User | None = db.query(User).filter(User.id == int(user_id_raw)).first()
     if not user:
-        raise ValueError(f"subscription.disable: user id={user_id_raw} not found.")
+        raise ValueError(
+            "subscription.disable: matching user not found for "
+            f"user_id={user_id_raw!r}, subscription_code={subscription_code!r}."
+        )
 
-    # Preserve paid access until subscription_expiry; lazy expiry enforcement
-    # downgrades the plan when the paid period is actually over.
+    previous_plan = user.plan
     user.auto_renew = False
+
+    downgraded = _is_subscription_entitlement_expired(user.subscription_expiry)
+    dependent_count = 0
+    if downgraded:
+        user.plan = "free"
+        user.subscription_expiry = None
+        dependent_count = (
+            db.query(User)
+            .filter(User.primary_account_id == user.id)
+            .update(
+                {
+                    User.plan: "free",
+                    User.subscription_expiry: None,
+                    User.auto_renew: False,
+                },
+                synchronize_session=False,
+            )
+        )
+
     db.commit()
     db.refresh(user)
 
     logger.info(
-        "[WEBHOOK] subscription.disable — disabled auto_renew for user_id=%s.",
+        "[WEBHOOK] subscription.disable — user_id=%s auto_renew disabled; "
+        "downgraded=%s; previous_plan=%s; dependents_downgraded=%s.",
         user.id,
+        downgraded,
+        previous_plan,
+        dependent_count,
     )
 
     return {
         "action": "subscription_disabled",
         "user_id": user.id,
         "plan": user.plan,
+        "downgraded": downgraded,
+        "dependents_downgraded": dependent_count,
     }
 
 
@@ -759,6 +896,7 @@ def _handle_subscription_create(data: dict, db: Session) -> dict:
     # Resolve user_id — Paystack stores it in the customer's metadata
     customer: dict = data.get("customer") or {}
     customer_meta: dict = customer.get("metadata") or {}
+    top_meta: dict = data.get("metadata") or {}
     user_id_raw = customer_meta.get("user_id")
 
     if not user_id_raw:
@@ -780,8 +918,25 @@ def _handle_subscription_create(data: dict, db: Session) -> dict:
 
     # Also ensure the plan is upgraded in case charge.success was missed
     if user.plan not in ("premium", "family"):
-        user.plan = "premium"
-        user.subscription_expiry = datetime.utcnow() + timedelta(days=30)
+        transaction_type = str(
+            customer_meta.get("transaction_type")
+            or top_meta.get("transaction_type")
+            or ""
+        )
+        is_family_subscription = transaction_type == "family_subscription"
+        expiry = _next_subscription_expiry(user.subscription_expiry)
+
+        user.plan = "family" if is_family_subscription else "premium"
+        user.subscription_expiry = expiry
+        if is_family_subscription:
+            dependents: list[User] = (
+                db.query(User)
+                .filter(User.primary_account_id == user.id)
+                .all()
+            )
+            for dep in dependents:
+                dep.plan = "family"
+                dep.subscription_expiry = expiry
 
     db.commit()
     db.refresh(user)
