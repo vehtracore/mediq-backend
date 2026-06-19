@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -43,7 +45,8 @@ class DoctorScheduleScreen extends ConsumerWidget {
                 data: (appointments) {
                   if (appointments.isEmpty) {
                     return RefreshIndicator(
-                      onRefresh: () async => ref.refresh(doctorScheduleProvider.future),
+                      onRefresh: () async =>
+                          ref.refresh(doctorScheduleProvider.future),
                       child: ListView(
                         children: const [
                           SizedBox(height: 200),
@@ -53,7 +56,8 @@ class DoctorScheduleScreen extends ConsumerWidget {
                     );
                   }
                   return RefreshIndicator(
-                    onRefresh: () async => ref.refresh(doctorScheduleProvider.future),
+                    onRefresh: () async =>
+                        ref.refresh(doctorScheduleProvider.future),
                     child: ListView.separated(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 24,
@@ -84,6 +88,49 @@ class _AppointmentCard extends ConsumerStatefulWidget {
 }
 
 class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
+  Timer? _unlockTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleUnlockRefresh();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AppointmentCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.appointment.startTime != widget.appointment.startTime ||
+        oldWidget.appointment.appointmentType !=
+            widget.appointment.appointmentType) {
+      _scheduleUnlockRefresh();
+    }
+  }
+
+  void _scheduleUnlockRefresh() {
+    _unlockTimer?.cancel();
+    final appointment = widget.appointment;
+    final start = appointment.startTime;
+    if (start == null ||
+        appointment.isGeneralQueue ||
+        appointment.isConsultationUnlocked) {
+      return;
+    }
+
+    final now = DateTime.now();
+    final unlockAt = start.subtract(const Duration(minutes: 10));
+    _unlockTimer = Timer(
+      unlockAt.difference(now) + const Duration(milliseconds: 100),
+      () {
+        if (mounted) setState(() {});
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _unlockTimer?.cancel();
+    super.dispose();
+  }
 
   void _showNotesDialog(BuildContext context) {
     showDialog(
@@ -91,7 +138,8 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
       builder: (ctx) => AlertDialog(
         title: const Text("Patient Notes"),
         content: Text(
-          widget.appointment.notes != null && widget.appointment.notes!.isNotEmpty
+          widget.appointment.notes != null &&
+                  widget.appointment.notes!.isNotEmpty
               ? widget.appointment.notes!
               : "No notes provided.",
         ),
@@ -132,7 +180,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                               .completeAppointment(widget.appointment.id);
                           if (ctx.mounted) Navigator.pop(ctx);
                           if (context.mounted) {
-                            ref.refresh(doctorScheduleProvider);
+                            ref.invalidate(doctorScheduleProvider);
                           }
                         } catch (_) {
                           setDialogState(() => isSubmitting = false);
@@ -195,18 +243,22 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                         try {
                           await ref
                               .read(appointmentRepositoryProvider)
-                              .cancelMyAppointment(widget.appointment.id);
+                              .cancelAppointmentByDoctor(
+                                widget.appointment.id,
+                              );
                           if (ctx.mounted) Navigator.pop(ctx);
                           if (context.mounted) {
-                            ref.refresh(doctorScheduleProvider);
+                            ref.invalidate(doctorScheduleProvider);
                           }
-                        } catch (_) {
+                        } catch (error) {
                           setDialogState(() => isSubmitting = false);
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
+                              SnackBar(
                                 content: Text(
-                                  "Could not cancel consultation. Please try again.",
+                                  error
+                                      .toString()
+                                      .replaceFirst('Exception: ', ''),
                                 ),
                                 backgroundColor: Colors.red,
                               ),
@@ -248,8 +300,8 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
       builder: (ctx) {
         return StatefulBuilder(builder: (ctx, setDialogState) {
           return AlertDialog(
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: const Row(
               children: [
                 Icon(Icons.medical_services_outlined,
@@ -269,13 +321,12 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                 children: [
                   Text(
                     "Patient: ${widget.appointment.patientName}",
-                    style: const TextStyle(
-                        fontSize: 13, color: Colors.grey),
+                    style: const TextStyle(fontSize: 13, color: Colors.grey),
                   ),
                   const SizedBox(height: 16),
                   const Text("Medication Plan / Prescription",
-                      style: TextStyle(
-                          fontWeight: FontWeight.w600, fontSize: 13)),
+                      style:
+                          TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
                   TextField(
                     controller: prescriptionCtrl,
@@ -285,8 +336,8 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                     decoration: InputDecoration(
                       hintText:
                           "e.g. Amoxicillin 500mg TDS x 5 days.\nParacetamol 1g PRN for fever...",
-                      hintStyle: const TextStyle(
-                          fontSize: 12, color: Colors.grey),
+                      hintStyle:
+                          const TextStyle(fontSize: 12, color: Colors.grey),
                       border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10)),
                       contentPadding: const EdgeInsets.symmetric(
@@ -299,8 +350,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
             ),
             actions: [
               TextButton(
-                onPressed:
-                    isSubmitting ? null : () => Navigator.pop(ctx),
+                onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
                 child: const Text("Cancel"),
               ),
               FilledButton.icon(
@@ -311,8 +361,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                         if (text.isEmpty) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                                content: Text(
-                                    "Please enter a prescription."),
+                                content: Text("Please enter a prescription."),
                                 backgroundColor: Colors.orange),
                           );
                           return;
@@ -327,7 +376,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                               );
                           if (ctx.mounted) Navigator.pop(ctx);
                           if (context.mounted) {
-                            ref.refresh(doctorScheduleProvider);
+                            ref.invalidate(doctorScheduleProvider);
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
@@ -382,8 +431,8 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
       builder: (ctx) {
         return StatefulBuilder(builder: (ctx, setDialogState) {
           return AlertDialog(
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: const Row(
               children: [
                 Icon(Icons.local_hospital_outlined,
@@ -403,23 +452,22 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                 children: [
                   Text(
                     "Referring: ${widget.appointment.patientName}",
-                    style: const TextStyle(
-                        fontSize: 13, color: Colors.grey),
+                    style: const TextStyle(fontSize: 13, color: Colors.grey),
                   ),
                   const SizedBox(height: 16),
 
                   // Hospital Name
                   const Text("Hospital Name",
-                      style: TextStyle(
-                          fontWeight: FontWeight.w600, fontSize: 13)),
+                      style:
+                          TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
                   TextField(
                     controller: hospitalCtrl,
                     textCapitalization: TextCapitalization.words,
                     decoration: InputDecoration(
                       hintText: "e.g. Lagos Island General Hospital A\u0026E",
-                      hintStyle: const TextStyle(
-                          fontSize: 12, color: Colors.grey),
+                      hintStyle:
+                          const TextStyle(fontSize: 12, color: Colors.grey),
                       border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10)),
                       contentPadding: const EdgeInsets.symmetric(
@@ -430,8 +478,8 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
 
                   // Clinical Notes
                   const Text("Clinical Notes",
-                      style: TextStyle(
-                          fontWeight: FontWeight.w600, fontSize: 13)),
+                      style:
+                          TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
                   TextField(
                     controller: notesCtrl,
@@ -441,8 +489,8 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                     decoration: InputDecoration(
                       hintText:
                           "Briefly describe the reason for referral and any relevant findings...",
-                      hintStyle: const TextStyle(
-                          fontSize: 12, color: Colors.grey),
+                      hintStyle:
+                          const TextStyle(fontSize: 12, color: Colors.grey),
                       border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10)),
                       contentPadding: const EdgeInsets.symmetric(
@@ -455,8 +503,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
             ),
             actions: [
               TextButton(
-                onPressed:
-                    isSubmitting ? null : () => Navigator.pop(ctx),
+                onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
                 child: const Text("Cancel"),
               ),
               ElevatedButton.icon(
@@ -468,8 +515,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                         if (hospital.isEmpty || note.isEmpty) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                                content: Text(
-                                    "Please fill in both fields."),
+                                content: Text("Please fill in both fields."),
                                 backgroundColor: Colors.orange),
                           );
                           return;
@@ -485,7 +531,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                               );
                           if (ctx.mounted) Navigator.pop(ctx);
                           if (context.mounted) {
-                            ref.refresh(doctorScheduleProvider);
+                            ref.invalidate(doctorScheduleProvider);
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
@@ -531,11 +577,13 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
 
   @override
   Widget build(BuildContext context) {
-    final timeStr = widget.appointment.startTime != null ? DateFormat('jm').format(widget.appointment.startTime!) : 'Pending Time';
+    final timeStr = widget.appointment.startTime != null
+        ? DateFormat('jm').format(widget.appointment.startTime!)
+        : 'Pending Time';
     String timeNum = timeStr.split(' ')[0];
     String timeAmPm = timeStr.contains(' ') ? timeStr.split(' ')[1] : "";
     final theme = Theme.of(context);
-    
+
     final isConfirmed = widget.appointment.status == 'confirmed';
     final isCompleted = widget.appointment.status == 'completed';
 
@@ -552,220 +600,230 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
       statusTextColor = Colors.grey.shade700;
     }
 
-    final st = widget.appointment.startTime;
-    final bool isUnlocked = st == null ||
-        DateTime.now().isAfter(st.subtract(const Duration(minutes: 10)));
+    final bool isUnlocked = widget.appointment.isConsultationUnlocked;
 
     return GestureDetector(
       onTap: () {
-
         if (!isUnlocked) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text("Consultation room will unlock 10 minutes before appointment time."),
+              content: Text(
+                  "Consultation room will unlock 10 minutes before appointment time."),
             ),
           );
         }
       },
       child: Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: theme.cardTheme.color,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: theme.brightness == Brightness.dark
-            ? []
-            : [BoxShadow(color: Colors.grey.withOpacity(0.08), blurRadius: 10)],
-      ),
-      child: Column(
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF4A90E2).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      timeNum,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF4A90E2),
-                        fontSize: 16,
-                      ),
-                    ),
-                    if (timeAmPm.isNotEmpty)
-                      Text(
-                        timeAmPm,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF4A90E2),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.appointment.patientName,
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 18,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Icon(Icons.calendar_today,
-                            size: 14,
-                            color: theme.iconTheme.color?.withOpacity(0.7)),
-                        const SizedBox(width: 4),
-                        Text(
-                          widget.appointment.startTime != null ? DateFormat('MMM dd').format(widget.appointment.startTime!) : 'Pending Date',
-                          style: theme.textTheme.bodyMedium
-                              ?.copyWith(fontSize: 13),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                          color: statusBgColor,
-                          borderRadius: BorderRadius.circular(8)),
-                      child: Text(widget.appointment.status.toUpperCase(),
-                          style: TextStyle(
-                              color: statusTextColor,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold)),
-                    ),
-                  ],
-                ),
-              ),
-              PopupMenuButton<String>(
-                onSelected: (value) {
-                  if (value == 'notes') {
-                    _showNotesDialog(context);
-                  } else if (value == 'prescribe') {
-                    _showPrescriptionDialog(context);
-                  } else if (value == 'refer') {
-                    _showReferralDialog(context);
-                  } else if (value == 'complete') {
-                    _confirmCompletion(context, ref);
-                  } else if (value == 'cancel') {
-                    _confirmCancellation(context, ref);
-                  }
-                },
-                color: theme.cardTheme.color, // ✅ Dynamic Menu Background
-                itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                  PopupMenuItem<String>(
-                    value: 'notes',
-                    child: Row(children: [
-                      Icon(Icons.notes, color: theme.iconTheme.color),
-                      const SizedBox(width: 8),
-                      Text('View Notes', style: theme.textTheme.bodyMedium)
-                    ]),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: theme.cardTheme.color,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: theme.brightness == Brightness.dark
+              ? []
+              : [
+                  BoxShadow(
+                      color: Colors.grey.withOpacity(0.08), blurRadius: 10)
+                ],
+        ),
+        child: Column(
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
                   ),
-                  if (isUnlocked)
-                    PopupMenuItem<String>(
-                      value: 'prescribe',
-                      child: Row(children: [
-                        const Icon(Icons.medical_services_outlined,
-                            color: Color(0xFF00806E)),
-                        const SizedBox(width: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF4A90E2).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        timeNum,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF4A90E2),
+                          fontSize: 16,
+                        ),
+                      ),
+                      if (timeAmPm.isNotEmpty)
                         Text(
-                          widget.appointment.prescription != null &&
-                                  widget.appointment.prescription!.isNotEmpty
-                              ? 'Edit Prescription'
-                              : 'Write Prescription',
+                          timeAmPm,
                           style: const TextStyle(
-                            color: Color(0xFF00806E),
-                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                            color: Color(0xFF4A90E2),
                           ),
                         ),
-                      ]),
-                    ),
-                  if (isUnlocked)
-                    PopupMenuItem<String>(
-                      value: 'refer',
-                      child: Row(children: [
-                        Icon(Icons.local_hospital_outlined, color: theme.colorScheme.primary),
-                        const SizedBox(width: 8),
-                        Text('Refer Patient', 
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: theme.colorScheme.primary,
-                              fontWeight: FontWeight.w600,
-                            ))
-                      ]),
-                    ),
-                  if (isUnlocked)
-                    const PopupMenuItem<String>(
-                      value: 'complete',
-                      child: Row(children: [
-                        Icon(Icons.check_circle_outline, color: Colors.green),
-                        SizedBox(width: 8),
-                        Text('Mark Complete',
-                            style: TextStyle(color: Colors.green))
-                      ]),
-                    ),
-                  const PopupMenuDivider(),
-                  const PopupMenuItem<String>(
-                    value: 'cancel',
-                    child: Row(children: [
-                      Icon(Icons.cancel_outlined, color: Colors.red),
-                      SizedBox(width: 8),
-                      Text('Cancel', style: TextStyle(color: Colors.red))
-                    ]),
+                    ],
                   ),
-                ],
-                icon: Icon(Icons.more_vert, color: theme.iconTheme.color),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // Action Buttons
-          if (widget.appointment.status != 'cancelled' && isConfirmed)
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Builder(builder: (context) {
-                  // 10-minute unlock gate:
-                  // Unlocked if startTime is null (e.g. VIP with no fixed time)
-                  // OR if now is within 10 minutes of (or past) the start time.
-                  return Column(
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Text(
+                        widget.appointment.patientName,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          FilledButton.icon(
-                              onPressed: isUnlocked
-                                  ? () => context.push('/chat', extra: {
-                                        'title': widget.appointment.patientName,
-                                        'isAi': false,
-                                        'appointmentId': widget.appointment.id,
-                                        'isCompleted': widget.appointment.status == 'completed'
-                                      })
-                                  : null,
-                              icon: Icon(
-                                isUnlocked
-                                    ? Icons.meeting_room
-                                    : Icons.lock_outline,
-                                size: 18,
-                              ),
-                              label: const Text("Join Consultation Room"),
-                              style: FilledButton.styleFrom(
+                          Icon(Icons.calendar_today,
+                              size: 14,
+                              color: theme.iconTheme.color?.withOpacity(0.7)),
+                          const SizedBox(width: 4),
+                          Text(
+                            widget.appointment.startTime != null
+                                ? DateFormat('MMM dd')
+                                    .format(widget.appointment.startTime!)
+                                : 'Pending Date',
+                            style: theme.textTheme.bodyMedium
+                                ?.copyWith(fontSize: 13),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                            color: statusBgColor,
+                            borderRadius: BorderRadius.circular(8)),
+                        child: Text(widget.appointment.statusLabel,
+                            style: TextStyle(
+                                color: statusTextColor,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  onSelected: (value) {
+                    if (value == 'notes') {
+                      _showNotesDialog(context);
+                    } else if (value == 'prescribe') {
+                      _showPrescriptionDialog(context);
+                    } else if (value == 'refer') {
+                      _showReferralDialog(context);
+                    } else if (value == 'complete') {
+                      _confirmCompletion(context, ref);
+                    } else if (value == 'cancel') {
+                      _confirmCancellation(context, ref);
+                    }
+                  },
+                  color: theme.cardTheme.color, // ✅ Dynamic Menu Background
+                  itemBuilder: (BuildContext context) =>
+                      <PopupMenuEntry<String>>[
+                    PopupMenuItem<String>(
+                      value: 'notes',
+                      child: Row(children: [
+                        Icon(Icons.notes, color: theme.iconTheme.color),
+                        const SizedBox(width: 8),
+                        Text('View Notes', style: theme.textTheme.bodyMedium)
+                      ]),
+                    ),
+                    if (isUnlocked)
+                      PopupMenuItem<String>(
+                        value: 'prescribe',
+                        child: Row(children: [
+                          const Icon(Icons.medical_services_outlined,
+                              color: Color(0xFF00806E)),
+                          const SizedBox(width: 8),
+                          Text(
+                            widget.appointment.prescription != null &&
+                                    widget.appointment.prescription!.isNotEmpty
+                                ? 'Edit Prescription'
+                                : 'Write Prescription',
+                            style: const TextStyle(
+                              color: Color(0xFF00806E),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ]),
+                      ),
+                    if (isUnlocked)
+                      PopupMenuItem<String>(
+                        value: 'refer',
+                        child: Row(children: [
+                          Icon(Icons.local_hospital_outlined,
+                              color: theme.colorScheme.primary),
+                          const SizedBox(width: 8),
+                          Text('Refer Patient',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.primary,
+                                fontWeight: FontWeight.w600,
+                              ))
+                        ]),
+                      ),
+                    if (isUnlocked)
+                      const PopupMenuItem<String>(
+                        value: 'complete',
+                        child: Row(children: [
+                          Icon(Icons.check_circle_outline, color: Colors.green),
+                          SizedBox(width: 8),
+                          Text('Mark Complete',
+                              style: TextStyle(color: Colors.green))
+                        ]),
+                      ),
+                    const PopupMenuDivider(),
+                    const PopupMenuItem<String>(
+                      value: 'cancel',
+                      child: Row(children: [
+                        Icon(Icons.cancel_outlined, color: Colors.red),
+                        SizedBox(width: 8),
+                        Text('Cancel', style: TextStyle(color: Colors.red))
+                      ]),
+                    ),
+                  ],
+                  icon: Icon(Icons.more_vert, color: theme.iconTheme.color),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // Action Buttons
+            if (widget.appointment.status != 'cancelled' && isConfirmed)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Builder(builder: (context) {
+                    // 10-minute unlock gate:
+                    // Unlocked if startTime is null (e.g. VIP with no fixed time)
+                    // OR if now is within 10 minutes of (or past) the start time.
+                    return Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            FilledButton.icon(
+                                onPressed: isUnlocked
+                                    ? () => context.push('/chat', extra: {
+                                          'title':
+                                              widget.appointment.patientName,
+                                          'isAi': false,
+                                          'appointmentId':
+                                              widget.appointment.id,
+                                          'isCompleted':
+                                              widget.appointment.status ==
+                                                  'completed'
+                                        })
+                                    : null,
+                                icon: Icon(
+                                  isUnlocked
+                                      ? Icons.meeting_room
+                                      : Icons.lock_outline,
+                                  size: 18,
+                                ),
+                                label: const Text("Join Consultation Room"),
+                                style: FilledButton.styleFrom(
                                   backgroundColor: isUnlocked
                                       ? theme.colorScheme.primary
                                       : Colors.grey.withOpacity(0.12),
@@ -773,31 +831,33 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                                       ? theme.colorScheme.onPrimary
                                       : Colors.grey,
                                   elevation: 0,
-                              )),
-                        ],
-                      ),
-                      if (!isUnlocked) ...[
-                        const SizedBox(height: 4),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            Icon(Icons.schedule, size: 12, color: Colors.grey.shade500),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Unlocks 10 min before start',
-                              style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
-                            ),
+                                )),
                           ],
                         ),
+                        if (!isUnlocked) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              Icon(Icons.schedule,
+                                  size: 12, color: Colors.grey.shade500),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Unlocks 10 min before start',
+                                style: TextStyle(
+                                    fontSize: 11, color: Colors.grey.shade500),
+                              ),
+                            ],
+                          ),
+                        ],
                       ],
-                    ],
-                  );
-                }),
-              ],
-            ),
-        ],
+                    );
+                  }),
+                ],
+              ),
+          ],
+        ),
       ),
-    ),
     );
   }
 }

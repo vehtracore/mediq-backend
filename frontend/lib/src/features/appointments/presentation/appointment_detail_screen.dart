@@ -6,13 +6,15 @@ import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:intl/intl.dart';
 
 // Use a family provider to fetch the specific appointment by ID
-final appointmentDetailProvider = FutureProvider.family.autoDispose<Appointment, int>((ref, id) async {
+final appointmentDetailProvider =
+    FutureProvider.family.autoDispose<Appointment, int>((ref, id) async {
   final repo = ref.watch(appointmentRepositoryProvider);
   // As a fallback, since getAppointmentById might not exist yet on the backend,
   // we try to fetch all appointments and find the one with this ID.
   // Ideally, you would add `getAppointmentById` to your repository.
   final allAppointments = await repo.getMyAppointments();
-  return allAppointments.firstWhere((a) => a.id == id, orElse: () => throw Exception('Appointment not found'));
+  return allAppointments.firstWhere((a) => a.id == id,
+      orElse: () => throw Exception('Appointment not found'));
 });
 
 class AppointmentDetailScreen extends ConsumerWidget {
@@ -23,7 +25,8 @@ class AppointmentDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Watch the specific appointment data
-    final asyncAppointment = ref.watch(appointmentDetailProvider(appointmentId));
+    final asyncAppointment =
+        ref.watch(appointmentDetailProvider(appointmentId));
     final theme = Theme.of(context);
 
     return Scaffold(
@@ -36,11 +39,11 @@ class AppointmentDetailScreen extends ConsumerWidget {
         error: (err, stack) =>
             Center(child: Text(UIErrorFormatter.getMessage(err))),
         data: (appointment) {
-          final dateStr = appointment.startTime != null 
-              ? DateFormat('MMM dd, yyyy').format(appointment.startTime!) 
+          final dateStr = appointment.startTime != null
+              ? DateFormat('MMM dd, yyyy').format(appointment.startTime!)
               : 'Pending Date';
-          final timeStr = appointment.startTime != null 
-              ? DateFormat('jm').format(appointment.startTime!) 
+          final timeStr = appointment.startTime != null
+              ? DateFormat('jm').format(appointment.startTime!)
               : 'Pending Time';
 
           return SingleChildScrollView(
@@ -48,11 +51,20 @@ class AppointmentDetailScreen extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text("Patient: ${appointment.patientName}", style: theme.textTheme.titleLarge),
+                Text(
+                  appointment.doctorName,
+                  style: theme.textTheme.titleLarge,
+                ),
+                const SizedBox(height: 16),
+                Text("Type: ${appointment.typeLabel}"),
                 const SizedBox(height: 16),
                 Text("Date: $dateStr • $timeStr"),
                 const SizedBox(height: 16),
-                Text("Status: ${appointment.status.toUpperCase()}"),
+                Text("Status: ${appointment.statusLabel}"),
+                const SizedBox(height: 16),
+                Text(
+                  "Payment: ${appointment.paymentStatus.toUpperCase()}",
+                ),
                 const SizedBox(height: 16),
                 if (appointment.notes != null && appointment.notes!.isNotEmpty)
                   Text("Notes: ${appointment.notes}"),

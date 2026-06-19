@@ -8,8 +8,38 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 logger = logging.getLogger(__name__)
+
+
+def _sample_rate_from_env(name: str, default: float) -> float:
+    """Read a Sentry sample rate safely and keep it within the 0..1 range."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    try:
+        value = float(raw_value)
+    except ValueError:
+        logger.warning(
+            "[SENTRY] Invalid %s=%r; using default %.2f",
+            name,
+            raw_value,
+            default,
+        )
+        return default
+
+    if not 0.0 <= value <= 1.0:
+        logger.warning(
+            "[SENTRY] %s must be between 0 and 1; using default %.2f",
+            name,
+            default,
+        )
+        return default
+
+    return value
+
 
 # ---------------------------------------------------------------------------
 # 🔭 Sentry — crash reporting & performance tracing
@@ -23,8 +53,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN", ""),
-    traces_sample_rate=1.0,   # 100 % of transactions → performance dashboard
-    profiles_sample_rate=1.0, # 100 % CPU profiling (reduce to 0.1 in prod)
+    traces_sample_rate=_sample_rate_from_env(
+        "SENTRY_TRACES_SAMPLE_RATE",
+        0.05,
+    ),
+    profiles_sample_rate=_sample_rate_from_env(
+        "SENTRY_PROFILES_SAMPLE_RATE",
+        0.0,
+    ),
     integrations=[
         LoggingIntegration(
             level=logging.INFO,          # Breadcrumbs from INFO and above
@@ -50,7 +86,11 @@ from app.api.v1 import family
 from app.api.v1 import support
 from app.api.v1.auth import scrub_expired_accounts
 from app.services.watchdog_service import sweep_pending_transactions
-from app.core.scheduler import cleanup_expired_slots, sweep_stale_appointments
+from app.core.scheduler import (
+    cleanup_expired_slots,
+    cleanup_old_notifications,
+    sweep_stale_appointments,
+)
 
 Base.metadata.create_all(bind=engine)
 
@@ -132,6 +172,45 @@ def _apply_schema_patches():
         CREATE INDEX IF NOT EXISTS ix_appointments_paystack_reference
         ON appointments (paystack_reference)
         WHERE paystack_reference IS NOT NULL;
+        """,
+        # Durable appointment workflow type (added 2026-06-18).
+        # This remains nullable during the legacy-classification phase. New
+        # appointment writes always set it explicitly; only high-confidence
+        # historical rows are backfilled here.
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS appointment_type VARCHAR(32) NULL;
+        """,
+        """
+        UPDATE appointments
+        SET appointment_type = 'specialist_scheduled'
+        WHERE appointment_type IS NULL
+          AND slot_id IS NOT NULL;
+        """,
+        """
+        UPDATE appointments
+        SET appointment_type = 'general_queue'
+        WHERE appointment_type IS NULL
+          AND paystack_reference ILIKE '%gp_consult%';
+        """,
+        """
+        UPDATE appointments
+        SET appointment_type = 'vip_request'
+        WHERE appointment_type IS NULL
+          AND paystack_reference ILIKE '%vip_request%';
+        """,
+        """
+        UPDATE appointments
+        SET appointment_type = 'specialist_scheduled'
+        WHERE appointment_type IS NULL
+          AND paystack_reference ILIKE '%specialist%';
+        """,
+        """
+        UPDATE appointments
+        SET appointment_type = 'general_queue'
+        WHERE appointment_type IS NULL
+          AND doctor_id IS NULL
+          AND slot_id IS NULL;
         """,
         # Subscription auto-renew state (added 2026-06-16). Backfill only on
         # first column creation so cancelled users are not re-enabled on restart.
@@ -257,6 +336,26 @@ def _apply_schema_patches():
                 logger.exception("[SCHEMA PATCH] Failed applying startup schema patch: %s", exc)
                 raise
 
+        unresolved_appointment_types = conn.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM appointments
+                WHERE appointment_type IS NULL
+                """
+            )
+        ).scalar_one()
+        if unresolved_appointment_types:
+            logger.warning(
+                "[SCHEMA PATCH] %d legacy appointment(s) still have no durable "
+                "appointment_type and require review before NOT NULL enforcement.",
+                unresolved_appointment_types,
+            )
+        else:
+            logger.info(
+                "[SCHEMA PATCH] All appointments have a durable appointment_type."
+            )
+
 _apply_schema_patches()
 
 
@@ -288,6 +387,9 @@ async def lifespan(app: FastAPI):
     Jobs registered:
       • ndpa_pii_scrubber       — daily 02:00 UTC  (NDPA 30-day PII scrub)
       • payment_watchdog        — every 5 minutes  (sweep stale transactions)
+      • doctor_slot_cleanup     — daily 00:00 UTC  (delete expired free slots)
+      • stale_appointment_sweep — hourly           (close/cancel stale bookings)
+      • notification_cleanup    — daily 00:15 UTC  (90-day retention cleanup)
     """
     scheduler = AsyncIOScheduler(timezone="UTC")
 
@@ -327,6 +429,15 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
+    # Job 5: Notification retention cleanup — nightly at 00:15 UTC
+    scheduler.add_job(
+        cleanup_old_notifications,
+        trigger=CronTrigger(hour=0, minute=15, timezone="UTC"),
+        id="notification_retention_cleanup",
+        name="Nightly 90-day notification retention cleanup",
+        replace_existing=True,
+    )
+
     scheduler.start()
     _sched_log.info(
         "[SCHEDULER] AsyncIOScheduler started. "
@@ -346,6 +457,31 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="MDQplus API", redirect_slashes=False, lifespan=lifespan, docs_url=None, redoc_url=None)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.exception_handler(SQLAlchemyTimeoutError)
+async def database_pool_timeout_handler(request: Request, exc: SQLAlchemyTimeoutError):
+    """Expose pool exhaustion clearly during load tests without leaking details."""
+    try:
+        pool_status = engine.pool.status()
+    except Exception:
+        pool_status = "unavailable"
+
+    logger.error(
+        "[DB POOL TIMEOUT] %s %s — pool=%s error=%s",
+        request.method,
+        request.url.path,
+        pool_status,
+        exc,
+    )
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": "Database is temporarily busy. Please retry shortly.",
+            "error_code": "database_pool_timeout",
+        },
+        headers={"Retry-After": "1"},
+    )
 
 
 

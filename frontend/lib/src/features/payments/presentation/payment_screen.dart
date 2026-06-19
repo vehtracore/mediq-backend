@@ -76,6 +76,12 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
   // Paystack expects amounts in Kobo (smallest Naira unit). Multiply by 100.
   int get _totalAmountInKobo => (_totalAmount * 100).toInt();
 
+  bool get _isAppointmentTransaction => const {
+        'gp_consult',
+        'specialist_consult',
+        'vip_request',
+      }.contains(widget.transactionType);
+
   String _formatCurrency(double amount) => '₦${amount.toStringAsFixed(2)}';
 
   // ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -110,21 +116,45 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
   Future<void> _handlePayment() async {
     final userAsync = ref.read(userProvider);
     final user = userAsync.value;
-    final userId = widget.userId;
+    final authenticatedUserId = int.tryParse(user?.id ?? '');
+    final userId = authenticatedUserId ?? widget.userId;
 
-    if (user == null || user.email.trim().isEmpty || userId == null || userId <= 0) {
+    if (user == null ||
+        user.email.trim().isEmpty ||
+        userId == null ||
+        userId <= 0) {
       await _showAuthRequiredDialog();
       if (mounted) Navigator.of(context).maybePop();
       return;
     }
 
+    if (_totalAmount <= 0) {
+      _showSnack('This payment has an invalid amount.', isError: true);
+      return;
+    }
+
+    final appointmentId = widget.appointmentId;
+    final backendReference = widget.paystackReference?.trim();
+    if (_isAppointmentTransaction &&
+        (appointmentId == null ||
+            appointmentId <= 0 ||
+            backendReference == null ||
+            backendReference.isEmpty)) {
+      _showSnack(
+        'This appointment is missing its secure payment reference. Refresh your appointments and try again.',
+        isError: true,
+      );
+      return;
+    }
+
     setState(() => _isLoading = true);
 
-    final appointmentId = widget.appointmentId ?? 0;
-    final String dynamicReference = widget.paystackReference ??
-        'MDQ-${widget.transactionType}-$appointmentId-$userId-'
-            '${DateTime.now().millisecondsSinceEpoch}';
-    
+    final String dynamicReference = _isAppointmentTransaction
+        ? backendReference!
+        : widget.paystackReference ??
+            'MDQ-${widget.transactionType}-${appointmentId ?? 0}-$userId-'
+                '${DateTime.now().millisecondsSinceEpoch}';
+
     // Cache it in state so the awaiting confirmation view and back navigation can use it.
     _reference = dynamicReference;
 
@@ -328,127 +358,136 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-        // ── Order Summary Card ────────────────────────────────────────────────
-        Card(
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(color: cs.outlineVariant.withOpacity(0.5)),
-          ),
-          color: cs.surface,
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'ORDER SUMMARY',
-                  style: theme.textTheme.labelMedium?.copyWith(
-                    color: cs.onSurfaceVariant,
-                    letterSpacing: 1.2,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  widget.title,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: cs.onSurface,
-                  ),
-                ),
-                const SizedBox(height: 32),
-                _PriceRow(
-                  label: 'Base Amount',
-                  amount: _formatCurrency(widget.baseAmount),
-                  theme: theme,
-                ),
-                const SizedBox(height: 16),
-                _PriceRow(
-                  label: 'Processing Fee',
-                  amount: 'Calculated at checkout',
-                  theme: theme,
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 20.0),
-                  child: Divider(height: 1),
-                ),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Total',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: cs.onSurface,
-                      ),
-                    ),
-                    Text(
-                      _formatCurrency(_totalAmount),
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: cs.primary,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+          // ── Order Summary Card ────────────────────────────────────────────────
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(color: cs.outlineVariant.withOpacity(0.5)),
             ),
-          ),
-        ),
-
-        const SizedBox(height: 48),
-
-        // ── Security badge ────────────────────────────────────────────────────
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.lock_rounded, size: 16, color: cs.onSurfaceVariant),
-            const SizedBox(width: 8),
-            Text(
-              'Secured by Paystack',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: cs.onSurfaceVariant,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 24),
-
-        // ── Pay button ────────────────────────────────────────────────────────
-        SizedBox(
-          height: 56,
-          child: ElevatedButton(
-            onPressed: _isLoading ? null : _handlePayment,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: cs.primary,
-              foregroundColor: cs.onPrimary,
-              disabledBackgroundColor: cs.primary.withOpacity(0.5),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              elevation: 0,
-            ),
-            child: _isLoading
-                ? const SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.5,
-                      color: Colors.white,
-                    ),
-                  )
-                : Text(
-                    'Pay ${_formatCurrency(_totalAmount)}',
-                    style: const TextStyle(
-                      fontSize: 18,
+            color: cs.surface,
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'ORDER SUMMARY',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: cs.onSurfaceVariant,
+                      letterSpacing: 1.2,
                       fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5,
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  Text(
+                    widget.title,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: cs.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+                  _PriceRow(
+                    label: 'Base Amount',
+                    amount: _formatCurrency(widget.baseAmount),
+                    theme: theme,
+                  ),
+                  const SizedBox(height: 16),
+                  _PriceRow(
+                    label: 'Processing Fee',
+                    amount: 'Calculated at checkout',
+                    theme: theme,
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20.0),
+                    child: Divider(height: 1),
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Total',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: cs.onSurface,
+                        ),
+                      ),
+                      Text(
+                        _formatCurrency(_totalAmount),
+                        style: theme.textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: cs.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
-        ),
+
+          const SizedBox(height: 48),
+
+          // ── Security badge ────────────────────────────────────────────────────
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.lock_rounded, size: 16, color: cs.onSurfaceVariant),
+              const SizedBox(width: 8),
+              Text(
+                'Secured by Paystack',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: cs.onSurfaceVariant,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Your appointment is confirmed only after MDQ+ verifies the payment with Paystack.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: cs.onSurfaceVariant,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── Pay button ────────────────────────────────────────────────────────
+          SizedBox(
+            height: 56,
+            child: ElevatedButton(
+              onPressed: _isLoading ? null : _handlePayment,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: cs.primary,
+                foregroundColor: cs.onPrimary,
+                disabledBackgroundColor: cs.primary.withOpacity(0.5),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 0,
+              ),
+              child: _isLoading
+                  ? const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Text(
+                      'Pay ${_formatCurrency(_totalAmount)}',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+            ),
+          ),
         ],
       ),
     );
@@ -461,121 +500,120 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-        // ── Animated icon ─────────────────────────────────────────────────────
-        Center(
-          child: Container(
-            width: 96,
-            height: 96,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: cs.primaryContainer,
-            ),
-            child: _isVerifying
-                ? Padding(
-                    padding: const EdgeInsets.all(28),
-                    child: CircularProgressIndicator(
-                      strokeWidth: 3,
+          // ── Animated icon ─────────────────────────────────────────────────────
+          Center(
+            child: Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: cs.primaryContainer,
+              ),
+              child: _isVerifying
+                  ? Padding(
+                      padding: const EdgeInsets.all(28),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3,
+                        color: cs.primary,
+                      ),
+                    )
+                  : Icon(
+                      Icons.hourglass_top_rounded,
+                      size: 48,
                       color: cs.primary,
                     ),
-                  )
-                : Icon(
-                    Icons.hourglass_top_rounded,
-                    size: 48,
-                    color: cs.primary,
-                  ),
-          ),
-        ),
-        const SizedBox(height: 32),
-
-        // ── Heading ───────────────────────────────────────────────────────────
-        Text(
-          _isVerifying
-              ? 'Verifying Payment'
-              : 'Awaiting Payment Confirmation',
-          textAlign: TextAlign.center,
-          style: theme.textTheme.headlineSmall?.copyWith(
-            fontWeight: FontWeight.bold,
-            color: cs.onSurface,
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // ── Body copy ─────────────────────────────────────────────────────────
-        Text(
-          _verificationMessage ??
-              'Complete your payment in the browser that just opened.\n\n'
-                  'When you return to MDQ+, we will verify it automatically.',
-          textAlign: TextAlign.center,
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: cs.onSurfaceVariant,
-            height: 1.6,
-          ),
-        ),
-        const SizedBox(height: 12),
-
-        // ── Reference chip ────────────────────────────────────────────────────
-        Center(
-          child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: cs.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8),
             ),
+          ),
+          const SizedBox(height: 32),
+
+          // ── Heading ───────────────────────────────────────────────────────────
+          Text(
+            _isVerifying
+                ? 'Verifying Payment'
+                : 'Awaiting Payment Confirmation',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: cs.onSurface,
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // ── Body copy ─────────────────────────────────────────────────────────
+          Text(
+            _verificationMessage ??
+                'Complete your payment in the browser that just opened.\n\n'
+                    'When you return to MDQ+, we will verify it automatically.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: cs.onSurfaceVariant,
+              height: 1.6,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // ── Reference chip ────────────────────────────────────────────────────
+          Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                'Ref: $_reference',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 48),
+
+          // ── Verification status action ────────────────────────────────────────
+          SizedBox(
+            height: 56,
+            child: ElevatedButton(
+              onPressed: _isVerifying ? null : _verifyPayment,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: cs.primary,
+                foregroundColor: cs.onPrimary,
+                disabledBackgroundColor: cs.primary.withOpacity(0.5),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 0,
+              ),
+              child: _isVerifying
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text(
+                      'Check payment status',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // ── Re-open browser link ──────────────────────────────────────────────
+          TextButton(
+            onPressed: _isLoading || _isVerifying ? null : _handlePayment,
             child: Text(
-              'Ref: $_reference',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: cs.onSurfaceVariant,
-                fontFamily: 'monospace',
-              ),
+              'Re-open payment page',
+              style: TextStyle(color: cs.primary),
             ),
           ),
-        ),
-        const SizedBox(height: 48),
-
-        // ── Verification status action ────────────────────────────────────────
-        SizedBox(
-          height: 56,
-          child: ElevatedButton(
-            onPressed: _isVerifying ? null : _verifyPayment,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: cs.primary,
-              foregroundColor: cs.onPrimary,
-              disabledBackgroundColor: cs.primary.withOpacity(0.5),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              elevation: 0,
-            ),
-            child: _isVerifying
-                ? const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.5,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Text(
-                    'Check payment status',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.2,
-                    ),
-                  ),
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // ── Re-open browser link ──────────────────────────────────────────────
-        TextButton(
-          onPressed: _isLoading || _isVerifying ? null : _handlePayment,
-          child: Text(
-            'Re-open payment page',
-            style: TextStyle(color: cs.primary),
-          ),
-        ),
         ],
       ),
     );

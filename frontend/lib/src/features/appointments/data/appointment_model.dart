@@ -1,15 +1,21 @@
 import 'package:flutter/foundation.dart';
 
 class Appointment {
+  static const generalQueueType = 'general_queue';
+  static const specialistScheduledType = 'specialist_scheduled';
+  static const vipRequestType = 'vip_request';
+
   final int id;
   // These are the backend's integer relational PKs.
   // The backend's AppointmentResponse schema now emits them explicitly.
   // Safe fallback to 0 prevents type-cast crashes if a legacy response omits them.
   final int? doctorId;
+  final String? appointmentType;
   final String doctorName;
   final int? patientId;
   final String patientName;
-  final DateTime? startTime;  // null for VIP requests pending doctor's time proposal
+  final DateTime?
+      startTime; // null for VIP requests pending doctor's time proposal
   final String status;
   final String paymentStatus;
   final bool isAcknowledged;
@@ -22,6 +28,7 @@ class Appointment {
   Appointment({
     required this.id,
     this.doctorId,
+    this.appointmentType,
     required this.doctorName,
     this.patientId,
     required this.patientName,
@@ -58,11 +65,12 @@ class Appointment {
     return Appointment(
       id: safeInt(json['id']) ?? 0,
       doctorId: safeInt(json['doctor_id']),
+      appointmentType: json['appointment_type'] as String?,
       doctorName: (json['doctor_name'] as String?) ?? 'Doctor',
       patientId: safeInt(json['patient_id']),
       patientName: (json['patient_name'] as String?) ?? 'Patient',
       startTime: json['start_time'] != null
-          ? DateTime.parse(json['start_time'] as String)
+          ? DateTime.parse(json['start_time'] as String).toLocal()
           : null,
       status: (json['status'] as String?) ?? 'pending',
       paymentStatus: (json['payment_status'] as String?) ?? 'unpaid',
@@ -74,4 +82,62 @@ class Appointment {
       prescription: json['prescription'] as String?,
     );
   }
+
+  bool get isGeneralQueue => appointmentType == generalQueueType;
+  bool get isSpecialistScheduled => appointmentType == specialistScheduledType;
+  bool get isVipRequest => appointmentType == vipRequestType;
+
+  bool get canPatientCancel {
+    final cancellableStatus = status == 'pending' ||
+        status == 'awaiting_payment' ||
+        status == 'confirmed';
+    if (!cancellableStatus) return false;
+
+    if ((isGeneralQueue || appointmentType == null) && status == 'confirmed') {
+      return false;
+    }
+
+    if (isSpecialistScheduled || isVipRequest) {
+      final scheduledStart = startTime;
+      if (scheduledStart != null && !DateTime.now().isBefore(scheduledStart)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool get isConsultationUnlocked {
+    if (isGeneralQueue) return true;
+    final scheduledStart = startTime;
+    if (scheduledStart == null) return false;
+    final unlockTime = scheduledStart.subtract(const Duration(minutes: 10));
+    return !DateTime.now().isBefore(unlockTime);
+  }
+
+  bool get canPatientPay {
+    if (paymentStatus != 'unpaid') return false;
+    if (isGeneralQueue || isSpecialistScheduled) {
+      return status == 'pending';
+    }
+    if (isVipRequest) {
+      return status == 'awaiting_payment';
+    }
+    return false;
+  }
+
+  String? get paymentTransactionType {
+    if (isGeneralQueue) return 'gp_consult';
+    if (isSpecialistScheduled) return 'specialist_consult';
+    if (isVipRequest) return 'vip_request';
+    return null;
+  }
+
+  String get typeLabel {
+    if (isGeneralQueue) return 'General Queue';
+    if (isSpecialistScheduled) return 'Specialist Session';
+    if (isVipRequest) return 'VIP Request';
+    return 'Legacy Appointment';
+  }
+
+  String get statusLabel => status.replaceAll('_', ' ').toUpperCase();
 }

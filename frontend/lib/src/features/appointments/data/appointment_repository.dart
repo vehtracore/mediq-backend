@@ -92,23 +92,13 @@ class AppointmentRepository {
     }
   }
 
-  Future<void> markAsPaid(int appointmentId) async {
-    const ep = 'PUT /api/v1/appointments/:id/pay';
-    _logAuthHandshake(ep);
-    try {
-      await _dio.put('/api/v1/appointments/$appointmentId/pay');
-    } catch (e) {
-      throw Exception('Payment failed. Please try again.');
-    }
-  }
-
   Future<void> cancelMyAppointment(int id) async {
     const ep = 'PUT /api/v1/appointments/:id/cancel';
     _logAuthHandshake(ep);
     try {
       await _dio.put('/api/v1/appointments/$id/cancel');
-    } catch (e) {
-      throw Exception('Failed to cancel appointment');
+    } on DioException catch (e) {
+      throw Exception(_detailFrom(e, 'Failed to cancel appointment'));
     }
   }
 
@@ -143,38 +133,42 @@ class AppointmentRepository {
   }
 
   Future<void> acceptAppointment(int id) async {
-    _logAuthHandshake('PUT /api/v1/appointments/doctor/appointments/:id/accept');
+    _logAuthHandshake(
+        'PUT /api/v1/appointments/doctor/appointments/:id/accept');
     try {
       await _dio.put('/api/v1/appointments/doctor/appointments/$id/accept');
-    } catch (e) {
-      throw Exception('Failed to accept appointment');
+    } on DioException catch (e) {
+      throw Exception(_detailFrom(e, 'Failed to accept appointment'));
     }
   }
 
   Future<void> declineAppointment(int id) async {
-    _logAuthHandshake('PUT /api/v1/appointments/doctor/appointments/:id/decline');
+    _logAuthHandshake(
+        'PUT /api/v1/appointments/doctor/appointments/:id/decline');
     try {
       await _dio.put('/api/v1/appointments/doctor/appointments/$id/decline');
-    } catch (e) {
-      throw Exception('Failed to decline appointment');
+    } on DioException catch (e) {
+      throw Exception(_detailFrom(e, 'Failed to decline appointment'));
     }
   }
 
   Future<void> cancelAppointmentByDoctor(int id) async {
-    _logAuthHandshake('PUT /api/v1/appointments/doctor/appointments/:id/cancel');
+    _logAuthHandshake(
+        'PUT /api/v1/appointments/doctor/appointments/:id/cancel');
     try {
       await _dio.put('/api/v1/appointments/doctor/appointments/$id/cancel');
-    } catch (e) {
-      throw Exception('Failed to cancel appointment');
+    } on DioException catch (e) {
+      throw Exception(_detailFrom(e, 'Failed to cancel appointment'));
     }
   }
 
   Future<void> completeAppointment(int id) async {
-    _logAuthHandshake('PUT /api/v1/appointments/doctor/appointments/:id/complete');
+    _logAuthHandshake(
+        'PUT /api/v1/appointments/doctor/appointments/:id/complete');
     try {
       await _dio.put('/api/v1/appointments/doctor/appointments/$id/complete');
-    } catch (e) {
-      throw Exception('Failed to complete appointment');
+    } on DioException catch (e) {
+      throw Exception(_detailFrom(e, 'Failed to complete appointment'));
     }
   }
 
@@ -183,7 +177,8 @@ class AppointmentRepository {
     required String hospitalName,
     required String note,
   }) async {
-    _logAuthHandshake('POST /api/v1/appointments/doctor/appointments/:id/refer');
+    _logAuthHandshake(
+        'POST /api/v1/appointments/doctor/appointments/:id/refer');
     try {
       await _dio.post(
         '/api/v1/appointments/doctor/appointments/$id/refer',
@@ -201,7 +196,8 @@ class AppointmentRepository {
     required int id,
     required String prescription,
   }) async {
-    _logAuthHandshake('PUT /api/v1/appointments/doctor/appointments/:id/prescribe');
+    _logAuthHandshake(
+        'PUT /api/v1/appointments/doctor/appointments/:id/prescribe');
     try {
       await _dio.put(
         '/api/v1/appointments/doctor/appointments/$id/prescribe',
@@ -250,8 +246,8 @@ class AppointmentRepository {
     _logAuthHandshake('PUT /api/v1/appointments/doctor/queue/:id/claim');
     try {
       await _dio.put('/api/v1/appointments/doctor/queue/$id/claim');
-    } catch (e) {
-      throw Exception('Failed to claim appointment');
+    } on DioException catch (e) {
+      throw Exception(_detailFrom(e, 'Failed to claim appointment'));
     }
   }
 
@@ -259,14 +255,16 @@ class AppointmentRepository {
     final ep = 'PATCH /api/v1/appointments/$appointmentId/acknowledge';
     _logAuthHandshake(ep);
     try {
-      final response = await _dio.patch('/api/v1/appointments/$appointmentId/acknowledge');
+      final response =
+          await _dio.patch('/api/v1/appointments/$appointmentId/acknowledge');
       _logResponse(ep, response.data);
-    } catch (e) {
-      throw Exception('Failed to acknowledge appointment: $e');
+    } on DioException catch (e) {
+      throw Exception(_detailFrom(e, 'Failed to acknowledge appointment'));
     }
   }
 
-  Future<void> proposeAppointmentTime(int appointmentId, DateTime proposedTime) async {
+  Future<void> proposeAppointmentTime(
+      int appointmentId, DateTime proposedTime) async {
     final ep = 'PATCH /api/v1/appointments/$appointmentId/propose';
     _logAuthHandshake(ep);
     try {
@@ -275,8 +273,10 @@ class AppointmentRepository {
         data: {'proposed_time': proposedTime.toUtc().toIso8601String()},
       );
       _logResponse(ep, response.data);
-    } catch (e) {
-      throw Exception('Failed to propose appointment time: $e');
+    } on DioException catch (e) {
+      throw Exception(
+        _detailFrom(e, 'Failed to propose appointment time'),
+      );
     }
   }
 
@@ -297,8 +297,16 @@ class AppointmentRepository {
         },
       );
       _logResponse(ep, response.data);
-    } catch (e) {
-      throw Exception('Failed to send VIP request: $e');
+    } on DioException catch (e) {
+      throw Exception(_detailFrom(e, 'Failed to send VIP request'));
     }
+  }
+
+  String _detailFrom(DioException error, String fallback) {
+    final data = error.response?.data;
+    if (data is Map && data['detail'] != null) {
+      return data['detail'].toString();
+    }
+    return fallback;
   }
 }

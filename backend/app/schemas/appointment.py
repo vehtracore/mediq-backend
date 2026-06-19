@@ -1,7 +1,14 @@
 
-from pydantic import BaseModel, ConfigDict
-from typing import Optional
-from datetime import datetime
+from pydantic import BaseModel, ConfigDict, field_validator
+from typing import Literal, Optional
+from datetime import datetime, timezone
+
+
+AppointmentType = Literal[
+    "general_queue",
+    "specialist_scheduled",
+    "vip_request",
+]
 
 
 class SlotCreate(BaseModel):
@@ -15,6 +22,13 @@ class SlotResponse(BaseModel):
     start_time: datetime
     is_booked: bool
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("start_time")
+    @classmethod
+    def restore_utc_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
 
 class AppointmentCreate(BaseModel):
@@ -33,6 +47,8 @@ class AppointmentResponse(BaseModel):
     # which broke the payment screen (userId: 0) and any per-appointment logic.
     doctor_id: Optional[int] = None
     patient_id: Optional[int] = None
+    # Nullable only for ambiguous legacy records during the migration phase.
+    appointment_type: Optional[AppointmentType] = None
 
     # --- Display names ---
     # doctor_name is re-purposed by doctor-side views to hold the *patient* name.
@@ -51,6 +67,15 @@ class AppointmentResponse(BaseModel):
     prescription: Optional[str] = None         # Doctor-authored prescription / medication plan
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("start_time")
+    @classmethod
+    def restore_utc_timezone(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
 
 class AppointmentUpdate(BaseModel):

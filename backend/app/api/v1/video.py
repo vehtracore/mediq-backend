@@ -9,9 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.notifications import dispatch_push
-from app.models.appointment import Appointment
 from app.models.user import User
 from app.api import deps
+from app.services.appointment_access import require_consultation_access
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,13 @@ def get_agora_token(
     current_user: User = Depends(deps.get_current_user),
     db: Session = Depends(get_db),
 ):
+    appt = require_consultation_access(
+        db,
+        appointment_id,
+        current_user,
+        allow_completed=False,
+    )
+
     try:
         # 1. Fetch Keys directly from Environment
         app_id = os.getenv("AGORA_APP_ID")
@@ -66,7 +73,6 @@ def get_agora_token(
             from app.models.doctor import Doctor
             doctor_row = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
             if doctor_row:
-                appt = db.query(Appointment).filter(Appointment.id == appointment_id).first()
                 if appt and appt.patient_id:
                     patient = db.query(User).filter(User.id == appt.patient_id).first()
                     if patient and patient.fcm_token:

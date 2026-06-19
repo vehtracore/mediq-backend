@@ -13,11 +13,11 @@ import 'package:mediq_app/src/shared/presentation/widgets/doctor_avatar.dart';
 ///
 /// Data Source: Communicates with `appointmentRepositoryProvider` (`getSlots(doctorId)` API endpoint).
 ///
-/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(slotsProvider(doctorId))` 
+/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(slotsProvider(doctorId))`
 /// after a slot is successfully booked (to prevent double-booking) or on pull-to-refresh.
 /// AutoDispose handles cleanup when the user navigates away from the booking screen.
 ///
-/// Error & Loading Annotations: Exceptions thrown by the API (like `DioException`) are caught by Riverpod 
+/// Error & Loading Annotations: Exceptions thrown by the API (like `DioException`) are caught by Riverpod
 /// and translated into localized strings directly within the UI's `error` state block.
 final slotsProvider = FutureProvider.family
     .autoDispose<List<DoctorSlot>, int>((ref, doctorId) async {
@@ -88,9 +88,11 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
           .read(appointmentRepositoryProvider)
           .bookSlot(slotId: _selectedSlotId!, notes: notes);
       if (!mounted) return;
+      ref.invalidate(slotsProvider(widget.doctor.id));
       final Map<String, dynamic> paymentData = {
-        'transactionType': 'specialist_consult',
-        'baseAmount': widget.doctor.hourlyRate,
+        'transactionType':
+            appointment.paymentTransactionType ?? 'specialist_consult',
+        'baseAmount': appointment.amount,
         'title': 'Consultation: ${widget.doctor.fullName}',
         'appointmentId': appointment.id,
         'userId': appointment.patientId,
@@ -131,7 +133,10 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
         error: (err, stack) =>
             Center(child: Text(UIErrorFormatter.getMessage(err))),
         data: (allSlots) {
-          final availableSlots = allSlots.where((s) => !s.isBooked).toList();
+          final now = DateTime.now();
+          final availableSlots = allSlots
+              .where((s) => !s.isBooked && s.startTime.isAfter(now))
+              .toList();
           if (availableSlots.isEmpty) {
             return Center(
               child: Column(
@@ -140,7 +145,8 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                   const Text("No available slots found."),
                   const SizedBox(height: 16),
                   FilledButton.tonal(
-                    onPressed: () => _showVIPRequestSheet(context, ref, widget.doctor.id),
+                    onPressed: () =>
+                        _showVIPRequestSheet(context, ref, widget.doctor.id),
                     child: const Text("Request an Appointment"),
                   ),
                 ],
@@ -236,24 +242,26 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                                           : Colors.grey,
                                       fontSize: 12)),
                               const SizedBox(height: 4),
-                              Text(DateFormat('d').format(date),
-                                    style: TextStyle(
-                                      color: isSelected
-                                          ? Colors.white
-                                          : theme.textTheme.bodyMedium?.color,
-                                    ),
-                                  ),
-                                ],
+                              Text(
+                                DateFormat('d').format(date),
+                                style: TextStyle(
+                                  color: isSelected
+                                      ? Colors.white
+                                      : theme.textTheme.bodyMedium?.color,
+                                ),
                               ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
                 const SizedBox(height: 32),
                 Center(
                   child: OutlinedButton(
-                    onPressed: () => _showVIPRequestSheet(context, ref, widget.doctor.id),
+                    onPressed: () =>
+                        _showVIPRequestSheet(context, ref, widget.doctor.id),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: theme.colorScheme.primary,
                       side: BorderSide(
@@ -381,7 +389,10 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text("Request VIP Appointment",
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.bold)),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
                 value: preferredTime,
@@ -390,7 +401,8 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                   border: OutlineInputBorder(),
                 ),
                 items: ["Morning", "Afternoon", "Evening"]
-                    .map((time) => DropdownMenuItem(value: time, child: Text(time)))
+                    .map((time) =>
+                        DropdownMenuItem(value: time, child: Text(time)))
                     .toList(),
                 onChanged: (val) {
                   if (val != null) setModalState(() => preferredTime = val);
@@ -462,7 +474,11 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                           }
                         },
                   child: isSubmitting
-                      ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 2))
                       : const Text("Send Request"),
                 ),
               ),
@@ -474,4 +490,3 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
     );
   }
 }
-

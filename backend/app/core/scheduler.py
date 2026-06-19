@@ -5,6 +5,7 @@ from sqlalchemy import delete, update
 
 from app.core.database import SessionLocal
 from app.models.appointment import Appointment, DoctorSlot
+from app.models.notification import Notification
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -47,9 +48,9 @@ async def sweep_stale_appointments() -> None:
     Hourly cron job — resolves two categories of stale appointments.
 
     Sweep 1 (Liability — auto-close):
-        Appointments with status == 'active' whose start_time is older than
-        24 hours are marked 'completed'.  This prevents consultations from
-        hanging open indefinitely when a doctor forgets to close them.
+        Appointments with status == 'active' or 'confirmed' whose start_time is
+        older than 24 hours are marked 'completed'. This prevents consultations
+        from hanging open indefinitely when a doctor forgets to close them.
 
     Sweep 2 (Limbo — unclaimed cancellation):
         Appointments with status == 'pending' whose start_time is older than
@@ -67,7 +68,7 @@ async def sweep_stale_appointments() -> None:
         # -- Sweep 1: active → completed (24-hour auto-close) -----------------
         stmt_active = (
             update(Appointment)
-            .where(Appointment.status == "active")
+            .where(Appointment.status.in_(("active", "confirmed")))
             .where(Appointment.start_time < cutoff)
             .values(status="completed")
         )
@@ -96,6 +97,27 @@ async def sweep_stale_appointments() -> None:
     except Exception as exc:
         db.rollback()
         logger.exception("[APPT SWEEP] Error during stale-appointment sweep: %s", exc)
+    finally:
+        db.close()
+
+
+async def cleanup_old_notifications() -> None:
+    """Nightly bulk-delete notifications older than the 90-day retention window."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+
+    db = SessionLocal()
+    try:
+        result = db.execute(
+            delete(Notification).where(Notification.created_at < cutoff)
+        )
+        db.commit()
+        logger.info(
+            "[NOTIFICATION CLEANUP] Deleted %d notification(s) older than 90 days.",
+            result.rowcount,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.exception("[NOTIFICATION CLEANUP] Error during retention sweep: %s", exc)
     finally:
         db.close()
 

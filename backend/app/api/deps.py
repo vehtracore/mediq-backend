@@ -14,6 +14,25 @@ from app.models.user import User
 logger = logging.getLogger("uvicorn.error")
 
 
+def _positive_number_from_env(name: str, default: float) -> float:
+    """Read a positive numeric setting without making auth fail at startup."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    try:
+        value = float(raw_value)
+    except ValueError:
+        logger.warning("[AUTH] Invalid %s=%r; using default %s", name, raw_value, default)
+        return default
+
+    if value <= 0:
+        logger.warning("[AUTH] %s must be positive; using default %s", name, default)
+        return default
+
+    return value
+
+
 def _is_subscription_expired(user: User) -> bool:
     if user.subscription_expiry is None:
         return False
@@ -41,7 +60,15 @@ SUPABASE_URL: str = os.getenv(
 JWKS_URL: str = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json"
 SUPABASE_JWT_AUDIENCE: str = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
 
-jwks_client = PyJWKClient(JWKS_URL)
+# Keep the JWKS document in-process so normal authenticated requests do not
+# depend on a Supabase network call. An unknown key ID still forces a refresh,
+# which preserves signing-key rotation support.
+jwks_client = PyJWKClient(
+    JWKS_URL,
+    cache_jwk_set=True,
+    lifespan=_positive_number_from_env("JWKS_CACHE_LIFESPAN_SECONDS", 3600),
+    timeout=_positive_number_from_env("JWKS_FETCH_TIMEOUT_SECONDS", 5),
+)
 
 # The tokenUrl is kept for OpenAPI docs compatibility — the frontend no
 # longer calls this endpoint; Supabase handles token issuance.
@@ -103,14 +130,6 @@ def get_current_user(
         logger.warning(f"[AUTH] Authenticated email {email} has no local User row.")
         raise credentials_exception
 
-    # --- SUSPENSION / BAN CHECK ---
-    doctor_status = None
-    if user.role == "doctor":
-        from app.models.doctor import Doctor
-        doctor = db.query(Doctor).filter(Doctor.user_id == user.id).first()
-        if doctor:
-            doctor_status = doctor.status
-
     if user.is_banned:
         logger.info(f"[AUTH] Banned user attempted access: {user.email}")
         raise HTTPException(
@@ -119,6 +138,18 @@ def get_current_user(
         )
 
     if not user.is_active:
+        doctor_status = None
+        if user.role == "doctor":
+            from app.models.doctor import Doctor
+
+            # Only inactive doctors need their onboarding status checked.
+            # Select the status column alone instead of loading the full profile.
+            doctor_status = (
+                db.query(Doctor.status)
+                .filter(Doctor.user_id == user.id)
+                .scalar()
+            )
+
         if doctor_status == "rejected":
             pass  # Allow access to quarantine flow
         elif doctor_status == "pending":

@@ -53,6 +53,16 @@ class _DoctorAvailabilityScreenState
         .toSet();
   }
 
+  bool _isFutureHour(int hour) {
+    final slotTime = DateTime(
+      _selectedDate.year,
+      _selectedDate.month,
+      _selectedDate.day,
+      hour,
+    );
+    return slotTime.isAfter(DateTime.now());
+  }
+
   Future<void> _selectDate(BuildContext context) async {
     final DateTime? picked = await showDatePicker(
       context: context,
@@ -86,6 +96,9 @@ class _DoctorAvailabilityScreenState
         hour,
         0,
       );
+      if (!slotTime.isAfter(DateTime.now())) {
+        throw Exception('Please choose a future availability time.');
+      }
 
       await ref
           .read(doctorRepositoryProvider)
@@ -116,7 +129,7 @@ class _DoctorAvailabilityScreenState
     }
   }
 
-  Future<void> _deleteSlot(BuildContext context, int slotId, String label) async {
+  Future<void> _deleteSlot(int slotId, String label) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -184,7 +197,13 @@ class _DoctorAvailabilityScreenState
             padding: const EdgeInsets.all(16),
             itemBuilder: (context, index) => Padding(
               padding: const EdgeInsets.only(bottom: 12),
-              child: SkeletonLoader(child: Container(height: 60, width: double.infinity, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)))),
+              child: SkeletonLoader(
+                  child: Container(
+                      height: 60,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12)))),
             ),
           ),
           error: (e, _) => ListView(
@@ -206,7 +225,10 @@ class _DoctorAvailabilityScreenState
               orElse: () => <int>{},
             );
             final addableHours = _standardHours
-                .where((hour) => !existingSlotHours.contains(hour))
+                .where(
+                  (hour) =>
+                      !existingSlotHours.contains(hour) && _isFutureHour(hour),
+                )
                 .toList();
             final canAddSlots = slotsAsync.hasValue;
 
@@ -268,14 +290,14 @@ class _DoctorAvailabilityScreenState
                       ),
                     ),
                     const SizedBox(height: 24),
-    
+
                     // --- Slots Grid ---
                     const Text(
                       "Tap to add a slot:",
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 12),
-    
+
                     Wrap(
                       spacing: 12,
                       runSpacing: 12,
@@ -293,14 +315,11 @@ class _DoctorAvailabilityScreenState
                               final timeLabel = DateFormat(
                                 'h:mm a',
                               ).format(DateTime(2023, 1, 1, hour));
-                              final isCreatingThisHour =
-                                  _creatingHour == hour;
+                              final isCreatingThisHour = _creatingHour == hour;
 
                               return ActionChip(
                                 label: Text(
-                                  isCreatingThisHour
-                                      ? 'Adding...'
-                                      : timeLabel,
+                                  isCreatingThisHour ? 'Adding...' : timeLabel,
                                   style: theme.textTheme.bodyMedium,
                                 ),
                                 backgroundColor: theme.cardColor,
@@ -325,7 +344,7 @@ class _DoctorAvailabilityScreenState
                               );
                             }).toList(),
                     ),
-    
+
                     const SizedBox(height: 40),
 
                     // --- Upcoming Slots List (with delete) ---
@@ -341,14 +360,12 @@ class _DoctorAvailabilityScreenState
                       ),
                       error: (e, _) => Text(
                         'Could not load slots: $e',
-                        style: const TextStyle(
-                            color: Colors.red, fontSize: 12),
+                        style: const TextStyle(color: Colors.red, fontSize: 12),
                       ),
                       data: (slots) {
                         if (slots.isEmpty) {
                           return Padding(
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 12),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                             child: Text(
                               'No upcoming slots. Add some above.',
                               style: TextStyle(
@@ -406,10 +423,9 @@ class _DoctorAvailabilityScreenState
                                       onPressed: _deletingSlotId != null
                                           ? null
                                           : () => _deleteSlot(
-                                              context,
-                                              slot.id,
-                                              label,
-                                            ),
+                                                slot.id,
+                                                label,
+                                              ),
                                     ),
                                 ],
                               ),
@@ -435,7 +451,8 @@ class _DoctorAvailabilityScreenState
                           Expanded(
                             child: Text(
                               "Slots added here will immediately appear in search results for patients to book.",
-                              style: TextStyle(fontSize: 12, color: Colors.grey),
+                              style:
+                                  TextStyle(fontSize: 12, color: Colors.grey),
                             ),
                           ),
                         ],

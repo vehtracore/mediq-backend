@@ -202,6 +202,15 @@ class _RequestCardState extends ConsumerState<_RequestCard> {
     setState(() => _loadingAction = action);
     try {
       await task();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _loadingAction = null);
     }
@@ -231,7 +240,8 @@ class _RequestCardState extends ConsumerState<_RequestCard> {
 
     await _runAction(
       'decline',
-      () => ref.read(requestsControllerProvider.notifier).decline(appointmentId),
+      () =>
+          ref.read(requestsControllerProvider.notifier).decline(appointmentId),
     );
   }
 
@@ -252,15 +262,19 @@ class _RequestCardState extends ConsumerState<_RequestCard> {
     final appointment = widget.appointment;
     final isGeneral = widget.isGeneral;
     final isBusy = _loadingAction != null;
-    final timeStr = appointment.startTime != null ? DateFormat('jm').format(appointment.startTime!) : 'Pending';
+    final timeStr = appointment.startTime != null
+        ? DateFormat('jm').format(appointment.startTime!)
+        : 'Pending';
     final theme = Theme.of(context);
 
     // In doctor-side views the backend encodes the *patient* name in the
     // `doctor_name` field (the field is repurposed for display). The new
     // `patient_name` field is now the authoritative source; fall back to
     // `doctor_name` for backwards compatibility with any cached responses.
-    final patientDisplayName =
-        appointment.patientName.isNotEmpty && appointment.patientName != 'Patient'
+    final patientDisplayName = isGeneral
+        ? 'Anonymous queue request'
+        : appointment.patientName.isNotEmpty &&
+                appointment.patientName != 'Patient'
             ? appointment.patientName
             : appointment.doctorName;
 
@@ -310,7 +324,7 @@ class _RequestCardState extends ConsumerState<_RequestCard> {
                       overflow: TextOverflow.ellipsis,
                     ),
                     Text(
-                      isGeneral ? 'GP Queue · $timeStr' : 'Direct VIP Request',
+                      isGeneral ? 'General Queue · $timeStr' : 'VIP Request',
                       style: theme.textTheme.bodySmall,
                     ),
                   ],
@@ -318,8 +332,7 @@ class _RequestCardState extends ConsumerState<_RequestCard> {
               ),
               // Payment badge
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: appointment.paymentStatus == 'paid'
                       ? Colors.green.withValues(alpha: 0.1)
@@ -369,7 +382,7 @@ class _RequestCardState extends ConsumerState<_RequestCard> {
                 ),
                 child: _loadingAction == 'claim'
                     ? _buttonSpinner()
-                    : const Text('Claim Patient'),
+                    : const Text('Claim Request'),
               ),
             )
           else
@@ -377,9 +390,8 @@ class _RequestCardState extends ConsumerState<_RequestCard> {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: isBusy
-                        ? null
-                        : () => _confirmDecline(appointment.id),
+                    onPressed:
+                        isBusy ? null : () => _confirmDecline(appointment.id),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.red,
                     ),
@@ -394,39 +406,53 @@ class _RequestCardState extends ConsumerState<_RequestCard> {
                     onPressed: isBusy
                         ? null
                         : () async {
-                      final selectedDate = await showDatePicker(
-                        context: context,
-                        initialDate: DateTime.now(),
-                        firstDate: DateTime.now(),
-                        lastDate: DateTime.now().add(const Duration(days: 30)),
-                      );
-                      if (selectedDate != null && context.mounted) {
-                        final selectedTime = await showTimePicker(
-                          context: context,
-                          initialTime: TimeOfDay.now(),
-                        );
-                        if (selectedTime != null) {
-                          final dt = DateTime(
-                            selectedDate.year,
-                            selectedDate.month,
-                            selectedDate.day,
-                            selectedTime.hour,
-                            selectedTime.minute,
-                          );
-                          await _runAction(
-                            'accept',
-                            () => controller.proposeTime(appointment.id, dt),
-                          );
-                        }
-                      }
-                    },
+                            final selectedDate = await showDatePicker(
+                              context: context,
+                              initialDate: DateTime.now(),
+                              firstDate: DateTime.now(),
+                              lastDate:
+                                  DateTime.now().add(const Duration(days: 30)),
+                            );
+                            if (selectedDate == null || !context.mounted)
+                              return;
+
+                            final selectedTime = await showTimePicker(
+                              context: context,
+                              initialTime: TimeOfDay.now(),
+                            );
+                            if (selectedTime == null || !context.mounted)
+                              return;
+
+                            final dt = DateTime(
+                              selectedDate.year,
+                              selectedDate.month,
+                              selectedDate.day,
+                              selectedTime.hour,
+                              selectedTime.minute,
+                            );
+                            if (!dt.isAfter(DateTime.now())) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Please choose a future appointment time.',
+                                  ),
+                                  backgroundColor: Colors.orange,
+                                ),
+                              );
+                              return;
+                            }
+                            await _runAction(
+                              'accept',
+                              () => controller.proposeTime(appointment.id, dt),
+                            );
+                          },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
                     ),
                     child: _loadingAction == 'accept'
                         ? _buttonSpinner()
-                        : const Text('Accept (Propose Time)'),
+                        : const Text('Propose Time'),
                   ),
                 ),
               ],

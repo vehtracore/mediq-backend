@@ -41,7 +41,15 @@ final doctorRequestsProvider =
     );
   }
 
-  return result.where((a) => a.doctorId != null && a.status == 'pending').toList();
+  return result
+      .where(
+        (a) =>
+            a.isVipRequest &&
+            a.doctorId != null &&
+            a.status == 'pending' &&
+            a.paymentStatus == 'unpaid',
+      )
+      .toList();
 });
 
 /// Provider for Tab 1: Unclaimed general-queue GP consultations.
@@ -59,7 +67,15 @@ final generalQueueProvider =
     debugPrint('🏥 [queueProvider] Got ${result.length} queue item(s).');
   }
 
-  return result.where((a) => a.doctorId == null && a.status == 'pending').toList();
+  return result
+      .where(
+        (a) =>
+            a.isGeneralQueue &&
+            a.doctorId == null &&
+            a.status == 'pending' &&
+            a.paymentStatus == 'paid',
+      )
+      .toList();
 });
 
 // ---------------------------------------------------------------------------
@@ -79,6 +95,7 @@ class RequestsController extends AsyncNotifier<void> {
       await ref.read(appointmentRepositoryProvider).acceptAppointment(id);
       ref.invalidate(doctorRequestsProvider);
     });
+    if (state.hasError) throw state.error!;
   }
 
   Future<void> decline(int id) async {
@@ -87,6 +104,7 @@ class RequestsController extends AsyncNotifier<void> {
       await ref.read(appointmentRepositoryProvider).declineAppointment(id);
       ref.invalidate(doctorRequestsProvider);
     });
+    if (state.hasError) throw state.error!;
   }
 
   Future<void> claim(int id) async {
@@ -95,13 +113,17 @@ class RequestsController extends AsyncNotifier<void> {
       await ref.read(appointmentRepositoryProvider).claimAppointment(id);
       ref.invalidate(generalQueueProvider);
     });
+    if (state.hasError) throw state.error!;
   }
 
   Future<void> proposeTime(int id, DateTime time) async {
     state = const AsyncLoading();
     state = await AsyncValue.guard(() async {
-      await ref.read(appointmentRepositoryProvider).proposeAppointmentTime(id, time);
+      await ref
+          .read(appointmentRepositoryProvider)
+          .proposeAppointmentTime(id, time);
       ref.invalidate(doctorRequestsProvider);
     });
+    if (state.hasError) throw state.error!;
   }
 }

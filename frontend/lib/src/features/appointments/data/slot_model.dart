@@ -15,7 +15,7 @@ class DoctorSlot {
     return DoctorSlot(
       id: json['id'],
       doctorId: json['doctor_id'],
-      startTime: DateTime.parse(json['start_time']),
+      startTime: DateTime.parse(json['start_time']).toLocal(),
       isBooked: json['is_booked'] ?? false,
     );
   }

@@ -8,9 +8,6 @@ import 'package:mediq_app/src/features/appointments/data/appointment_model.dart'
 import 'package:mediq_app/src/features/auth/data/user_model.dart'; // ✅ Added for User type
 import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:mediq_app/src/shared/presentation/widgets/skeleton_loader.dart';
-import 'package:mediq_app/src/shared/presentation/widgets/error_state_widget.dart';
-import 'package:mediq_app/src/core/api/app_exception.dart';
-import 'package:dio/dio.dart';
 import 'package:mediq_app/presentation/widgets/global_error_widget.dart';
 import 'package:mediq_app/src/features/patient_dashboard/patient_home_screen.dart';
 import 'dart:ui';
@@ -21,10 +18,10 @@ import 'dart:ui';
 /// Data Source: Communicates with `appointmentRepositoryProvider` (`getMyAppointments()` API endpoint)
 /// and applies a local sort/filter to find the chronologically first upcoming visit.
 ///
-/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(nextAppointmentProvider)` 
+/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(nextAppointmentProvider)`
 /// on pull-to-refresh of the Patient Dashboard, retry taps, or after booking/canceling an appointment.
 ///
-/// Error & Loading Annotations: Exceptions thrown by the API (like `DioException`) are caught by Riverpod 
+/// Error & Loading Annotations: Exceptions thrown by the API (like `DioException`) are caught by Riverpod
 /// and translated into clean localized strings by the `GlobalErrorWidget` wrapped around this provider's `error` state.
 // ✅ REAL DATA PROVIDER: Fetches next confirmed appointment
 final nextAppointmentProvider =
@@ -32,11 +29,14 @@ final nextAppointmentProvider =
   final appointments =
       await ref.watch(appointmentRepositoryProvider).getMyAppointments();
   final upcoming = appointments
-      .where(
-          (a) => a.status == 'confirmed' && a.startTime != null && a.startTime!.isAfter(DateTime.now()))
+      .where((a) =>
+          a.status == 'confirmed' &&
+          a.startTime != null &&
+          a.startTime!.isAfter(DateTime.now()))
       .toList();
   if (upcoming.isEmpty) return null;
-  upcoming.sort((a, b) => (a.startTime ?? DateTime(2099)).compareTo(b.startTime ?? DateTime(2099)));
+  upcoming.sort((a, b) =>
+      (a.startTime ?? DateTime(2099)).compareTo(b.startTime ?? DateTime(2099)));
   return upcoming.first;
 });
 
@@ -48,7 +48,7 @@ class HomeHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    
+
     // Data Extraction
     final userName = user?.firstName ?? '...';
     final imageUrl = user?.imageUrl ?? '';
@@ -64,23 +64,22 @@ class HomeHeader extends StatelessWidget {
           CircleAvatar(
             radius: 24,
             backgroundColor: theme.cardTheme.color,
-            backgroundImage: imageUrl.isNotEmpty
-                ? NetworkImage(imageUrl)
-                : null,
+            backgroundImage:
+                imageUrl.isNotEmpty ? NetworkImage(imageUrl) : null,
             child: imageUrl.isEmpty
                 ? Icon(Icons.person, color: Colors.grey[400])
                 : null,
           ),
           const SizedBox(width: 16),
-          
+
           // ✅ 2. USER WELCOME TEXT
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text("Welcome Back,",
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                        fontSize: 14, fontWeight: FontWeight.w500)),
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(fontSize: 14, fontWeight: FontWeight.w500)),
                 Text(userName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -108,7 +107,8 @@ class HomeHeader extends StatelessWidget {
                           ? []
                           : [
                               BoxShadow(
-                                  color: const Color(0xFF4A90E2).withOpacity(0.1),
+                                  color:
+                                      const Color(0xFF4A90E2).withOpacity(0.1),
                                   blurRadius: 15,
                                   offset: const Offset(0, 5))
                             ]),
@@ -188,8 +188,12 @@ class AppointmentCard extends ConsumerWidget {
         }
 
         // 2. ACTIVE STATE (Show Appointment)
-        final dateStr = appointment.startTime != null ? DateFormat('MMM dd, yyyy').format(appointment.startTime!) : 'Pending Date';
-        final timeStr = appointment.startTime != null ? DateFormat('jm').format(appointment.startTime!) : 'Pending Time';
+        final dateStr = appointment.startTime != null
+            ? DateFormat('MMM dd, yyyy').format(appointment.startTime!)
+            : 'Pending Date';
+        final timeStr = appointment.startTime != null
+            ? DateFormat('jm').format(appointment.startTime!)
+            : 'Pending Time';
 
         return GestureDetector(
           onTap: () => ref.read(homeTabIndexProvider.notifier).state = 1,
@@ -203,80 +207,81 @@ class AppointmentCard extends ConsumerWidget {
                 decoration: BoxDecoration(
                   color: Colors.black.withOpacity(0.6),
                   borderRadius: BorderRadius.circular(32),
-                  border: Border.all(color: Colors.white.withOpacity(0.15), width: 1.0),
+                  border: Border.all(
+                      color: Colors.white.withOpacity(0.15), width: 1.0),
                 ),
                 child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.calendar_today_rounded,
-                              color: Colors.white, size: 14),
-                          const SizedBox(width: 6),
-                          Text(
-                            "$dateStr • $timeStr",
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
                           ),
-                        ],
-                      ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.calendar_today_rounded,
+                                  color: Colors.white, size: 14),
+                              const SizedBox(width: 6),
+                              Text(
+                                "$dateStr • $timeStr",
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.videocam, color: Colors.white),
+                      ],
                     ),
-                    const Icon(Icons.videocam, color: Colors.white),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Container(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                                color: Colors.white.withOpacity(0.5), width: 2),
+                          ),
+                          child: const CircleAvatar(
+                            radius: 26,
+                            backgroundColor: Colors.white24,
+                            child: Icon(Icons.medical_services,
+                                color: Colors.white, size: 28),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                appointment.doctorName,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 4),
+                              const Text(
+                                "Tap to view details",
+                                style: TextStyle(
+                                    color: Colors.white70, fontSize: 13),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                            color: Colors.white.withOpacity(0.5), width: 2),
-                      ),
-                      child: const CircleAvatar(
-                        radius: 26,
-                        backgroundColor: Colors.white24,
-                        child:
-                            Icon(Icons.medical_services, color: Colors.white, size: 28),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            appointment.doctorName,
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 4),
-                          const Text(
-                            "Tap to view details",
-                            style:
-                                TextStyle(color: Colors.white70, fontSize: 13),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
+              ),
             ),
           ),
         );
@@ -290,73 +295,82 @@ class QuickActionGrid extends ConsumerWidget {
 
   void _showBookingOptions(BuildContext context, WidgetRef ref) {
     // ✅ Safe Read: Use ref.read in callbacks (prevents rebuilds)
-    final user = ref.read(userProvider).value; 
-    
+    final user = ref.read(userProvider).value;
+
     String priceText = "NGN 4,000";
-    double priceVal = 4000.0;
+    bool isLoading = false;
 
     final theme = Theme.of(context);
 
     showModalBottomSheet(
         context: context,
         backgroundColor: Colors.transparent,
-        builder: (ctx) => StatefulBuilder(
-            builder: (ctx, setModalState) {
-              bool isLoading = false;
+        builder: (ctx) => StatefulBuilder(builder: (ctx, setModalState) {
               return Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-                color: theme.cardTheme.color, // ✅ Dynamic Sheet
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(24))),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              ListTile(
-                  title: isLoading 
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : Text("See a GP Now",
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.bold)),
-                  subtitle: Text(priceText,
-                      style: theme.textTheme.bodyMedium),
-                  leading: const Icon(Icons.flash_on, color: Colors.orange),
-                  onTap: isLoading ? null : () async {
-                    setModalState(() => isLoading = true);
-                    try {
-                      final appt = await ref
-                          .read(appointmentRepositoryProvider)
-                          .bookGeneralConsultation("I need a doctor now.");
-                      if (context.mounted) {
-                        Navigator.pop(ctx);
-                        context.push('/payment', extra: {
-                          'transactionType': 'gp_consult',
-                          'baseAmount': priceVal,
-                          'title': 'General Consultation',
-                          'appointmentId': appt.id,
-                          'userId': user?.id,
-                          'paystackReference': appt.paystackReference,
-                        });
-                      }
-                    } catch (e) {
-                      if (context.mounted) {
-                        setModalState(() => isLoading = false);
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                            content: Text(UIErrorFormatter.getMessage(e)),
-                            backgroundColor: Colors.red));
-                      }
-                    }
-                  }),
-              const Divider(),
-              ListTile(
-                  title: Text("Book a Specialist",
-                      style: theme.textTheme.bodyLarge),
-                  leading: const Icon(Icons.calendar_month,
-                      color: Color(0xFF4A90E2)),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    context.push('/find_doctor');
-                  })
-            ]));
-        }));
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                      color: theme.cardTheme.color, // ✅ Dynamic Sheet
+                      borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(24))),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    ListTile(
+                        title: isLoading
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white))
+                            : Text("See a GP Now",
+                                style: theme.textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.bold)),
+                        subtitle:
+                            Text(priceText, style: theme.textTheme.bodyMedium),
+                        leading:
+                            const Icon(Icons.flash_on, color: Colors.orange),
+                        onTap: isLoading
+                            ? null
+                            : () async {
+                                setModalState(() => isLoading = true);
+                                try {
+                                  final appt = await ref
+                                      .read(appointmentRepositoryProvider)
+                                      .bookGeneralConsultation(
+                                          "I need a doctor now.");
+                                  if (context.mounted) {
+                                    Navigator.pop(ctx);
+                                    context.push('/payment', extra: {
+                                      'transactionType': 'gp_consult',
+                                      'baseAmount': appt.amount,
+                                      'title': 'General Consultation',
+                                      'appointmentId': appt.id,
+                                      'userId': user?.id,
+                                      'paystackReference':
+                                          appt.paystackReference,
+                                    });
+                                  }
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    setModalState(() => isLoading = false);
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                            content: Text(
+                                                UIErrorFormatter.getMessage(e)),
+                                            backgroundColor: Colors.red));
+                                  }
+                                }
+                              }),
+                    const Divider(),
+                    ListTile(
+                        title: Text("Book a Specialist",
+                            style: theme.textTheme.bodyLarge),
+                        leading: const Icon(Icons.calendar_month,
+                            color: Color(0xFF4A90E2)),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          context.push('/find_doctor');
+                        })
+                  ]));
+            }));
   }
 
   @override
@@ -424,8 +438,7 @@ class QuickActionGrid extends ConsumerWidget {
                           Text(item['label'] as String,
                               textAlign: TextAlign.center,
                               style: theme.textTheme.bodyMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14))
+                                  fontWeight: FontWeight.bold, fontSize: 14))
                         ]),
                   )));
         });

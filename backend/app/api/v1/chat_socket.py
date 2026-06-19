@@ -1,4 +1,11 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.concurrency import run_in_threadpool
 from typing import List, Dict, Optional
 import json
@@ -11,6 +18,9 @@ from app.core.database import engine, get_db
 from sqlalchemy.orm import sessionmaker, Session
 from app.models.message import Message
 from app.models.appointment import Appointment
+from app.models.user import User
+from app.api import deps
+from app.services.appointment_access import require_consultation_access
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -32,7 +42,6 @@ class ConnectionManager:
         self.connected_users: Dict[str, set] = {}
 
     async def connect(self, websocket: WebSocket, appointment_id: str, user_id: int):
-        await websocket.accept()
         if appointment_id not in self.active_connections:
             self.active_connections[appointment_id] = []
             self.connected_users[appointment_id] = set()
@@ -83,14 +92,28 @@ def chat_test():
 def get_chat_history(
     appointment_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
     cursor: Optional[str] = Query(None, description="ID of the last message from the previous page"),
     limit: int = Query(20, ge=1, le=100, description="Number of messages per page"),
 ):
+    require_consultation_access(
+        db,
+        appointment_id,
+        current_user,
+        allow_completed=True,
+    )
     query = db.query(Message).filter(Message.appointment_id == appointment_id)
 
     # If cursor is provided, find the cursor message's timestamp and filter older messages
     if cursor is not None:
-        cursor_message = db.query(Message).filter(Message.id == int(cursor)).first()
+        cursor_message = (
+            db.query(Message)
+            .filter(
+                Message.id == int(cursor),
+                Message.appointment_id == appointment_id,
+            )
+            .first()
+        )
         if cursor_message:
             query = query.filter(Message.created_at < cursor_message.created_at)
 
@@ -133,6 +156,18 @@ def save_message_sync(appointment_id: int, user_id: int, content: str):
     logger.debug("[WS] save_message_sync ENTER — appt=%s, user=%s, len=%d", appointment_id, user_id, len(content))
     db = WsSession()
     try:
+        appointment = (
+            db.query(Appointment)
+            .filter(Appointment.id == appointment_id)
+            .first()
+        )
+        if appointment is None or appointment.status != "confirmed":
+            logger.warning(
+                "[WS] Message rejected for inactive appointment %s",
+                appointment_id,
+            )
+            return None
+
         new_msg = Message(
             appointment_id=appointment_id,
             sender_id=user_id,
@@ -176,12 +211,66 @@ def send_chat_push_sync(appointment_id: int, sender_id: int, message_text: str):
 # --- WebSocket Endpoint (PRODUCTION) ---
 @router.websocket("/live/{appointment_id}/{user_id}")
 async def websocket_endpoint(
-    websocket: WebSocket, 
-    appointment_id: str, 
-    user_id: int
+    websocket: WebSocket,
+    appointment_id: int,
+    user_id: int,
 ):
+    await websocket.accept()
+    auth_db = WsSession()
+    try:
+        auth_message = json.loads(await websocket.receive_text())
+        if not isinstance(auth_message, dict) or auth_message.get("type") != "auth":
+            raise HTTPException(
+                status_code=401,
+                detail="The first WebSocket message must authenticate the session.",
+            )
+        token = auth_message.get("token")
+        if not isinstance(token, str) or not token:
+            raise HTTPException(
+                status_code=401,
+                detail="A valid authentication token is required.",
+            )
+
+        current_user = deps.get_current_user(token=token, db=auth_db)
+        if current_user.id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Authenticated user does not match the room participant.",
+            )
+        require_consultation_access(
+            auth_db,
+            appointment_id,
+            current_user,
+            allow_completed=False,
+        )
+    except HTTPException as exc:
+        logger.warning(
+            "[WS] Rejected user=%s appointment=%s: %s",
+            user_id,
+            appointment_id,
+            exc.detail,
+        )
+        close_code = {
+            401: 4401,
+            403: 4403,
+            404: 4404,
+            409: 4409,
+            423: 4423,
+        }.get(exc.status_code, 4400)
+        await websocket.close(code=close_code)
+        return
+    except (json.JSONDecodeError, TypeError, WebSocketDisconnect):
+        try:
+            await websocket.close(code=4401)
+        except Exception:
+            pass
+        return
+    finally:
+        auth_db.close()
+
+    room_id = str(appointment_id)
     logger.info("[WS] Connecting: User %s to appointment %s", user_id, appointment_id)
-    await manager.connect(websocket, appointment_id, user_id)
+    await manager.connect(websocket, room_id, user_id)
     
     try:
         while True:
@@ -193,7 +282,7 @@ async def websocket_endpoint(
             logger.debug("[WS] Calling save_message_sync...")
             saved_msg = await run_in_threadpool(
                 save_message_sync, 
-                int(appointment_id), 
+                appointment_id,
                 user_id, 
                 data
             )
@@ -202,14 +291,14 @@ async def websocket_endpoint(
             if saved_msg:
                 # 3. Broadcast the SAVED message (with real ID)
                 logger.debug("[WS] Broadcasting msg id=%s...", saved_msg['id'])
-                await manager.broadcast(saved_msg, appointment_id)
+                await manager.broadcast(saved_msg, room_id)
                 logger.info("[WS] Broadcast complete for msg id=%s", saved_msg['id'])
 
                 # 4. Send FCM push to the OTHER user
                 logger.debug("[WS] Triggering push notification task...")
                 await run_in_threadpool(
                     send_chat_push_sync,
-                    int(appointment_id),
+                    appointment_id,
                     user_id,
                     data,
                 )
@@ -219,10 +308,10 @@ async def websocket_endpoint(
 
     except WebSocketDisconnect:
         logger.info("[WS] Disconnected: User %s from appointment %s", user_id, appointment_id)
-        await manager.disconnect(websocket, appointment_id, user_id)
+        await manager.disconnect(websocket, room_id, user_id)
     except Exception as e:
         logger.error("[WS] Unexpected error for user %s: %s", user_id, e, exc_info=True)
-        await manager.disconnect(websocket, appointment_id, user_id)
+        await manager.disconnect(websocket, room_id, user_id)
         try:
             await websocket.close(code=1011, reason="Internal server error")
         except Exception:

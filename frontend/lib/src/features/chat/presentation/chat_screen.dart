@@ -77,7 +77,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     try {
       final dio = ref.read(dioProvider);
       final queryParam = _nextCursor != null ? "?cursor=$_nextCursor" : "";
-      final response = await dio.get('/api/v1/p2p/history/${widget.appointmentId}$queryParam');
+      final response = await dio
+          .get('/api/v1/p2p/history/${widget.appointmentId}$queryParam');
 
       List<dynamic> olderMessages = [];
       String? next;
@@ -86,7 +87,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       // Handle both legacy (flat array) and new paginated object formats
       if (response.data is List) {
         olderMessages = response.data;
-        hasMoreData = false; // Legacy backend doesn't support pagination, so no more after initial
+        hasMoreData =
+            false; // Legacy backend doesn't support pagination, so no more after initial
       } else if (response.data is Map) {
         olderMessages = response.data['messages'] ?? [];
         next = response.data['next_cursor'];
@@ -122,9 +124,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     if (widget.doctorId != null) {
       try {
-        final doctor = await ref.read(doctorRepositoryProvider).getDoctorById(widget.doctorId!);
+        final doctor = await ref
+            .read(doctorRepositoryProvider)
+            .getDoctorById(widget.doctorId!);
         if (mounted && doctor.licenseNumber != null) {
-          setState(() { _mdcnNumber = doctor.licenseNumber; });
+          setState(() {
+            _mdcnNumber = doctor.licenseNumber;
+          });
         }
       } catch (e) {
         print("Doctor fetch error: $e");
@@ -135,18 +141,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     // Initial Load History
     try {
-      final response = await dio.get('/api/v1/p2p/history/${widget.appointmentId}');
+      final response =
+          await dio.get('/api/v1/p2p/history/${widget.appointmentId}');
       if (mounted) {
         setState(() {
           // We are parsing the initial fetch.
           List<dynamic> initialMessages = [];
           if (response.data is List) {
-             initialMessages = response.data;
-             _hasMore = false; // Legacy backend gives all at once
+            initialMessages = response.data;
+            _hasMore = false; // Legacy backend gives all at once
           } else if (response.data is Map) {
-             initialMessages = response.data['messages'] ?? [];
-             _nextCursor = response.data['next_cursor'];
-             _hasMore = response.data['has_more'] ?? false;
+            initialMessages = response.data['messages'] ?? [];
+            _nextCursor = response.data['next_cursor'];
+            _hasMore = response.data['has_more'] ?? false;
           }
 
           // Reversing the initial messages so index 0 is newest (bottom of screen)
@@ -158,6 +165,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       print("History Error: $e");
       if (mounted) setState(() => _isLoading = false);
     }
+
+    // Completed consultations keep read-only history but do not open a live
+    // message socket.
+    if (widget.isCompleted) return;
 
     // Connect WebSocket
     try {
@@ -172,22 +183,36 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         wsBase = wsBase.replaceFirst('http://', 'ws://');
       }
 
-      final wsUrl =
-          '$wsBase/api/v1/p2p/live/${widget.appointmentId}/${user.id}';
+      final accessToken =
+          Supabase.instance.client.auth.currentSession?.accessToken;
+      if (accessToken == null || accessToken.isEmpty) {
+        throw StateError('No authenticated session for consultation chat.');
+      }
 
-      _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
+      final wsUri = Uri.parse(
+        '$wsBase/api/v1/p2p/live/${widget.appointmentId}/${user.id}',
+      );
+
+      _channel = WebSocketChannel.connect(wsUri);
+      _channel!.sink.add(jsonEncode({
+        'type': 'auth',
+        'token': accessToken,
+      }));
 
       _channel!.stream.listen((data) {
         final newMessage = jsonDecode(data);
 
-        if (newMessage['type'] == 'call_signal' && newMessage['user_id'] != _myUserId) {
+        if (newMessage['type'] == 'call_signal' &&
+            newMessage['user_id'] != _myUserId) {
           if (mounted) {
-            final mediaType = newMessage['media'] == 'video' ? 'Video' : 'Voice';
+            final mediaType =
+                newMessage['media'] == 'video' ? 'Video' : 'Voice';
             showDialog(
               context: context,
               builder: (ctx) => AlertDialog(
                 title: Text("Incoming $mediaType Call"),
-                content: Text("The doctor is inviting you to a $mediaType call."),
+                content:
+                    Text("The doctor is inviting you to a $mediaType call."),
                 actions: [
                   TextButton(
                     onPressed: () {
@@ -219,7 +244,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
         if (mounted) {
           setState(() {
-            final msgIndex = _messages.indexWhere((m) => m['isSending'] == true && m['content'] == newMessage['content']);
+            final msgIndex = _messages.indexWhere((m) =>
+                m['isSending'] == true &&
+                m['content'] == newMessage['content']);
             if (msgIndex != -1) {
               _messages[msgIndex] = newMessage;
             } else {
@@ -235,7 +262,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }, onError: (error) => print("WS Error: $error"));
 
       // Setup Supabase Realtime Presence & Broadcast
-      _supabaseChannel = Supabase.instance.client.channel('chat_room_${widget.appointmentId}');
+      _supabaseChannel =
+          Supabase.instance.client.channel('chat_room_${widget.appointmentId}');
       _supabaseChannel!
         ..onPresenceSync((payload) {
           final state = _supabaseChannel!.presenceState();
@@ -260,26 +288,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ..onPresenceLeave((payload) {
           if (mounted) setState(() {});
         })
-        ..onBroadcast(event: 'call_waiting', callback: (payload) {
-          final callPayload = payload['payload'] is Map
-              ? Map<String, dynamic>.from(payload['payload'] as Map)
-              : payload;
+        ..onBroadcast(
+            event: 'call_waiting',
+            callback: (payload) {
+              final callPayload = payload['payload'] is Map
+                  ? Map<String, dynamic>.from(payload['payload'] as Map)
+                  : payload;
 
-          if (callPayload['user_id'] != _myUserId) {
-            if (mounted) {
-              setState(() {
-                if (callPayload['type'] == 'video_waiting') {
-                  _isPeerWaitingOnVideo = true;
-                } else if (callPayload['type'] == 'voice_waiting') {
-                  _isPeerWaitingOnVoice = true;
-                } else if (callPayload['type'] == 'cancel') {
-                  _isPeerWaitingOnVideo = false;
-                  _isPeerWaitingOnVoice = false;
+              if (callPayload['user_id'] != _myUserId) {
+                if (mounted) {
+                  setState(() {
+                    if (callPayload['type'] == 'video_waiting') {
+                      _isPeerWaitingOnVideo = true;
+                    } else if (callPayload['type'] == 'voice_waiting') {
+                      _isPeerWaitingOnVoice = true;
+                    } else if (callPayload['type'] == 'cancel') {
+                      _isPeerWaitingOnVideo = false;
+                      _isPeerWaitingOnVoice = false;
+                    }
+                  });
                 }
-              });
-            }
-          }
-        })
+              }
+            })
         ..subscribe((status, [error]) {
           if (status == RealtimeSubscribeStatus.subscribed) {
             _supabaseChannel!.track({
@@ -357,7 +387,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _messages.removeWhere((m) => m['id'] == tempId);
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Image upload failed")));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text("Image upload failed")));
       }
     }
   }
@@ -391,7 +422,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               margin: const EdgeInsets.all(12),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
               decoration: BoxDecoration(
-                color: isDark ? Colors.white.withOpacity(0.05) : Colors.grey[200],
+                color:
+                    isDark ? Colors.white.withOpacity(0.05) : Colors.grey[200],
                 borderRadius: BorderRadius.circular(30),
               ),
               child: Row(
@@ -404,9 +436,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(widget.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      Text(widget.title,
+                          style: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold)),
                       if (_mdcnNumber != null && _mdcnNumber!.isNotEmpty)
-                        Text("MDCN: $_mdcnNumber", style: const TextStyle(fontSize: 12, color: Colors.blue, fontWeight: FontWeight.bold)),
+                        Text("MDCN: $_mdcnNumber",
+                            style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.blue,
+                                fontWeight: FontWeight.bold)),
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -414,7 +452,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             width: 8,
                             height: 8,
                             decoration: BoxDecoration(
-                              color: _isPeerOnline ? Colors.greenAccent : Colors.grey,
+                              color: _isPeerOnline
+                                  ? Colors.greenAccent
+                                  : Colors.grey,
                               shape: BoxShape.circle,
                             ),
                           ),
@@ -423,7 +463,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             _isPeerOnline ? 'Online' : 'Offline',
                             style: TextStyle(
                               fontSize: 12,
-                              color: _isPeerOnline ? Colors.greenAccent : Colors.grey,
+                              color: _isPeerOnline
+                                  ? Colors.greenAccent
+                                  : Colors.grey,
                             ),
                           ),
                         ],
@@ -441,7 +483,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       clipBehavior: Clip.none,
                       children: [
                         IconButton(
-                          icon: Icon(Icons.phone_outlined, color: theme.colorScheme.primary, size: 20),
+                          icon: Icon(Icons.phone_outlined,
+                              color: theme.colorScheme.primary, size: 20),
                           onPressed: () {
                             if (_channel != null && _myUserId != null) {
                               _channel!.sink.add(jsonEncode({
@@ -453,12 +496,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             }
                             _supabaseChannel?.sendBroadcastMessage(
                               event: 'call_waiting',
-                              payload: {'type': 'voice_waiting', 'user_id': _myUserId},
+                              payload: {
+                                'type': 'voice_waiting',
+                                'user_id': _myUserId
+                              },
                             );
-                            context.push('/video_call?type=voice', extra: widget.appointmentId).then((_) {
+                            context
+                                .push('/video_call?type=voice',
+                                    extra: widget.appointmentId)
+                                .then((_) {
                               _supabaseChannel?.sendBroadcastMessage(
                                 event: 'call_waiting',
-                                payload: {'type': 'cancel', 'user_id': _myUserId},
+                                payload: {
+                                  'type': 'cancel',
+                                  'user_id': _myUserId
+                                },
                               );
                             });
                           },
@@ -482,7 +534,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       clipBehavior: Clip.none,
                       children: [
                         IconButton(
-                          icon: Icon(Icons.videocam_outlined, color: theme.colorScheme.primary, size: 20),
+                          icon: Icon(Icons.videocam_outlined,
+                              color: theme.colorScheme.primary, size: 20),
                           onPressed: () {
                             if (_channel != null && _myUserId != null) {
                               _channel!.sink.add(jsonEncode({
@@ -494,12 +547,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             }
                             _supabaseChannel?.sendBroadcastMessage(
                               event: 'call_waiting',
-                              payload: {'type': 'video_waiting', 'user_id': _myUserId},
+                              payload: {
+                                'type': 'video_waiting',
+                                'user_id': _myUserId
+                              },
                             );
-                            context.push('/video_call', extra: widget.appointmentId).then((_) {
+                            context
+                                .push('/video_call',
+                                    extra: widget.appointmentId)
+                                .then((_) {
                               _supabaseChannel?.sendBroadcastMessage(
                                 event: 'call_waiting',
-                                payload: {'type': 'cancel', 'user_id': _myUserId},
+                                payload: {
+                                  'type': 'cancel',
+                                  'user_id': _myUserId
+                                },
                               );
                             });
                           },
@@ -540,15 +602,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       final isMe = senderId == _myUserId;
                       final content = msg['content'] ?? '';
                       final isSending = msg['isSending'] == true;
-                      
+
                       if (content.toString().contains('"type":"call_signal"')) {
                         return const SizedBox.shrink();
                       }
 
                       final isImage =
                           content.toString().startsWith('/static/') ||
-                          content.toString().startsWith('http') ||
-                          content.toString().startsWith('FILE:');
+                              content.toString().startsWith('http') ||
+                              content.toString().startsWith('FILE:');
 
                       return Align(
                         alignment:
@@ -569,7 +631,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           child: isImage
                               ? GestureDetector(
                                   onTap: () {
-                                    if (content.toString().startsWith('FILE:')) return;
+                                    if (content.toString().startsWith('FILE:'))
+                                      return;
                                     final fullUrl = content.startsWith('http')
                                         ? content
                                         : "$cleanBaseUrl$content";
@@ -580,7 +643,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                           backgroundColor: Colors.black,
                                           appBar: AppBar(
                                             backgroundColor: Colors.black,
-                                            iconTheme: const IconThemeData(color: Colors.white),
+                                            iconTheme: const IconThemeData(
+                                                color: Colors.white),
                                           ),
                                           body: Center(
                                             child: InteractiveViewer(
@@ -596,9 +660,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                     children: [
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(8),
-                                        child: content.toString().startsWith('FILE:')
+                                        child: content
+                                                .toString()
+                                                .startsWith('FILE:')
                                             ? Image.file(
-                                                File(content.toString().substring(5)),
+                                                File(content
+                                                    .toString()
+                                                    .substring(5)),
                                                 height: 200,
                                                 width: 200,
                                                 fit: BoxFit.cover,
@@ -610,9 +678,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                                 height: 200,
                                                 width: 200,
                                                 fit: BoxFit.cover,
-                                                errorBuilder: (c, e, s) => const Icon(
-                                                    Icons.broken_image,
-                                                    color: Colors.white),
+                                                errorBuilder: (c, e, s) =>
+                                                    const Icon(
+                                                        Icons.broken_image,
+                                                        color: Colors.white),
                                               ),
                                       ),
                                       if (isSending)
@@ -620,10 +689,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                           child: Container(
                                             decoration: BoxDecoration(
                                               color: Colors.black45,
-                                              borderRadius: BorderRadius.circular(8),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
                                             ),
                                             child: const Center(
-                                              child: CircularProgressIndicator(color: Colors.white),
+                                              child: CircularProgressIndicator(
+                                                  color: Colors.white),
                                             ),
                                           ),
                                         ),
@@ -647,14 +718,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                     ),
                                     if (isMe)
                                       Padding(
-                                        padding: const EdgeInsets.only(left: 4.0),
+                                        padding:
+                                            const EdgeInsets.only(left: 4.0),
                                         child: isSending
                                             ? const SizedBox(
                                                 width: 12,
                                                 height: 12,
-                                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
+                                                child:
+                                                    CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                        color: Colors.white70),
                                               )
-                                            : const Icon(Icons.check, size: 14, color: Colors.white70),
+                                            : const Icon(Icons.check,
+                                                size: 14,
+                                                color: Colors.white70),
                                       ),
                                   ],
                                 ),
@@ -665,47 +742,61 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
           widget.isCompleted
               ? Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                   color: theme.cardTheme.color,
                   width: double.infinity,
                   child: const SafeArea(
                     child: Text(
                       "This consultation has ended.",
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey),
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold, color: Colors.grey),
                     ),
                   ),
                 )
               : Container(
-                  padding: const EdgeInsets.only(left: 16, right: 16, bottom: 24, top: 12),
+                  padding: const EdgeInsets.only(
+                      left: 16, right: 16, bottom: 24, top: 12),
                   color: theme.colorScheme.surface,
                   child: SafeArea(
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 6),
                       decoration: BoxDecoration(
-                        color: isDark ? Colors.white.withOpacity(0.05) : Colors.grey[200],
+                        color: isDark
+                            ? Colors.white.withOpacity(0.05)
+                            : Colors.grey[200],
                         borderRadius: BorderRadius.circular(30),
-                        border: Border.all(color: isDark ? Colors.white.withOpacity(0.05) : Colors.transparent),
+                        border: Border.all(
+                            color: isDark
+                                ? Colors.white.withOpacity(0.05)
+                                : Colors.transparent),
                       ),
                       child: Row(
                         children: [
                           IconButton(
-                            icon: Icon(Icons.add_photo_alternate, color: theme.colorScheme.onSurfaceVariant),
+                            icon: Icon(Icons.add_photo_alternate,
+                                color: theme.colorScheme.onSurfaceVariant),
                             onPressed: _handleImageUpload,
                           ),
                           Expanded(
                             child: TextField(
                               controller: _msgController,
-                              style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                              style: TextStyle(
+                                  color: theme.colorScheme.onSurfaceVariant),
                               minLines: 1,
                               maxLines: 5,
                               keyboardType: TextInputType.multiline,
                               textInputAction: TextInputAction.newline,
                               decoration: InputDecoration(
                                 hintText: "Type a message...",
-                                hintStyle: TextStyle(color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6)),
+                                hintStyle: TextStyle(
+                                    color: theme.colorScheme.onSurfaceVariant
+                                        .withOpacity(0.6)),
                                 border: InputBorder.none,
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 12),
                               ),
                             ),
                           ),
@@ -717,7 +808,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             ),
                             child: IconButton(
                               onPressed: () => _sendMessage(),
-                              icon: Icon(Icons.arrow_upward, color: theme.colorScheme.onPrimary, size: 20),
+                              icon: Icon(Icons.arrow_upward,
+                                  color: theme.colorScheme.onPrimary, size: 20),
                             ),
                           ),
                         ],
@@ -739,13 +831,15 @@ class _BlinkingDot extends StatefulWidget {
   State<_BlinkingDot> createState() => _BlinkingDotState();
 }
 
-class _BlinkingDotState extends State<_BlinkingDot> with SingleTickerProviderStateMixin {
+class _BlinkingDotState extends State<_BlinkingDot>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 800))
+    _controller = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 800))
       ..repeat(reverse: true);
   }
 

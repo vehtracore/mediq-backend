@@ -8,7 +8,16 @@ from pydantic import BaseModel
 import logging
 import time
 from app.core.database import get_db
-from app.models.appointment import Appointment, DoctorSlot
+from app.models.appointment import (
+    APPOINTMENT_TYPE_GENERAL_QUEUE,
+    APPOINTMENT_TYPE_SPECIALIST_SCHEDULED,
+    APPOINTMENT_TYPE_VIP_REQUEST,
+    Appointment,
+    DoctorSlot,
+    appointment_start_utc,
+    as_naive_utc,
+    resolve_appointment_type,
+)
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.review import Review
@@ -20,6 +29,176 @@ from app.core.notifications import dispatch_push
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Appointment authorization helpers
+# ---------------------------------------------------------------------------
+
+def require_patient_role(current_user: User) -> User:
+    """Require an active patient account."""
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inactive accounts cannot perform patient appointment actions.",
+        )
+    if current_user.role != "patient":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only patients can perform this appointment action.",
+        )
+    return current_user
+
+
+def require_approved_doctor(current_user: User, db: Session) -> Doctor:
+    """Resolve a doctor whose account passed the active-account approval gate."""
+    if not current_user.is_active or current_user.role != "doctor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only active doctors can perform this appointment action.",
+        )
+
+    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+    if not doctor:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Doctor profile not found.",
+        )
+    return doctor
+
+
+def require_patient_owner(
+    appointment: Appointment,
+    current_user: User,
+) -> Appointment:
+    """Require the authenticated patient to own the appointment."""
+    require_patient_role(current_user)
+    if appointment.patient_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access this appointment.",
+        )
+    return appointment
+
+
+def require_assigned_doctor(
+    appointment: Appointment,
+    current_user: User,
+    db: Session,
+) -> Doctor:
+    """Require the approved caller to be the appointment's assigned doctor."""
+    doctor = require_approved_doctor(current_user, db)
+    if appointment.doctor_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This appointment has not been assigned to a doctor.",
+        )
+    if appointment.doctor_id != doctor.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not the assigned doctor for this appointment.",
+        )
+    return doctor
+
+
+def require_patient_or_assigned_doctor(
+    appointment: Appointment,
+    current_user: User,
+    db: Session,
+) -> Doctor | None:
+    """Allow only the owning patient or the assigned approved doctor."""
+    if current_user.role == "patient":
+        require_patient_owner(appointment, current_user)
+        return None
+    if current_user.role == "doctor":
+        return require_assigned_doctor(appointment, current_user, db)
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to access this appointment.",
+    )
+
+
+def require_general_queue_claimable(
+    appointment: Appointment,
+) -> Appointment:
+    """Require an appointment to be eligible for a general-queue claim."""
+    if resolve_appointment_type(appointment) != APPOINTMENT_TYPE_GENERAL_QUEUE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only general queue appointments can be claimed.",
+        )
+    if appointment.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only pending appointments can be claimed.",
+        )
+    if appointment.payment_status != "paid":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The appointment must be paid before it can be claimed.",
+        )
+    if appointment.doctor_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This appointment has already been claimed.",
+        )
+    if appointment.slot_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Slot-based appointments cannot be claimed from the general queue.",
+        )
+    return appointment
+
+
+def require_vip_requested_doctor(
+    appointment: Appointment,
+    current_user: User,
+    db: Session,
+) -> Doctor:
+    """Require the caller to be the doctor explicitly requested for a VIP flow."""
+    doctor = require_approved_doctor(current_user, db)
+    if resolve_appointment_type(appointment) != APPOINTMENT_TYPE_VIP_REQUEST:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This action is only valid for VIP doctor requests.",
+        )
+    if appointment.doctor_id != doctor.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the requested VIP doctor can perform this action.",
+        )
+    return doctor
+
+
+def require_slot_owner(
+    slot: DoctorSlot,
+    current_user: User,
+    db: Session,
+) -> Doctor:
+    """Require the caller to own the slot, with explicit admin delegation."""
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inactive accounts cannot manage doctor slots.",
+        )
+
+    if current_user.role == "admin":
+        slot_doctor = db.query(Doctor).filter(Doctor.id == slot.doctor_id).first()
+        if not slot_doctor:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="The doctor assigned to this slot was not found.",
+            )
+        return slot_doctor
+
+    doctor = require_approved_doctor(current_user, db)
+    if slot.doctor_id != doctor.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to manage another doctor's slot.",
+        )
+    return doctor
+
 
 # --- Helper to build an AppointmentResponse, now including the
 #     relational IDs that were previously missing from the schema.
@@ -52,6 +231,7 @@ def map_appt(a, doc_name=None, patient_name=None):
         id=a.id,
         doctor_id=getattr(a, 'doctor_id', None),
         patient_id=getattr(a, 'patient_id', None),
+        appointment_type=resolve_appointment_type(a),
         doctor_name=d_name,
         patient_name=patient_name,
         status=a.status,
@@ -64,30 +244,6 @@ def map_appt(a, doc_name=None, patient_name=None):
         paystack_reference=getattr(a, 'paystack_reference', None),
         prescription=getattr(a, 'prescription', None),
     )
-
-
-def _close_stale_patient_consultations(db: Session, patient_id: int) -> int:
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
-    stale_count = (
-        db.query(Appointment)
-        .filter(
-            Appointment.patient_id == patient_id,
-            Appointment.status == "confirmed",
-            Appointment.start_time < cutoff,
-        )
-        .update({Appointment.status: "completed"}, synchronize_session=False)
-    )
-
-    db.commit()
-
-    if stale_count:
-        logger.info(
-            "[APPT LAZY SWEEP] Closed %d stale confirmed consultation(s) for patient_id=%s.",
-            stale_count,
-            patient_id,
-        )
-
-    return stale_count
 
 
 def _display_name(user: User | None) -> str:
@@ -233,10 +389,50 @@ def _build_patient_history_context(
 
 # ... (Slots & Booking - Standard) ...
 @router.post("/slots", response_model=SlotResponse, status_code=status.HTTP_201_CREATED)
-def create_slot(slot: SlotCreate, db: Session = Depends(get_db)):
+def create_slot(
+    slot: SlotCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
     doctor = db.query(Doctor).filter(Doctor.id == slot.doctor_id).first()
-    if not doctor: raise HTTPException(404, "Doctor not found")
-    new_slot = DoctorSlot(doctor_id=slot.doctor_id, start_time=slot.start_time, is_booked=False)
+    if not doctor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Doctor not found.",
+        )
+
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inactive accounts cannot create doctor slots.",
+        )
+
+    if current_user.role == "admin":
+        # Admins may create a slot on behalf of a doctor whose account has
+        # passed the same active-account approval gate.
+        doctor_user = (
+            db.query(User).filter(User.id == doctor.user_id).first()
+            if doctor.user_id
+            else None
+        )
+        if doctor_user is None or not doctor_user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Slots can only be created for active doctor accounts.",
+            )
+    else:
+        current_doctor = require_approved_doctor(current_user, db)
+        if current_doctor.id != doctor.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot create a slot for another doctor.",
+            )
+
+    new_slot = DoctorSlot(
+        doctor_id=slot.doctor_id,
+        start_time=as_naive_utc(slot.start_time),
+        is_booked=False,
+    )
     db.add(new_slot)
     db.commit()
     db.refresh(new_slot)
@@ -294,6 +490,8 @@ def book_appointment(
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
+    require_patient_role(current_user)
+
     # --- Step 1: Fetch slot with its doctor eagerly to avoid lazy-load AttributeError ---
     slot = (
         db.query(DoctorSlot)
@@ -318,6 +516,34 @@ def book_appointment(
             detail="This slot is misconfigured (no doctor assigned). Please contact support.",
         )
 
+    doctor_user = (
+        db.query(User).filter(User.id == slot.doctor.user_id).first()
+        if slot.doctor.user_id
+        else None
+    )
+    if doctor_user is None or not doctor_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This specialist is not currently available for booking.",
+        )
+
+    slot_start = slot.start_time
+    if slot_start is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This appointment slot is missing a valid start time.",
+        )
+    now_utc = datetime.now(timezone.utc)
+    if slot_start.tzinfo is None:
+        slot_start = slot_start.replace(tzinfo=timezone.utc)
+    else:
+        slot_start = slot_start.astimezone(timezone.utc)
+    if slot_start <= now_utc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This appointment slot is no longer available.",
+        )
+
     # --- Step 2: Calculate financials ---
     amount: float = slot.doctor.hourly_rate or 0.0
     commission: float = round(amount * 0.30, 2)
@@ -329,6 +555,7 @@ def book_appointment(
         patient_id=current_user.id,
         doctor_id=slot.doctor_id,
         slot_id=slot.id,
+        appointment_type=APPOINTMENT_TYPE_SPECIALIST_SCHEDULED,
         status="pending",
         payment_status="unpaid",
         notes=appt_data.notes,
@@ -345,7 +572,7 @@ def book_appointment(
         db.rollback()
         logger.warning("IntegrityError booking slot %s: %s", appt_data.slot_id, exc.orig)
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_409_CONFLICT,
             detail="This slot was just booked by another user. Please choose a different time.",
         ) from exc
     except Exception as exc:
@@ -378,6 +605,8 @@ def book_appointment(
     db.commit()
     db.refresh(new_appt)
 
+    # TODO: Add a scheduled expiry/release process for unpaid specialist
+    # reservations so abandoned checkouts do not hold slots indefinitely.
     return map_appt(new_appt)
 
 @router.post("/book-general", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
@@ -387,6 +616,7 @@ def book_general_consultation(req: GeneralBookRequest, db: Session = Depends(get
     doctor_payout = round(patient_price - platform_commission, 2)
     new_appointment = Appointment(
         patient_id=current_user.id, doctor_id=None, slot_id=None,
+        appointment_type=APPOINTMENT_TYPE_GENERAL_QUEUE,
         start_time=datetime.utcnow(), status="pending", payment_status="unpaid",
         notes=req.notes, amount=patient_price,
         commission=platform_commission, payout=doctor_payout,
@@ -482,6 +712,7 @@ def request_vip_appointment(
         patient_id=current_user.id,
         doctor_id=req.doctor_id,
         slot_id=None,
+        appointment_type=APPOINTMENT_TYPE_VIP_REQUEST,
         start_time=None,       # No time yet — doctor will propose via /propose
         status="pending",
         payment_status="unpaid",
@@ -529,30 +760,108 @@ def request_vip_appointment(
 
 @router.get("/my", response_model=List[AppointmentResponse])
 def get_my_appointments(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    _close_stale_patient_consultations(db, current_user.id)
-
-    # Eager load review to avoid N+1
-    scheduled = db.query(Appointment).options(joinedload(Appointment.review), joinedload(Appointment.slot)).join(DoctorSlot, Appointment.slot_id == DoctorSlot.id).filter(Appointment.patient_id == current_user.id).all()
-    general = db.query(Appointment).options(joinedload(Appointment.review)).filter(Appointment.patient_id == current_user.id, Appointment.slot_id == None).all()
+    # Preserve the existing scheduled/general split and response ordering.
+    # Eager-load every relationship touched by map_appt so this endpoint does
+    # not issue one extra doctor-profile query per appointment.
+    scheduled = (
+        db.query(Appointment)
+        .options(
+            joinedload(Appointment.doctor).load_only(Doctor.id, Doctor.full_name),
+            joinedload(Appointment.review),
+            joinedload(Appointment.slot),
+        )
+        .join(DoctorSlot, Appointment.slot_id == DoctorSlot.id)
+        .filter(Appointment.patient_id == current_user.id)
+        .all()
+    )
+    general = (
+        db.query(Appointment)
+        .options(
+            joinedload(Appointment.doctor).load_only(Doctor.id, Doctor.full_name),
+            joinedload(Appointment.review),
+        )
+        .filter(
+            Appointment.patient_id == current_user.id,
+            Appointment.slot_id == None,  # noqa: E711
+        )
+        .all()
+    )
     results = [map_appt(a) for a in scheduled + general]
     results.sort(key=lambda x: x.start_time or datetime.min, reverse=True)
     return results
 
-@router.put("/{appt_id}/pay", response_model=AppointmentResponse)
-def pay_appointment(appt_id: int, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
-    if not appt: raise HTTPException(404, "Not found")
-    appt.payment_status = "paid"
-    db.commit()
-    db.refresh(appt)
-    return map_appt(appt)
+@router.put("/{appt_id}/pay", status_code=status.HTTP_410_GONE)
+def pay_appointment(
+    appt_id: int,
+    current_user: User = Depends(deps.get_current_user),
+):
+    """Deprecated manual payment mutation.
+
+    Appointment payment state must only be changed after server-side payment
+    provider verification. The route remains temporarily so older clients fail
+    explicitly instead of receiving a generic 404.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Direct appointment payment updates are disabled. "
+            "Payment status is updated only after provider verification."
+        ),
+    )
+
+# TODO(payment-integrity): In the appointment-specific provider verification
+# path, bind the verified reference to the stored appointment reference,
+# appointment.patient_id, expected amount, currency, appointment type, and a
+# payable appointment state before setting payment_status="paid".
 
 @router.put("/{appt_id}/cancel", response_model=AppointmentResponse)
 def cancel_my_appointment(appt_id: int, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
-    if not appt: raise HTTPException(404, "Not found")
+    if not appt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Appointment not found.",
+        )
+    require_patient_owner(appt, current_user)
+    if appt.status not in {"pending", "awaiting_payment", "confirmed"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This appointment can no longer be cancelled.",
+        )
+
+    appointment_type = resolve_appointment_type(appt)
+    if (
+        appt.status == "confirmed"
+        and appointment_type in {APPOINTMENT_TYPE_GENERAL_QUEUE, None}
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This consultation has already been accepted by a doctor and "
+                "can no longer be cancelled."
+            ),
+        )
+
+    if appointment_type in {
+        APPOINTMENT_TYPE_SPECIALIST_SCHEDULED,
+        APPOINTMENT_TYPE_VIP_REQUEST,
+    }:
+        scheduled_start = appointment_start_utc(appt)
+        if (
+            scheduled_start is not None
+            and datetime.now(timezone.utc) >= scheduled_start
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This appointment has already started and can no longer "
+                    "be cancelled."
+                ),
+            )
+
     appt.status = "cancelled"
-    if appt.slot: appt.slot.is_booked = False
+    if appt.slot and appt.slot_id == appt.slot.id:
+        appt.slot.is_booked = False
     db.commit()
     db.refresh(appt)
     return map_appt(appt)
@@ -609,6 +918,7 @@ def get_doctor_requests(db: Session = Depends(get_db), current_user: User = Depe
             id=a.id,
             doctor_id=a.doctor_id,
             patient_id=a.patient_id,
+            appointment_type=resolve_appointment_type(a),
             doctor_name=p_name,        # shown as "patient" on doctor's UI
             patient_name=p_name,
             status=a.status,
@@ -623,10 +933,7 @@ def get_doctor_requests(db: Session = Depends(get_db), current_user: User = Depe
 
 @router.get("/doctor/queue", response_model=List[AppointmentResponse])
 def get_general_queue(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-    if not doctor:
-        logger.warning("[doctor/queue] No doctor row for user_id=%s", current_user.id)
-        raise HTTPException(403, "Not a doctor")
+    doctor = require_approved_doctor(current_user, db)
 
     logger.info(
         "[doctor/queue] Fetching general queue for doctor_id=%s user_id=%s",
@@ -640,8 +947,8 @@ def get_general_queue(db: Session = Depends(get_db), current_user: User = Depend
     # proposes a time BEFORE the patient pays, so that filter is intentionally absent there.
     appts = (
         db.query(Appointment)
-        .options(joinedload(Appointment.patient))
         .filter(
+            Appointment.appointment_type == APPOINTMENT_TYPE_GENERAL_QUEUE,
             Appointment.doctor_id == None,  # noqa: E711
             Appointment.slot_id == None,  # noqa: E711
             Appointment.status == "pending",
@@ -652,34 +959,27 @@ def get_general_queue(db: Session = Depends(get_db), current_user: User = Depend
 
     logger.info("[doctor/queue] Found %d item(s) in general queue.", len(appts))
 
-    # Pre-compute historical context per patient
-    _history_cache: dict[int, str | None] = {}
-
     results = []
     for a in appts:
-        p_name = f"{a.patient.first_name} {a.patient.last_name}" if a.patient else "Unknown"
-
-        # Inject historical context into notes (doctor-side only)
-        pid = a.patient_id
-        if pid not in _history_cache:
-            _history_cache[pid] = _build_patient_history_context(
-                db, pid, exclude_appointment_id=a.id
-            )
-        enriched_notes = a.notes or ""
-        if _history_cache[pid]:
-            enriched_notes = f"{enriched_notes}\n\n{_history_cache[pid]}" if enriched_notes else _history_cache[pid]
+        # Before claim, expose only the patient's submitted triage text.
+        # Identity, patient ID, historical consultations, prescriptions, and
+        # other vault data remain hidden until the doctor is assigned.
+        triage_summary = (a.notes or "").strip()
+        if len(triage_summary) > 500:
+            triage_summary = f"{triage_summary[:500].rstrip()}..."
 
         results.append(AppointmentResponse(
             id=a.id,
             doctor_id=a.doctor_id,
-            patient_id=a.patient_id,
-            doctor_name=p_name,      # shown as "patient" on doctor's UI
-            patient_name=p_name,
+            patient_id=None,
+            appointment_type=APPOINTMENT_TYPE_GENERAL_QUEUE,
+            doctor_name="General Queue Patient",
+            patient_name=None,
             status=a.status,
             payment_status=a.payment_status,
             is_acknowledged=getattr(a, 'is_acknowledged', False),
             start_time=a.start_time,
-            notes=enriched_notes,
+            notes=triage_summary or None,
             has_review=False,
             amount=getattr(a, 'amount', 0.0),
         ))
@@ -687,18 +987,66 @@ def get_general_queue(db: Session = Depends(get_db), current_user: User = Depend
 
 @router.put("/doctor/queue/{appt_id}/claim", response_model=AppointmentResponse)
 def claim_appointment(appt_id: int, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-    appt = db.query(Appointment).filter(
-        Appointment.id == appt_id,
-        Appointment.doctor_id == None,  # noqa: E711
-        Appointment.slot_id == None,  # noqa: E711
-        Appointment.payment_status == "paid",
-    ).first()
-    if not appt: raise HTTPException(404)
-    appt.doctor_id = doctor.id
-    appt.status = "confirmed"
+    doctor = require_approved_doctor(current_user, db)
+    if not getattr(doctor, "is_available", False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You must be available before claiming a general queue appointment.",
+        )
+
+    # One conditional UPDATE makes the claim atomic: after the first doctor
+    # assigns the row, a concurrent claimant no longer matches doctor_id IS NULL.
+    updated_rows = (
+        db.query(Appointment)
+        .filter(
+            Appointment.id == appt_id,
+            Appointment.appointment_type == APPOINTMENT_TYPE_GENERAL_QUEUE,
+            Appointment.status == "pending",
+            Appointment.payment_status == "paid",
+            Appointment.doctor_id == None,  # noqa: E711
+            Appointment.slot_id == None,  # noqa: E711
+        )
+        .update(
+            {
+                Appointment.doctor_id: doctor.id,
+                Appointment.status: "confirmed",
+            },
+            synchronize_session=False,
+        )
+    )
+
+    if updated_rows != 1:
+        db.rollback()
+        existing = (
+            db.query(Appointment)
+            .filter(Appointment.id == appt_id)
+            .first()
+        )
+        if not existing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Appointment not found.",
+            )
+
+        # Produce the most specific workflow error available. If every
+        # precondition still appears valid, another doctor won the race.
+        require_general_queue_claimable(existing)
+        if existing.appointment_type != APPOINTMENT_TYPE_GENERAL_QUEUE:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Legacy appointments without a durable general queue type cannot be claimed.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This appointment was claimed by another doctor.",
+        )
+
     db.commit()
-    db.refresh(appt)
+    appt = (
+        db.query(Appointment)
+        .filter(Appointment.id == appt_id)
+        .first()
+    )
     _notify_patient(
         db,
         appt,
@@ -711,72 +1059,117 @@ def claim_appointment(appt_id: int, db: Session = Depends(get_db), current_user:
 
 @router.put("/doctor/appointments/{appt_id}/accept", response_model=AppointmentResponse)
 def accept_appointment(appt_id: int, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
-    if not appt: raise HTTPException(404)
-    was_confirmed = appt.status == "confirmed"
+    if not appt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Appointment not found.",
+        )
+    doctor = require_assigned_doctor(appt, current_user, db)
+    if appt.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only pending appointments can be accepted.",
+        )
+    if appt.payment_status != "paid":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An appointment cannot be accepted before payment is verified.",
+        )
+
     appt.status = "confirmed"
     db.commit()
     db.refresh(appt)
-    if not was_confirmed:
-        _notify_patient(
-            db,
-            appt,
-            title="Appointment Confirmed",
-            body="Your consultation has been confirmed.",
-            notification_type="schedule_confirmed",
-            event_label="APPOINTMENTS/ACCEPTED",
-        )
+    _notify_patient(
+        db,
+        appt,
+        title="Appointment Confirmed",
+        body="Your consultation has been confirmed.",
+        notification_type="schedule_confirmed",
+        event_label="APPOINTMENTS/ACCEPTED",
+    )
     return map_appt(appt, doctor.full_name)
 
 @router.put("/doctor/appointments/{appt_id}/decline", response_model=AppointmentResponse)
 def decline_appointment(appt_id: int, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
-    if not appt: raise HTTPException(404)
-    was_cancelled = appt.status == "cancelled"
+    if not appt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Appointment not found.",
+        )
+    doctor = require_assigned_doctor(appt, current_user, db)
+    if appt.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only pending appointments can be declined.",
+        )
+
     appt.status = "cancelled"
-    if appt.slot: appt.slot.is_booked = False
+    if appt.slot:
+        appt.slot.is_booked = False
     db.commit()
     db.refresh(appt)
-    if not was_cancelled:
-        _notify_patient(
-            db,
-            appt,
-            title="Appointment Cancelled",
-            body="Your appointment request was declined.",
-            notification_type="schedule_cancelled",
-            event_label="APPOINTMENTS/DECLINED",
-        )
+    _notify_patient(
+        db,
+        appt,
+        title="Appointment Cancelled",
+        body="Your appointment request was declined.",
+        notification_type="schedule_cancelled",
+        event_label="APPOINTMENTS/DECLINED",
+    )
     return map_appt(appt, doctor.full_name)
 
 @router.put("/doctor/appointments/{appt_id}/cancel", response_model=AppointmentResponse)
 def cancel_appointment_by_doctor(appt_id: int, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
-    if not appt: raise HTTPException(404)
-    was_cancelled = appt.status == "cancelled"
+    if not appt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Appointment not found.",
+        )
+    doctor = require_assigned_doctor(appt, current_user, db)
+    if appt.status not in {"awaiting_payment", "confirmed"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only proposed or confirmed appointments can be cancelled by a doctor.",
+        )
+
     appt.status = "cancelled"
-    if appt.slot: appt.slot.is_booked = False
+    if appt.slot:
+        appt.slot.is_booked = False
     db.commit()
     db.refresh(appt)
-    if not was_cancelled:
-        _notify_patient(
-            db,
-            appt,
-            title="Appointment Cancelled",
-            body="Your appointment was cancelled by the doctor.",
-            notification_type="schedule_cancelled",
-            event_label="APPOINTMENTS/CANCELLED_BY_DOCTOR",
-        )
+    _notify_patient(
+        db,
+        appt,
+        title="Appointment Cancelled",
+        body="Your appointment was cancelled by the doctor.",
+        notification_type="schedule_cancelled",
+        event_label="APPOINTMENTS/CANCELLED_BY_DOCTOR",
+    )
     return map_appt(appt, doctor.full_name)
 
 @router.put("/doctor/appointments/{appt_id}/complete", response_model=AppointmentResponse)
 def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
-    if not appt: raise HTTPException(404)
-    was_completed = appt.status == "completed"
+    if not appt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Appointment not found.",
+        )
+    doctor = require_assigned_doctor(appt, current_user, db)
+    if appt.status != "confirmed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only confirmed appointments can be completed.",
+        )
+    if appt.payment_status != "paid":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An appointment cannot be completed before payment is verified.",
+        )
+
     appt.status = "completed"
 
     # ── Compile referral data if the doctor issued a hospital referral ───
@@ -823,15 +1216,14 @@ def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_us
 
     db.commit()
     db.refresh(appt)
-    if not was_completed:
-        _notify_patient(
-            db,
-            appt,
-            title="Consultation Complete",
-            body="Your consultation is complete. Any notes or prescriptions are available in your health vault.",
-            notification_type="consultation_complete",
-            event_label="APPOINTMENTS/COMPLETED",
-        )
+    _notify_patient(
+        db,
+        appt,
+        title="Consultation Complete",
+        body="Your consultation is complete. Any notes or prescriptions are available in your health vault.",
+        notification_type="consultation_complete",
+        event_label="APPOINTMENTS/COMPLETED",
+    )
     return map_appt(appt, doctor.full_name)
 
 
@@ -849,15 +1241,10 @@ def prescribe_appointment(
     appointment row and propagated to the ConsultationRecord in the Health
     Vault the next time the appointment is completed.
     """
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-    if not doctor:
-        raise HTTPException(status_code=403, detail="Only doctors can prescribe.")
-
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found.")
-    if appt.doctor_id != doctor.id:
-        raise HTTPException(status_code=403, detail="You are not the doctor for this appointment.")
+    doctor = require_assigned_doctor(appt, current_user, db)
 
     previous_prescription = appt.prescription
     prescription_added = False
@@ -906,17 +1293,11 @@ def refer_patient_to_hospital(
     Allows an authenticated doctor to refer a patient to a physical hospital.
     Generates a standardised referral note and persists it against the appointment.
     """
-    # 1. Guard — must be a doctor
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-    if not doctor:
-        raise HTTPException(status_code=403, detail="Only doctors can issue referrals.")
-
-    # 2. Fetch appointment and verify ownership
+    # Fetch appointment and verify active-doctor assignment
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found.")
-    if appt.doctor_id != doctor.id:
-        raise HTTPException(status_code=403, detail="You are not the doctor for this appointment.")
+    doctor = require_assigned_doctor(appt, current_user, db)
 
     # 3. Resolve patient name
     patient = appt.patient
@@ -978,6 +1359,7 @@ def get_doctor_confirmed_appointments(db: Session = Depends(get_db), current_use
             id=a.id,
             doctor_id=a.doctor_id,
             patient_id=a.patient_id,
+            appointment_type=resolve_appointment_type(a),
             doctor_name=p_name,      # repurposed: carries patient name for doctor-side view
             patient_name=p_name,
             status=a.status,
@@ -996,7 +1378,17 @@ def get_doctor_confirmed_appointments(db: Session = Depends(get_db), current_use
 def acknowledge_appointment(appt_id: int, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
     if not appt:
-        raise HTTPException(404, "Appointment not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Appointment not found.",
+        )
+    require_patient_owner(appt, current_user)
+    if appt.status not in {"awaiting_payment", "confirmed"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only proposed or confirmed appointments can be acknowledged.",
+        )
+
     appt.is_acknowledged = True
     db.commit()
     return {"status": "success"}
@@ -1010,7 +1402,22 @@ def propose_appointment_time(
 ):
     appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
     if not appt:
-        raise HTTPException(404, "Appointment not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Appointment not found.",
+        )
+
+    require_vip_requested_doctor(appt, current_user, db)
+    if appt.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only pending VIP requests can receive a proposed time.",
+        )
+    if appt.payment_status != "unpaid":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A proposed time cannot be changed after payment is verified.",
+        )
 
     # Guardrail: proposed time must not exceed 30 days from now.
     # Use UTC-aware comparison to avoid naive/aware datetime mixing.
@@ -1020,6 +1427,11 @@ def propose_appointment_time(
     if _proposed_utc.tzinfo is None:
         # Treat naive datetimes (from older clients) as UTC
         _proposed_utc = _proposed_utc.replace(tzinfo=timezone.utc)
+    if _proposed_utc <= datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Proposed time must be in the future.",
+        )
     if _proposed_utc > _max_date:
         raise HTTPException(
             status_code=400,
@@ -1027,7 +1439,7 @@ def propose_appointment_time(
         )
 
     # Update start time and status
-    appt.start_time = payload.proposed_time
+    appt.start_time = as_naive_utc(_proposed_utc)
     appt.status = "awaiting_payment"
     db.commit()
     db.refresh(appt)
@@ -1038,6 +1450,7 @@ def propose_appointment_time(
         id=appt.id,
         doctor_id=appt.doctor_id,
         patient_id=appt.patient_id,
+        appointment_type=resolve_appointment_type(appt),
         doctor_name=p_name,
         patient_name=p_name,
         status=appt.status,
@@ -1081,15 +1494,7 @@ async def send_specialist_referral(
     import resend as _resend
     import os
 
-    # ── 1. Verify caller is a doctor ──────────────────────────────────────────
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-    if not doctor:
-        raise HTTPException(
-            status_code=403,
-            detail="Only verified doctors can issue clinical referrals.",
-        )
-
-    # ── 2. Fetch & verify appointment ownership ───────────────────────────────
+    # Fetch and verify active-doctor assignment.
     appt = (
         db.query(Appointment)
         .options(joinedload(Appointment.patient))
@@ -1098,11 +1503,7 @@ async def send_specialist_referral(
     )
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found.")
-    if appt.doctor_id != doctor.id:
-        raise HTTPException(
-            status_code=403,
-            detail="You are not the doctor for this appointment.",
-        )
+    doctor = require_assigned_doctor(appt, current_user, db)
 
     patient = appt.patient
     patient_name = (

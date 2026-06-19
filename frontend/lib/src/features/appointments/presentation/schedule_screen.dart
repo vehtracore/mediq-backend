@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -14,10 +16,10 @@ import 'package:mediq_app/presentation/widgets/global_error_widget.dart';
 ///
 /// Data Source: Communicates with `appointmentRepositoryProvider` (`getMyAppointments()` API endpoint).
 ///
-/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(myAppointmentsProvider)` 
+/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(myAppointmentsProvider)`
 /// on pull-to-refresh, retry taps in GlobalErrorWidget, or immediately after a successful cancellation/booking mutation.
 ///
-/// Error & Loading Annotations: Exceptions thrown by the API (like `DioException`) are caught by Riverpod 
+/// Error & Loading Annotations: Exceptions thrown by the API (like `DioException`) are caught by Riverpod
 /// and translated into clean localized strings by the `GlobalErrorWidget` wrapped around this provider's `error` state.
 final myAppointmentsProvider =
     FutureProvider.autoDispose<List<Appointment>>((ref) async {
@@ -43,14 +45,16 @@ final myAppointmentsProvider =
         appt.status == 'awaiting_payment') return true;
 
     // Is it a recent history item (less than 30 days old)? Keep it.
-    if (appt.startTime != null && appt.startTime!.isAfter(thirtyDaysAgo)) return true;
+    if (appt.startTime != null && appt.startTime!.isAfter(thirtyDaysAgo))
+      return true;
 
     // Otherwise, hide it.
     return false;
   }).toList();
 
   // Sort by date (Newest at the top)
-  filtered.sort((a, b) => (b.startTime ?? DateTime(2099)).compareTo(a.startTime ?? DateTime(2099)));
+  filtered.sort((a, b) =>
+      (b.startTime ?? DateTime(2099)).compareTo(a.startTime ?? DateTime(2099)));
 
   return filtered;
 });
@@ -75,9 +79,9 @@ class ScheduleScreen extends ConsumerWidget {
       body: appointmentsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (err, stack) => GlobalErrorWidget(
-              error: err,
-              onRetry: () => ref.invalidate(myAppointmentsProvider),
-            ),
+          error: err,
+          onRetry: () => ref.invalidate(myAppointmentsProvider),
+        ),
         data: (appointments) {
           if (appointments.isEmpty) {
             return RefreshIndicator(
@@ -116,6 +120,52 @@ class _AppointmentCard extends ConsumerStatefulWidget {
 
 class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
   bool _isLoading = false;
+  Timer? _timeGateTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleTimeGateRefresh();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AppointmentCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.appointment.startTime != widget.appointment.startTime ||
+        oldWidget.appointment.appointmentType !=
+            widget.appointment.appointmentType) {
+      _scheduleTimeGateRefresh();
+    }
+  }
+
+  void _scheduleTimeGateRefresh() {
+    _timeGateTimer?.cancel();
+    final appointment = widget.appointment;
+    final start = appointment.startTime;
+    if (start == null || appointment.isGeneralQueue) return;
+
+    final now = DateTime.now();
+    final unlockAt = start.subtract(const Duration(minutes: 10));
+    final nextBoundary = now.isBefore(unlockAt)
+        ? unlockAt
+        : (now.isBefore(start) ? start : null);
+    if (nextBoundary == null) return;
+
+    _timeGateTimer = Timer(
+      nextBoundary.difference(now) + const Duration(milliseconds: 100),
+      () {
+        if (!mounted) return;
+        setState(() {});
+        _scheduleTimeGateRefresh();
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _timeGateTimer?.cancel();
+    super.dispose();
+  }
 
   void _showRatingSheet(BuildContext context, WidgetRef ref) {
     int selectedRating = 5;
@@ -163,23 +213,34 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton(
-                      onPressed: isReviewLoading ? null : () async {
-                        setModalState(() => isReviewLoading = true);
-                        try {
-                          await ref.read(reviewRepositoryProvider).submitReview(
-                              appointmentId: widget.appointment.id,
-                              rating: selectedRating,
-                              comment: commentCtrl.text);
-                          if (ctx.mounted) Navigator.pop(ctx);
-                          ref.refresh(myAppointmentsProvider);
-                        } catch (e) {
-                          if (ctx.mounted) setModalState(() => isReviewLoading = false);
-                        }
-                      },
+                      onPressed: isReviewLoading
+                          ? null
+                          : () async {
+                              setModalState(() => isReviewLoading = true);
+                              try {
+                                await ref
+                                    .read(reviewRepositoryProvider)
+                                    .submitReview(
+                                        appointmentId: widget.appointment.id,
+                                        rating: selectedRating,
+                                        comment: commentCtrl.text);
+                                if (ctx.mounted) Navigator.pop(ctx);
+                                ref.invalidate(myAppointmentsProvider);
+                              } catch (e) {
+                                if (ctx.mounted)
+                                  setModalState(() => isReviewLoading = false);
+                              }
+                            },
                       style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF4A90E2),
                           foregroundColor: Colors.white),
-                      child: isReviewLoading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text("Submit Review"))),
+                      child: isReviewLoading
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white))
+                          : const Text("Submit Review"))),
               const SizedBox(height: 24),
             ],
           ),
@@ -194,11 +255,17 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    final dayMonth = appointment.startTime != null ? DateFormat('MMM dd').format(appointment.startTime!) : 'Pending Date';
-    final time = appointment.startTime != null ? DateFormat('jm').format(appointment.startTime!) : 'Pending Time';
+    final dayMonth = appointment.startTime != null
+        ? DateFormat('MMM dd').format(appointment.startTime!)
+        : 'Pending Date';
+    final time = appointment.startTime != null
+        ? DateFormat('jm').format(appointment.startTime!)
+        : 'Pending Time';
     final isConfirmed = appointment.status == 'confirmed';
     final isCompleted = appointment.status == 'completed';
     final isUnpaid = appointment.paymentStatus == 'unpaid';
+    final isVipRequest = appointment.isVipRequest;
+    final canPatientPay = appointment.canPatientPay;
 
     Color statusBgColor = Colors.orange.withOpacity(0.1);
     Color statusTextColor = Colors.orange;
@@ -263,23 +330,42 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(time,
-                          style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.grey)),
                       const SizedBox(height: 4),
                       Text(appointment.doctorName,
                           style: theme.textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                            color: statusBgColor,
-                            borderRadius: BorderRadius.circular(8)),
-                        child: Text(appointment.status.toUpperCase(),
-                            style: TextStyle(
-                                color: statusTextColor,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                                color: statusBgColor,
+                                borderRadius: BorderRadius.circular(8)),
+                            child: Text(appointment.statusLabel,
+                                style: TextStyle(
+                                    color: statusTextColor,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold)),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              appointment.typeLabel,
+                              style: theme.textTheme.labelSmall,
+                            ),
+                          ),
+                        ],
                       ),
                     ]),
               ),
@@ -292,55 +378,78 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  if (appointment.status == 'pending' || isConfirmed)
+                  if (appointment.canPatientCancel)
                     TextButton(
                         onPressed: () async {
                           final confirm = await showDialog<bool>(
                             context: context,
                             builder: (ctx) => AlertDialog(
                               title: const Text("Cancel Consultation"),
-                              content: const Text("Are you sure you want to cancel this consultation?"),
+                              content: const Text(
+                                  "Are you sure you want to cancel this consultation?"),
                               actions: [
-                                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Keep")),
-                                TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Cancel", style: TextStyle(color: Colors.red))),
+                                TextButton(
+                                    onPressed: () => Navigator.pop(ctx, false),
+                                    child: const Text("Keep")),
+                                TextButton(
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    child: const Text("Cancel",
+                                        style: TextStyle(color: Colors.red))),
                               ],
                             ),
                           );
                           if (confirm != true) return;
-                          
+
                           setState(() => _isLoading = true);
                           try {
                             await ref
                                 .read(appointmentRepositoryProvider)
                                 .cancelMyAppointment(appointment.id);
-                            ref.refresh(myAppointmentsProvider);
-                          } catch (e) {} finally {
+                            ref.invalidate(myAppointmentsProvider);
+                          } catch (error) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    UIErrorFormatter.getMessage(error),
+                                  ),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          } finally {
                             if (mounted) setState(() => _isLoading = false);
                           }
                         },
-                        child: _isLoading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : Text("Cancel",
-                            style: TextStyle(color: theme.colorScheme.error))),
+                        child: _isLoading
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2))
+                            : Text("Cancel",
+                                style:
+                                    TextStyle(color: theme.colorScheme.error))),
                   if (isConfirmed) ...[
                     const SizedBox(width: 8),
                     Builder(builder: (context) {
-                      final st = appointment.startTime;
-                      final bool isUnlocked = st == null ||
-                          DateTime.now().isAfter(
-                              st.subtract(const Duration(minutes: 10)));
+                      final bool isUnlocked =
+                          appointment.isConsultationUnlocked;
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                FilledButton.icon(
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              FilledButton.icon(
                                   onPressed: isUnlocked
                                       ? () => context.push('/chat', extra: {
                                             'title': appointment.doctorName,
                                             'isAi': false,
                                             'appointmentId': appointment.id,
                                             'doctorId': appointment.doctorId,
-                                            'isCompleted': appointment.status == 'completed'
+                                            'isCompleted': appointment.status ==
+                                                'completed'
                                           })
                                       : null,
                                   icon: Icon(
@@ -351,16 +460,16 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                                   ),
                                   label: const Text("Join Consultation Room"),
                                   style: FilledButton.styleFrom(
-                                      backgroundColor: isUnlocked
-                                          ? theme.colorScheme.primary
-                                          : Colors.grey.withOpacity(0.12),
-                                      foregroundColor: isUnlocked
-                                          ? theme.colorScheme.onPrimary
-                                          : Colors.grey,
-                                      elevation: 0,
+                                    backgroundColor: isUnlocked
+                                        ? theme.colorScheme.primary
+                                        : Colors.grey.withOpacity(0.12),
+                                    foregroundColor: isUnlocked
+                                        ? theme.colorScheme.onPrimary
+                                        : Colors.grey,
+                                    elevation: 0,
                                   )),
-                              ],
-                            ),
+                            ],
+                          ),
                           if (!isUnlocked) ...[
                             const SizedBox(height: 4),
                             Row(
@@ -392,10 +501,16 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                             context: context,
                             builder: (ctx) => AlertDialog(
                               title: const Text("Cancel Request"),
-                              content: const Text("Are you sure you want to cancel this appointment request?"),
+                              content: const Text(
+                                  "Are you sure you want to cancel this appointment request?"),
                               actions: [
-                                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Keep")),
-                                TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Cancel", style: TextStyle(color: Colors.red))),
+                                TextButton(
+                                    onPressed: () => Navigator.pop(ctx, false),
+                                    child: const Text("Keep")),
+                                TextButton(
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    child: const Text("Cancel",
+                                        style: TextStyle(color: Colors.red))),
                               ],
                             ),
                           );
@@ -412,29 +527,37 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                             }
                           } catch (e) {
                             if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content:
-                                        Text(UIErrorFormatter.getMessage(e)),
-                                    backgroundColor: Colors.red,
-                                  ),
-                                );
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(UIErrorFormatter.getMessage(e)),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
                             }
                           } finally {
                             if (mounted) setState(() => _isLoading = false);
                           }
                         },
                         style: OutlinedButton.styleFrom(
-                            foregroundColor: theme.colorScheme.error,
-                            side: BorderSide(
-                                color: theme.colorScheme.error.withOpacity(0.5)),
+                          foregroundColor: theme.colorScheme.error,
+                          side: BorderSide(
+                              color: theme.colorScheme.error.withOpacity(0.5)),
                         ),
-                        child: _isLoading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Cancel Request')),
+                        child: _isLoading
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2))
+                            : const Text('Cancel Request')),
+                  ],
+                  if (canPatientPay) ...[
                     const SizedBox(width: 8),
                     ElevatedButton(
                         onPressed: () async {
-                          final result = await context.push('/payment', extra: {
-                            'transactionType': 'specialist_consult',
+                          await context.push('/payment', extra: {
+                            'transactionType':
+                                appointment.paymentTransactionType,
                             'baseAmount': appointment.amount,
                             'title': 'Consultation Payment',
                             'appointmentId': appointment.id,
@@ -452,7 +575,9 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                         child: const Text("Pay Now")),
                   ],
                   // ── VIP pending: doctor hasn't proposed a time yet ──────────
-                  if (appointment.status == 'pending' && isUnpaid) ...[
+                  if (isVipRequest &&
+                      appointment.status == 'pending' &&
+                      isUnpaid) ...[
                     const SizedBox(width: 8),
                     Chip(
                       label: const Text(
