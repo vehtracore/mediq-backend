@@ -37,6 +37,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -44,10 +45,20 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from sqlalchemy.orm import Session
 
+from app.api import deps
 from app.core.database import get_db
+from app.models.appointment import (
+    APPOINTMENT_TYPE_GENERAL_QUEUE,
+    APPOINTMENT_TYPE_SPECIALIST_SCHEDULED,
+    APPOINTMENT_TYPE_VIP_REQUEST,
+    Appointment,
+    resolve_appointment_type,
+)
 from app.models.failed_webhook import FailedWebhook
 from app.models.user import User
 from app.models.doctor import Doctor
+from app.models.consultation_payout import ConsultationPayout
+from app.services.consultation_pricing import naira_to_kobo
 from app.services.email_service import send_transactional_email
 from app.services.paystack_service import paystack_service  # noqa: F401 (used in future endpoints)
 from app.core.notifications import dispatch_push
@@ -89,6 +100,8 @@ if not PAYSTACK_SECRET_KEY:
 
 PAYSTACK_VERIFY_URL = "https://api.paystack.co/transaction/verify"
 PAYSTACK_INITIALIZE_URL = "https://api.paystack.co/transaction/initialize"
+INDIVIDUAL_SUBSCRIPTION_AMOUNT_KOBO = 350_000
+FAMILY_SUBSCRIPTION_AMOUNT_KOBO = 1_000_000
 
 router = APIRouter()
 
@@ -126,7 +139,11 @@ class PaymentInitializeRequest(BaseModel):
 # ─── Initialize Endpoint ──────────────────────────────────────────────────────
 
 @router.post("/initialize", status_code=200)
-async def initialize_transaction(payload: PaymentInitializeRequest):
+async def initialize_transaction(
+    payload: PaymentInitializeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
     """
     POST /api/v1/payments/initialize
 
@@ -164,8 +181,14 @@ async def initialize_transaction(payload: PaymentInitializeRequest):
     }
     # Base payload — amount is always required by Paystack even for plan-based
     # recurring charges, so we never omit it regardless of whether plan is set.
+    if not current_user.email:
+        raise HTTPException(
+            status_code=400,
+            detail="Your account does not have a valid payment email.",
+        )
+
     body: dict = {
-        "email": payload.email,
+        "email": current_user.email,
         "amount": payload.amount,
         "reference": payload.reference,
     }
@@ -173,6 +196,53 @@ async def initialize_transaction(payload: PaymentInitializeRequest):
     transaction_type, ref_appointment_id, ref_user_id = _parse_reference(
         payload.reference
     )
+    expected_subscription_amounts = {
+        "subscription": INDIVIDUAL_SUBSCRIPTION_AMOUNT_KOBO,
+        "family_subscription": FAMILY_SUBSCRIPTION_AMOUNT_KOBO,
+    }
+    expected_amount = expected_subscription_amounts.get(transaction_type)
+    if expected_amount is not None and payload.amount != expected_amount:
+        raise HTTPException(
+            status_code=400,
+            detail="Subscription amount does not match the configured plan price.",
+        )
+    if (
+        expected_amount is not None
+        and ref_user_id != str(current_user.id)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="This payment reference does not belong to your account.",
+        )
+
+    try:
+        appointment = _validate_consultation_payment(
+            transaction_type=transaction_type,
+            ref_appointment_id=ref_appointment_id,
+            ref_user_id=ref_user_id,
+            reference=payload.reference,
+            amount_kobo=payload.amount,
+            db=db,
+            current_user=current_user,
+            require_payable=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if appointment is not None and appointment.doctor_id is not None:
+        doctor = appointment.doctor
+        if doctor is None or not doctor.paystack_subaccount_code:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This doctor's payout setup is incomplete. "
+                    "Please choose another doctor or try again later."
+                ),
+            )
+        body["subaccount"] = doctor.paystack_subaccount_code
+        body["transaction_charge"] = naira_to_kobo(
+            appointment.commission or 0.0
+        )
+
     metadata: dict = {
         "reference": payload.reference,
         "transaction_type": transaction_type,
@@ -191,7 +261,7 @@ async def initialize_transaction(payload: PaymentInitializeRequest):
         "[PAYMENTS] Initializing transaction | reference='%s' | email='%s' "
         "| amount=%d kobo | plan=%s",
         payload.reference,
-        payload.email,
+        current_user.email,
         payload.amount,
         payload.plan or "(one-time)",
     )
@@ -274,6 +344,83 @@ def _parse_reference(reference: str) -> tuple[str, str | None, str | None]:
         transaction_type = "subscription"
 
     return transaction_type, ref_appointment_id, ref_user_id
+
+
+CONSULTATION_TRANSACTION_TYPES = {
+    "gp_consult",
+    "specialist_consult",
+    "vip_request",
+}
+
+EXPECTED_TRANSACTION_TYPE_BY_APPOINTMENT_TYPE = {
+    APPOINTMENT_TYPE_GENERAL_QUEUE: "gp_consult",
+    APPOINTMENT_TYPE_SPECIALIST_SCHEDULED: "specialist_consult",
+    APPOINTMENT_TYPE_VIP_REQUEST: "vip_request",
+}
+
+
+def _validate_consultation_payment(
+    *,
+    transaction_type: str,
+    ref_appointment_id: str | None,
+    ref_user_id: str | None,
+    reference: str,
+    amount_kobo: int,
+    db: Session,
+    current_user: User | None = None,
+    require_payable: bool = False,
+) -> Appointment | None:
+    """Bind a consultation payment to its owner, amount, type and state."""
+    if transaction_type not in CONSULTATION_TRANSACTION_TYPES:
+        return None
+    if not ref_appointment_id or not ref_user_id:
+        raise ValueError("Consultation payment reference is missing required IDs.")
+
+    appointment = (
+        db.query(Appointment)
+        .filter(Appointment.id == int(ref_appointment_id))
+        .first()
+    )
+    if appointment is None:
+        raise ValueError("Consultation appointment was not found.")
+    if appointment.paystack_reference != reference:
+        raise ValueError("Payment reference does not match the appointment.")
+    if appointment.patient_id != int(ref_user_id):
+        raise ValueError("Payment reference patient does not match the appointment.")
+    if current_user is not None and appointment.patient_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You cannot pay for another patient's appointment.",
+        )
+
+    expected_transaction_type = EXPECTED_TRANSACTION_TYPE_BY_APPOINTMENT_TYPE.get(
+        resolve_appointment_type(appointment)
+    )
+    if expected_transaction_type != transaction_type:
+        raise ValueError("Payment reference type does not match the appointment.")
+
+    expected_amount_kobo = naira_to_kobo(appointment.amount or 0.0)
+    if amount_kobo != expected_amount_kobo:
+        raise ValueError("Payment amount does not match the appointment amount.")
+
+    if require_payable:
+        if appointment.payment_status != "unpaid":
+            raise HTTPException(
+                status_code=409,
+                detail="This appointment has already been paid.",
+            )
+        payable_statuses = {
+            "gp_consult": {"pending"},
+            "specialist_consult": {"pending"},
+            "vip_request": {"awaiting_payment"},
+        }
+        if appointment.status not in payable_statuses[transaction_type]:
+            raise HTTPException(
+                status_code=409,
+                detail="This appointment is not currently payable.",
+            )
+
+    return appointment
 
 
 def _persist_subscription_identifiers(user: User, paystack_data: dict | None) -> bool:
@@ -963,6 +1110,85 @@ def _handle_transfer_success(data: dict, db: Session) -> dict:
 
     Raises ValueError when required fields are missing or the doctor is not found.
     """
+    reference = str(data.get("reference") or "")
+    ledger = (
+        db.query(ConsultationPayout)
+        .filter(ConsultationPayout.reference == reference)
+        .with_for_update()
+        .first()
+        if reference
+        else None
+    )
+    if ledger is not None:
+        if ledger.status == "paid":
+            return {
+                "action": "payout_already_confirmed",
+                "payout_id": ledger.id,
+                "appointment_id": ledger.appointment_id,
+            }
+        if ledger.status == "reversed":
+            return {
+                "action": "payout_already_reversed",
+                "payout_id": ledger.id,
+                "appointment_id": ledger.appointment_id,
+            }
+
+        amount_kobo = int(data.get("amount") or 0)
+        expected_amount_kobo = naira_to_kobo(float(ledger.amount))
+        if amount_kobo != expected_amount_kobo:
+            raise ValueError(
+                "transfer.success amount does not match the payout ledger."
+            )
+
+        doctor = (
+            db.query(Doctor)
+            .filter(Doctor.id == ledger.doctor_id)
+            .first()
+        )
+        if doctor is None:
+            raise ValueError(
+                f"transfer.success: doctor id={ledger.doctor_id} not found."
+            )
+
+        ledger.status = "paid"
+        ledger.transfer_code = (
+            data.get("transfer_code") or ledger.transfer_code
+        )
+        ledger.last_error = None
+        ledger.paid_at = datetime.utcnow()
+        current_earnings = Decimal(
+            str(getattr(doctor, "total_earnings", None) or 0)
+        )
+        doctor.total_earnings = current_earnings + Decimal(str(ledger.amount))
+        db.commit()
+        db.refresh(ledger)
+        db.refresh(doctor)
+
+        doctor_user = (
+            db.query(User).filter(User.id == doctor.user_id).first()
+            if doctor.user_id
+            else None
+        )
+        _push_user(
+            doctor_user,
+            title="Payout Sent",
+            body=f"Your payout of ₦{float(ledger.amount):,.2f} has been processed.",
+            data={
+                "type": "payout_sent",
+                "doctor_id": str(doctor.id),
+                "appointment_id": str(ledger.appointment_id),
+            },
+            event_label="PAYMENTS/PAYOUT_SENT",
+        )
+        return {
+            "action": "consultation_payout_confirmed",
+            "payout_id": ledger.id,
+            "appointment_id": ledger.appointment_id,
+            "doctor_id": doctor.id,
+            "amount_credited": float(ledger.amount),
+        }
+
+    # Legacy transfer events without a consultation payout reference.
     recipient: dict = data.get("recipient") or {}
     recipient_meta: dict = recipient.get("metadata") or {}
     top_meta: dict = data.get("metadata") or {}
@@ -1017,6 +1243,129 @@ def _handle_transfer_success(data: dict, db: Session) -> dict:
     }
 
 
+def _handle_transfer_status(
+    data: dict,
+    db: Session,
+    *,
+    status_value: str,
+) -> dict:
+    """Update a consultation payout for pending, failed or reversed transfers."""
+    reference = str(data.get("reference") or "")
+    if not reference:
+        return {"action": "ignored_transfer_status_without_reference"}
+
+    payout = (
+        db.query(ConsultationPayout)
+        .filter(ConsultationPayout.reference == reference)
+        .with_for_update()
+        .first()
+    )
+    if payout is None:
+        return {"action": "ignored_non_consultation_transfer"}
+
+    if status_value == "pending" and payout.status != "paid":
+        payout.status = "processing"
+    elif status_value == "failed" and payout.status != "paid":
+        payout.status = "failed"
+        payout.last_error = str(
+            data.get("reason")
+            or data.get("failures")
+            or "Paystack transfer failed."
+        )[:1000]
+    elif status_value == "reversed":
+        was_paid = payout.status == "paid"
+        payout.status = "reversed"
+        payout.last_error = "Paystack reversed the transfer."
+        if was_paid:
+            doctor = (
+                db.query(Doctor)
+                .filter(Doctor.id == payout.doctor_id)
+                .first()
+            )
+            if doctor is not None:
+                current = Decimal(
+                    str(getattr(doctor, "total_earnings", None) or 0)
+                )
+                doctor.total_earnings = max(
+                    Decimal("0.00"),
+                    current - Decimal(str(payout.amount)),
+                )
+
+    payout.transfer_code = data.get("transfer_code") or payout.transfer_code
+    db.commit()
+    return {
+        "action": f"consultation_payout_{status_value}",
+        "payout_id": payout.id,
+        "appointment_id": payout.appointment_id,
+    }
+
+
+def _handle_refund_status(
+    data: dict,
+    db: Session,
+    *,
+    status_value: str,
+) -> dict:
+    """Apply a Paystack refund webhook to its consultation appointment."""
+    transaction = data.get("transaction")
+    transaction_reference = str(
+        data.get("transaction_reference")
+        or (
+            transaction.get("reference")
+            if isinstance(transaction, dict)
+            else ""
+        )
+        or ""
+    )
+    if not transaction_reference:
+        raise ValueError("Refund webhook has no transaction reference.")
+
+    appointment = (
+        db.query(Appointment)
+        .filter(Appointment.paystack_reference == transaction_reference)
+        .with_for_update()
+        .first()
+    )
+    if appointment is None:
+        raise ValueError("Refund appointment was not found.")
+    if appointment.refund_status is None:
+        raise ValueError("Appointment has no approved refund workflow.")
+
+    normalized_status = status_value.replace("-", "_")
+    appointment.refund_status = normalized_status
+    appointment.refund_reference = str(
+        data.get("refund_reference")
+        or appointment.refund_reference
+        or ""
+    ) or None
+    appointment.refund_id = str(
+        data.get("id") or appointment.refund_id or ""
+    ) or None
+    if data.get("amount") is not None:
+        appointment.refund_amount = int(data["amount"]) / 100
+
+    if normalized_status == "processed":
+        appointment.refund_processed_at = datetime.utcnow()
+        appointment.refund_last_error = None
+        appointment.payment_status = "refunded"
+    elif normalized_status == "failed":
+        appointment.refund_last_error = str(
+            data.get("reason") or "Paystack refund failed."
+        )[:1000]
+    elif normalized_status == "needs_attention":
+        appointment.refund_last_error = (
+            "Paystack requires customer bank details to complete this refund."
+        )
+    else:
+        appointment.refund_last_error = None
+
+    db.commit()
+    return {
+        "action": f"consultation_refund_{normalized_status}",
+        "appointment_id": appointment.id,
+    }
+
+
 @router.post("/webhook", status_code=200)
 async def paystack_webhook(
     request: Request,
@@ -1065,7 +1414,11 @@ async def paystack_webhook(
         raise HTTPException(status_code=400, detail="Malformed JSON payload")
 
     data: dict = payload.get("data") or {}
-    reference: str = data.get("reference", "")
+    reference: str = (
+        data.get("reference")
+        or data.get("transaction_reference")
+        or ""
+    )
     raw_event: str = payload.get("event", "unknown")
 
     # ── 6. Parse reference string ─────────────────────────────────────────────
@@ -1090,12 +1443,66 @@ async def paystack_webhook(
     # All three paths share the same DLQ fallback below.
     # -------------------------------------------------------------------------
     try:
-        if raw_event == "charge.success" and (data.get("metadata") or {}).get("user_id"):
+        if (
+            raw_event == "charge.success"
+            and transaction_type in {"subscription", "family_subscription"}
+        ):
             result = _handle_charge_success(data=data, db=db)
+        elif (
+            raw_event == "charge.success"
+            and transaction_type in CONSULTATION_TRANSACTION_TYPES
+        ):
+            _validate_consultation_payment(
+                transaction_type=transaction_type,
+                ref_appointment_id=ref_appointment_id,
+                ref_user_id=ref_user_id,
+                reference=reference,
+                amount_kobo=int(data.get("amount") or 0),
+                db=db,
+            )
+            result = _apply_db_update(
+                transaction_type=transaction_type,
+                ref_appointment_id=ref_appointment_id,
+                ref_user_id=ref_user_id,
+                reference=reference,
+                db=db,
+                background_tasks=background_tasks,
+                paystack_data=data,
+            )
         elif raw_event == "subscription.create":
             result = _handle_subscription_create(data=data, db=db)
         elif raw_event == "transfer.success":
             result = _handle_transfer_success(data=data, db=db)
+        elif raw_event == "transfer.pending":
+            result = _handle_transfer_status(
+                data=data,
+                db=db,
+                status_value="pending",
+            )
+        elif raw_event == "transfer.failed":
+            result = _handle_transfer_status(
+                data=data,
+                db=db,
+                status_value="failed",
+            )
+        elif raw_event == "transfer.reversed":
+            result = _handle_transfer_status(
+                data=data,
+                db=db,
+                status_value="reversed",
+            )
+        elif raw_event in {
+            "refund.pending",
+            "refund.processing",
+            "refund.needs-attention",
+            "refund.failed",
+            "refund.processed",
+        }:
+            result = _handle_refund_status(
+                data=data,
+                db=db,
+                status_value=raw_event.removeprefix("refund."),
+            )
         elif raw_event in ("subscription.disable", "subscription.not_renew"):
             result = _handle_subscription_disable(data=data, db=db)
         else:
@@ -1132,6 +1539,7 @@ async def verify_transaction(
     reference: str,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
 ):
     """
     GET /api/v1/payments/verify/{reference}
@@ -1197,6 +1605,26 @@ async def verify_transaction(
 
     # ── 3. Parse reference and update database ────────────────────────────────
     transaction_type, ref_appointment_id, ref_user_id = _parse_reference(reference)
+    if (
+        transaction_type in {"subscription", "family_subscription"}
+        and ref_user_id != str(current_user.id)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="This payment reference does not belong to your account.",
+        )
+    try:
+        _validate_consultation_payment(
+            transaction_type=transaction_type,
+            ref_appointment_id=ref_appointment_id,
+            ref_user_id=ref_user_id,
+            reference=reference,
+            amount_kobo=int(tx_data.get("amount") or 0),
+            db=db,
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     logger.info(
         "[VERIFY] ✅ Paystack confirmed success — reference='%s' | type='%s' "

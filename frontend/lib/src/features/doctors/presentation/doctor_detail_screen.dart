@@ -10,7 +10,6 @@ class DoctorDetailScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor, // ✅ Dynamic
@@ -22,16 +21,17 @@ class DoctorDetailScreen extends StatelessWidget {
             foregroundColor: theme.appBarTheme.foregroundColor,
             flexibleSpace: FlexibleSpaceBar(
                 background: Center(
-                  child: doctor.imageUrl.isNotEmpty && doctor.imageUrl.startsWith('http')
-                      ? CircleAvatar(
-                          radius: 80,
-                          backgroundImage: NetworkImage(doctor.imageUrl),
-                        )
-                      : const CircleAvatar(
-                          radius: 80,
-                          child: Icon(Icons.person, size: 80),
-                        ),
-                ))),
+              child: doctor.imageUrl.isNotEmpty &&
+                      doctor.imageUrl.startsWith('http')
+                  ? CircleAvatar(
+                      radius: 80,
+                      backgroundImage: NetworkImage(doctor.imageUrl),
+                    )
+                  : const CircleAvatar(
+                      radius: 80,
+                      child: Icon(Icons.person, size: 80),
+                    ),
+            ))),
         SliverToBoxAdapter(
             child: Padding(
                 padding: const EdgeInsets.all(24),
@@ -54,19 +54,25 @@ class DoctorDetailScreen extends StatelessWidget {
                                       style: GoogleFonts.lato(
                                           fontSize: 16,
                                           color: Colors.grey[600])),
-                                  if (doctor.licenseNumber != null && doctor.licenseNumber!.isNotEmpty) ...[
+                                  if (doctor.licenseNumber != null &&
+                                      doctor.licenseNumber!.isNotEmpty) ...[
                                     const SizedBox(height: 8),
                                     Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 4),
                                       decoration: BoxDecoration(
-                                        color: Colors.blue.withOpacity(0.1),
+                                        color:
+                                            Colors.blue.withValues(alpha: 0.1),
                                         borderRadius: BorderRadius.circular(6),
-                                        border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                                        border: Border.all(
+                                            color: Colors.blue
+                                                .withValues(alpha: 0.3)),
                                       ),
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          const Icon(Icons.verified, size: 14, color: Colors.blue),
+                                          const Icon(Icons.verified,
+                                              size: 14, color: Colors.blue),
                                           const SizedBox(width: 4),
                                           Text(
                                             "MDCN: ${doctor.licenseNumber}",
@@ -82,7 +88,8 @@ class DoctorDetailScreen extends StatelessWidget {
                                 ]),
                             Chip(
                                 label: Text("${doctor.rating} ★"),
-                                backgroundColor: Colors.amber.withOpacity(0.2))
+                                backgroundColor:
+                                    Colors.amber.withValues(alpha: 0.2))
                           ]),
                       const SizedBox(height: 24),
                       Row(
@@ -121,7 +128,8 @@ class DoctorDetailScreen extends StatelessWidget {
                     backgroundColor: const Color(0xFF4A90E2),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.all(16)),
-                child: Text("Book for ₦${doctor.hourlyRate.toInt()}",
+                child: Text(
+                    "Book ${doctor.consultationDurationMinutes} min · ₦${doctor.consultationFee.toInt()}",
                     style: const TextStyle(fontSize: 18)),
               ))),
     );

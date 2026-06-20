@@ -1,13 +1,15 @@
 
 from pydantic import BaseModel, ConfigDict
-from typing import Optional
+from typing import Literal, Optional
 
 class DoctorBase(BaseModel):
     full_name: str
     specialty: str
     bio: Optional[str] = None
     image_url: Optional[str] = None
-    hourly_rate: Optional[float] = 0.0
+    hourly_rate: Optional[float] = 4000.0
+    consultation_fee: Optional[float] = 4000.0
+    consultation_duration_minutes: Optional[int] = 30
     rating: Optional[float] = 5.0
     review_count: Optional[int] = 0
     years_experience: Optional[int] = 1
@@ -26,6 +28,8 @@ class DoctorResponse(DoctorBase):
     bank_code: Optional[str] = None
     account_number: Optional[str] = None
     paystack_subaccount_code: Optional[str] = None
+    paystack_recipient_code: Optional[str] = None
+    total_earnings: Optional[float] = 0.0
     model_config = ConfigDict(from_attributes=True)
 
 class DoctorRegister(BaseModel):
@@ -37,7 +41,8 @@ class DoctorRegister(BaseModel):
 
 class DoctorUpdate(BaseModel):
     bio: Optional[str] = None
-    hourly_rate: Optional[float] = None
+    consultation_fee: Optional[float] = None
+    consultation_duration_minutes: Optional[Literal[30]] = None
     years_experience: Optional[int] = None # <--- NEW
     image_url: Optional[str] = None
 

@@ -20,7 +20,7 @@ class DoctorCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(24),
           boxShadow: [
             BoxShadow(
-              color: Colors.grey.withOpacity(0.08),
+              color: Colors.grey.withValues(alpha: 0.08),
               blurRadius: 15,
               offset: const Offset(0, 5),
             ),
@@ -83,12 +83,16 @@ class DoctorCard extends StatelessWidget {
               children: [
                 // UPDATED: Naira Symbol
                 Text(
-                  "₦${doctor.hourlyRate.toInt()}/hr",
+                  "₦${doctor.consultationFee.toInt()}",
                   style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     color: Color(0xFF4A90E2),
                     fontSize: 14,
                   ),
+                ),
+                Text(
+                  "${doctor.consultationDurationMinutes} min",
+                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                 ),
                 const SizedBox(height: 8),
                 SizedBox(

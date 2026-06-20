@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -27,6 +29,9 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
   bool _isLoading = true;
   bool _muted = false;
   late bool _cameraOff;
+  Timer? _warningTimer;
+  Timer? _endTimer;
+  bool _timeLimitHandled = false;
 
   @override
   void initState() {
@@ -50,6 +55,9 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
       final data = await ref
           .read(videoRepositoryProvider)
           .getConnectionData(widget.appointmentId);
+      final warningAt = DateTime.parse(data['warning_at'] as String).toLocal();
+      final videoEndsAt =
+          DateTime.parse(data['video_ends_at'] as String).toLocal();
 
       _engine = createAgoraRtcEngine();
       await _engine!.initialize(
@@ -67,19 +75,18 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
           onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
             if (mounted) setState(() => _remoteUid = remoteUid);
           },
-          onUserOffline:
-              (
-                RtcConnection connection,
-                int remoteUid,
-                UserOfflineReasonType reason,
-              ) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("User Left Call")),
-                  );
-                  context.pop();
-                }
-              },
+          onUserOffline: (
+            RtcConnection connection,
+            int remoteUid,
+            UserOfflineReasonType reason,
+          ) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("User Left Call")),
+              );
+              context.pop();
+            }
+          },
         ),
       );
 
@@ -106,16 +113,80 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
           clientRoleType: ClientRoleType.clientRoleBroadcaster,
         ),
       );
+      _scheduleTimeLimit(
+        warningAt: warningAt,
+        videoEndsAt: videoEndsAt,
+      );
 
       if (mounted) setState(() => _isLoading = false);
     } catch (e) {
+      debugPrint('[VideoCall] Unable to join consultation: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+          const SnackBar(
+            content: Text(
+              "Video service is temporarily unavailable. Please try again.",
+            ),
+            backgroundColor: Colors.red,
+          ),
         );
         context.pop();
       }
     }
+  }
+
+  void _scheduleTimeLimit({
+    required DateTime warningAt,
+    required DateTime videoEndsAt,
+  }) {
+    final now = DateTime.now();
+    final warningDelay = warningAt.difference(now);
+    if (warningDelay.isNegative) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _showTimeWarning());
+    } else {
+      _warningTimer = Timer(warningDelay, _showTimeWarning);
+    }
+
+    final endDelay = videoEndsAt.difference(now);
+    if (endDelay.isNegative) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _endForTimeLimit());
+    } else {
+      _endTimer = Timer(endDelay, _endForTimeLimit);
+    }
+  }
+
+  void _showTimeWarning() {
+    if (!mounted || _timeLimitHandled) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("5 minutes remaining in this consultation video."),
+        duration: Duration(seconds: 8),
+      ),
+    );
+  }
+
+  Future<void> _endForTimeLimit() async {
+    if (!mounted || _timeLimitHandled) return;
+    _timeLimitHandled = true;
+    await _engine?.leaveChannel();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text("Video consultation ended"),
+        content: const Text(
+          "You can continue messaging for 10 minutes to wrap up the consultation.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text("Continue to messages"),
+          ),
+        ],
+      ),
+    );
+    if (mounted) context.pop();
   }
 
   // Toggle Camera In-Call
@@ -143,6 +214,8 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
 
   @override
   void dispose() {
+    _warningTimer?.cancel();
+    _endTimer?.cancel();
     _engine?.leaveChannel();
     _engine?.release();
     super.dispose();
@@ -168,9 +241,8 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
                   )
                 : _buildPlaceholder(
                     icon: Icons.person,
-                    label: _isLoading
-                        ? "Connecting..."
-                        : "Waiting for other...",
+                    label:
+                        _isLoading ? "Connecting..." : "Waiting for other...",
                   ),
           ),
 

@@ -8,8 +8,13 @@ from app.core.database import get_db
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.appointment import Appointment
+from app.models.consultation_payout import ConsultationPayout
 from app.schemas.doctor import DoctorResponse, DoctorUpdate, ReapplyRequest, PayoutSettingsRequest
 from app.api import deps
+from app.services.consultation_pricing import (
+    DEFAULT_CONSULTATION_DURATION_MINUTES,
+    minimum_consultation_fee,
+)
 from app.services.paystack_service import paystack_service
 
 logger = logging.getLogger("uvicorn.error")
@@ -97,7 +102,11 @@ def get_doctor_stats(db: Session = Depends(get_db), current_user: User = Depends
     
     # 1. Calculate Earnings (Sum of payout for completed/paid appts)
     earnings = 0.0
-    paid_appts = db.query(Appointment).filter(Appointment.doctor_id == doctor.id, Appointment.payment_status == "paid").all()
+    paid_appts = db.query(Appointment).filter(
+        Appointment.doctor_id == doctor.id,
+        Appointment.payment_status == "paid",
+        Appointment.status.in_(("completed", "patient_no_show")),
+    ).all()
     for a in paid_appts:
         earnings += a.payout
 
@@ -117,15 +126,41 @@ def get_doctor_stats(db: Session = Depends(get_db), current_user: User = Depends
 
 @router.put("/me", response_model=DoctorResponse)
 def update_doctor_me(data: DoctorUpdate, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
+    if current_user.role != "doctor":
+        raise HTTPException(
+            status_code=403,
+            detail="Only doctors can update doctor profiles.",
+        )
+
     doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
     if not doctor: raise HTTPException(404, "Not found")
 
-    if data.bio: doctor.bio = data.bio
-    if data.hourly_rate is not None and data.hourly_rate < 3000:
-        raise HTTPException(status_code=400, detail="Minimum consultation fee must be at least ₦3,000.")
-    if data.hourly_rate: doctor.hourly_rate = data.hourly_rate
-    if data.years_experience: doctor.years_experience = data.years_experience
-    if data.image_url: doctor.image_url = data.image_url
+    duration = DEFAULT_CONSULTATION_DURATION_MINUTES
+    fee = (
+        data.consultation_fee
+        if data.consultation_fee is not None
+        else (doctor.consultation_fee or doctor.hourly_rate or 0.0)
+    )
+    minimum_fee = minimum_consultation_fee(duration)
+    if fee < minimum_fee:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Minimum consultation fee for {duration} minutes "
+                f"is ₦{minimum_fee:,.0f}."
+            ),
+        )
+
+    if data.bio is not None:
+        doctor.bio = data.bio
+    doctor.consultation_duration_minutes = duration
+    if data.consultation_fee is not None:
+        doctor.consultation_fee = fee
+        doctor.hourly_rate = fee
+    if data.years_experience is not None:
+        doctor.years_experience = data.years_experience
+    if data.image_url is not None:
+        doctor.image_url = data.image_url
 
     db.commit()
     db.refresh(doctor)
@@ -142,8 +177,8 @@ async def update_payout_settings(
     PUT /api/v1/doctors/me/payout-settings
 
     Links a verified Nigerian bank account to the authenticated doctor's profile
-    by creating a Paystack split-payment subaccount. The platform retains 30 %
-    of every transaction; the remainder is routed directly to the doctor's bank.
+    by creating a Paystack split-payment subaccount using the configured platform
+    commission; the remainder is routed directly to the doctor's bank.
 
     On success the subaccount_code, bank_code, and account_number are persisted
     against the Doctor record and returned in the response.
@@ -210,12 +245,23 @@ async def update_payout_settings(
         business_name=doctor.full_name,
         bank_code=payload.bank_code,
         account_number=payload.account_number,
-        percentage_charge=30.0,
     )
 
     doctor.bank_code = payload.bank_code
     doctor.account_number = payload.account_number
     doctor.paystack_subaccount_code = subaccount_code
+    doctor.paystack_recipient_code = None
+    db.query(ConsultationPayout).filter(
+        ConsultationPayout.doctor_id == doctor.id,
+        ConsultationPayout.status == "blocked",
+        ConsultationPayout.approved_at.is_not(None),
+    ).update(
+        {
+            ConsultationPayout.status: "approved",
+            ConsultationPayout.last_error: None,
+        },
+        synchronize_session=False,
+    )
 
     try:
         db.commit()

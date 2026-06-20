@@ -70,6 +70,13 @@ class User(Base):
     monthly_lab_count = Column(Integer, default=0, nullable=False)
     last_lab_reset = Column(Date, nullable=True)
 
+    # --- AI CONSENT ---
+    # Consent is granted once and remains valid unless explicitly withdrawn.
+    # The version records the disclosure accepted by the user for auditability.
+    ai_consent_granted_at = Column(DateTime(timezone=True), nullable=True)
+    ai_consent_version = Column(String, nullable=True)
+    ai_consent_withdrawn_at = Column(DateTime(timezone=True), nullable=True)
+
     # Voice / TTS Limits
     # Tracks generated audio characters in calendar-month and rolling 24h buckets.
     monthly_audio_count = Column(Integer, default=0, nullable=False)

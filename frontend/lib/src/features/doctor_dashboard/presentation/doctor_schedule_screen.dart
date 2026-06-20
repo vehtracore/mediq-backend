@@ -598,6 +598,9 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
     } else if (widget.appointment.status == 'cancelled') {
       statusBgColor = Colors.grey.shade200;
       statusTextColor = Colors.grey.shade700;
+    } else if (widget.appointment.isNoShow) {
+      statusBgColor = Colors.red.withOpacity(0.1);
+      statusTextColor = Colors.red.shade700;
     }
 
     final bool isUnlocked = widget.appointment.isConsultationUnlocked;

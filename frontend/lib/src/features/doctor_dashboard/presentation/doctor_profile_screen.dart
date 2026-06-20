@@ -28,7 +28,8 @@ class DoctorProfileScreen extends ConsumerWidget {
               Center(
                 child: Column(
                   children: [
-                    doctor.imageUrl.isNotEmpty && doctor.imageUrl.startsWith('http')
+                    doctor.imageUrl.isNotEmpty &&
+                            doctor.imageUrl.startsWith('http')
                         ? CircleAvatar(
                             radius: 50,
                             backgroundImage: NetworkImage(doctor.imageUrl),
@@ -93,7 +94,12 @@ class DoctorProfileScreen extends ConsumerWidget {
         borderRadius: BorderRadius.circular(12),
         boxShadow: theme.brightness == Brightness.dark
             ? []
-            : [BoxShadow(color: Colors.grey.withOpacity(0.05), blurRadius: 5)],
+            : [
+                BoxShadow(
+                  color: Colors.grey.withValues(alpha: 0.05),
+                  blurRadius: 5,
+                )
+              ],
       ),
       child: ListTile(
         leading: Icon(

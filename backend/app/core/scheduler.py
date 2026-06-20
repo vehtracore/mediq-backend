@@ -2,10 +2,28 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, update
+from sqlalchemy.orm import joinedload
 
 from app.core.database import SessionLocal
-from app.models.appointment import Appointment, DoctorSlot
+from app.models.appointment import (
+    Appointment,
+    DoctorSlot,
+    attendance_deadline_utc,
+    consultation_started_utc,
+)
 from app.models.notification import Notification
+from app.services.consultation_pricing import (
+    DEFAULT_CONSULTATION_DURATION_MINUTES,
+    CONSULTATION_MESSAGE_GRACE_MINUTES,
+)
+from app.services.consultation_payout_service import (
+    ensure_general_queue_payout,
+    process_approved_general_queue_payouts,
+)
+from app.services.consultation_refund_service import (
+    REFUND_STATUS_AWAITING_ADMIN,
+    process_approved_consultation_refunds,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -97,6 +115,105 @@ async def sweep_stale_appointments() -> None:
     except Exception as exc:
         db.rollback()
         logger.exception("[APPT SWEEP] Error during stale-appointment sweep: %s", exc)
+    finally:
+        db.close()
+
+
+async def complete_expired_consultations() -> None:
+    """Auto-complete sessions after video time plus the message grace period."""
+    now = datetime.now(timezone.utc)
+    close_after = timedelta(
+        minutes=(
+            DEFAULT_CONSULTATION_DURATION_MINUTES
+            + CONSULTATION_MESSAGE_GRACE_MINUTES
+        )
+    )
+
+    db = SessionLocal()
+    try:
+        appointments = (
+            db.query(Appointment)
+            .options(joinedload(Appointment.slot))
+            .filter(Appointment.status.in_(("active", "confirmed")))
+            .all()
+        )
+        completed = 0
+        for appointment in appointments:
+            start = consultation_started_utc(appointment)
+            if start is not None and now >= start + close_after:
+                appointment.status = "completed"
+                ensure_general_queue_payout(db, appointment)
+                completed += 1
+
+        db.commit()
+        if completed:
+            logger.info(
+                "[APPT SWEEP] Auto-completed %d consultation(s) after grace period.",
+                completed,
+            )
+    except Exception as exc:
+        db.rollback()
+        logger.exception(
+            "[APPT SWEEP] Error completing expired consultations: %s",
+            exc,
+        )
+    finally:
+        db.close()
+
+
+async def mark_consultation_no_shows() -> None:
+    """Classify confirmed appointments where the second party never arrived."""
+    now = datetime.now(timezone.utc)
+    now_naive = now.replace(tzinfo=None)
+
+    db = SessionLocal()
+    try:
+        appointments = (
+            db.query(Appointment)
+            .options(joinedload(Appointment.slot))
+            .filter(
+                Appointment.status == "confirmed",
+                Appointment.payment_status == "paid",
+                Appointment.consultation_started_at.is_(None),
+            )
+            .all()
+        )
+        counts = {
+            "patient_no_show": 0,
+            "doctor_no_show": 0,
+            "both_no_show": 0,
+        }
+        for appointment in appointments:
+            deadline = attendance_deadline_utc(appointment)
+            if deadline is None or now < deadline:
+                continue
+
+            patient_joined = appointment.patient_joined_at is not None
+            doctor_joined = appointment.doctor_joined_at is not None
+            if doctor_joined and not patient_joined:
+                appointment.status = "patient_no_show"
+            elif patient_joined and not doctor_joined:
+                appointment.status = "doctor_no_show"
+                appointment.refund_status = REFUND_STATUS_AWAITING_ADMIN
+            else:
+                appointment.status = "both_no_show"
+                appointment.refund_status = REFUND_STATUS_AWAITING_ADMIN
+
+            appointment.no_show_marked_at = now_naive
+            ensure_general_queue_payout(db, appointment)
+            counts[appointment.status] += 1
+
+        db.commit()
+        if any(counts.values()):
+            logger.info(
+                "[NO SHOW] patient=%d doctor=%d both=%d",
+                counts["patient_no_show"],
+                counts["doctor_no_show"],
+                counts["both_no_show"],
+            )
+    except Exception as exc:
+        db.rollback()
+        logger.exception("[NO SHOW] Classification failed: %s", exc)
     finally:
         db.close()
 

@@ -2,16 +2,23 @@ import logging
 import os
 import random
 import time
+from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from agora_token_builder import RtcTokenBuilder
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.notifications import dispatch_push
 from app.models.user import User
+from app.models.appointment import consultation_started_utc
 from app.api import deps
 from app.services.appointment_access import require_consultation_access
+from app.services.consultation_pricing import (
+    DEFAULT_CONSULTATION_DURATION_MINUTES,
+    CONSULTATION_END_WARNING_MINUTES,
+    CONSULTATION_MESSAGE_GRACE_MINUTES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +59,28 @@ def get_agora_token(
 
         # 3. Generate Token
         uid = random.randint(1, 230)
-        expiration_time_in_seconds = 3600
         current_timestamp = int(time.time())
-        privilege_expired_ts = current_timestamp + expiration_time_in_seconds
+        consultation_start = consultation_started_utc(appt)
+        if consultation_start is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Both participants must join the consultation chat before starting a call.",
+            )
+        consultation_end = consultation_start + timedelta(
+            minutes=DEFAULT_CONSULTATION_DURATION_MINUTES
+        )
+        warning_at = consultation_end - timedelta(
+            minutes=CONSULTATION_END_WARNING_MINUTES
+        )
+        messages_end_at = consultation_end + timedelta(
+            minutes=CONSULTATION_MESSAGE_GRACE_MINUTES
+        )
+        privilege_expired_ts = int(consultation_end.timestamp())
+        if privilege_expired_ts <= current_timestamp:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="This consultation has ended.",
+            )
 
         # Use our manual integer here
         role = Role_Publisher
@@ -102,10 +128,17 @@ def get_agora_token(
             "channel": channel_name,
             "uid": uid,
             "app_id": app_id,
+            "warning_at": warning_at.isoformat(),
+            "video_ends_at": consultation_end.isoformat(),
+            "messages_end_at": messages_end_at.isoformat(),
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         # 6. Capture the real error log
         logger.error("Failed to generate Agora video token: %s", e, exc_info=True)
-        # Send error to phone screen
-        raise HTTPException(status_code=500, detail=f"Crash: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Video service is temporarily unavailable. Please try again.",
+        )

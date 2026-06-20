@@ -11,16 +11,23 @@ from typing import List, Dict, Optional
 import json
 import logging
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 1. DB Imports
 from app.core.database import engine, get_db
 from sqlalchemy.orm import sessionmaker, Session
 from app.models.message import Message
-from app.models.appointment import Appointment
 from app.models.user import User
 from app.api import deps
-from app.services.appointment_access import require_consultation_access
+from app.services.appointment_access import (
+    record_consultation_attendance,
+    require_consultation_access,
+)
+from app.models.appointment import consultation_started_utc
+from app.services.consultation_pricing import (
+    DEFAULT_CONSULTATION_DURATION_MINUTES,
+    CONSULTATION_MESSAGE_GRACE_MINUTES,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -156,17 +163,35 @@ def save_message_sync(appointment_id: int, user_id: int, content: str):
     logger.debug("[WS] save_message_sync ENTER — appt=%s, user=%s, len=%d", appointment_id, user_id, len(content))
     db = WsSession()
     try:
-        appointment = (
-            db.query(Appointment)
-            .filter(Appointment.id == appointment_id)
-            .first()
-        )
-        if appointment is None or appointment.status != "confirmed":
+        current_user = db.query(User).filter(User.id == user_id).first()
+        if current_user is None:
             logger.warning(
-                "[WS] Message rejected for inactive appointment %s",
-                appointment_id,
+                "[WS] Message rejected for missing user %s",
+                user_id,
             )
-            return None
+            return {"error": "consultation_unavailable"}
+
+        try:
+            require_consultation_access(
+                db,
+                appointment_id,
+                current_user,
+                allow_completed=False,
+                allow_message_grace=True,
+            )
+        except HTTPException as exc:
+            logger.info(
+                "[WS] Message rejected for appointment %s: %s",
+                appointment_id,
+                exc.detail,
+            )
+            return {
+                "error": (
+                    "consultation_ended"
+                    if exc.status_code == 410
+                    else "consultation_unavailable"
+                )
+            }
 
         new_msg = Message(
             appointment_id=appointment_id,
@@ -242,6 +267,12 @@ async def websocket_endpoint(
             appointment_id,
             current_user,
             allow_completed=False,
+            allow_message_grace=True,
+        )
+        authorized_appointment = record_consultation_attendance(
+            auth_db,
+            appointment_id,
+            current_user,
         )
     except HTTPException as exc:
         logger.warning(
@@ -254,6 +285,7 @@ async def websocket_endpoint(
             401: 4401,
             403: 4403,
             404: 4404,
+            410: 4410,
             409: 4409,
             423: 4423,
         }.get(exc.status_code, 4400)
@@ -271,6 +303,20 @@ async def websocket_endpoint(
     room_id = str(appointment_id)
     logger.info("[WS] Connecting: User %s to appointment %s", user_id, appointment_id)
     await manager.connect(websocket, room_id, user_id)
+    consultation_start = consultation_started_utc(authorized_appointment)
+    if consultation_start is not None:
+        video_ends_at = consultation_start + timedelta(
+            minutes=DEFAULT_CONSULTATION_DURATION_MINUTES
+        )
+        messages_end_at = video_ends_at + timedelta(
+            minutes=CONSULTATION_MESSAGE_GRACE_MINUTES
+        )
+        await manager.broadcast({
+            "type": "consultation_timing",
+            "consultation_started_at": consultation_start.isoformat(),
+            "video_ends_at": video_ends_at.isoformat(),
+            "messages_end_at": messages_end_at.isoformat(),
+        }, room_id)
     
     try:
         while True:
@@ -288,6 +334,19 @@ async def websocket_endpoint(
             )
             logger.debug("[WS] save_message_sync returned: %s", saved_msg)
 
+            if saved_msg and saved_msg.get("error"):
+                ended = saved_msg["error"] == "consultation_ended"
+                await websocket.send_text(json.dumps({
+                    "type": "consultation_closed",
+                    "message": (
+                        "This consultation has ended."
+                        if ended
+                        else "This consultation is no longer available."
+                    ),
+                }))
+                await manager.disconnect(websocket, room_id, user_id)
+                await websocket.close(code=4410 if ended else 4409)
+                break
             if saved_msg:
                 # 3. Broadcast the SAVED message (with real ID)
                 logger.debug("[WS] Broadcasting msg id=%s...", saved_msg['id'])

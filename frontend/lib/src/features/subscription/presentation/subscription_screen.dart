@@ -12,9 +12,10 @@ class SubscriptionScreen extends ConsumerStatefulWidget {
 }
 
 class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
-  final bool _isLoading = false;
-
-  Future<void> _handleSubscribe({required String planTitle, required double parsedPrice, required bool isFamily}) async {
+  Future<void> _handleSubscribe(
+      {required String planTitle,
+      required double parsedPrice,
+      required bool isFamily}) async {
     final user = ref.read(userProvider).value;
     await context.push('/payment', extra: {
       'transactionType': isFamily ? 'family_subscription' : 'subscription',
@@ -39,7 +40,8 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text('Enter the invite code from your family administrator.'),
+                  const Text(
+                      'Enter the invite code from your family administrator.'),
                   const SizedBox(height: 16),
                   TextField(
                     controller: codeController,
@@ -65,15 +67,19 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                           setState(() => isSubmitting = true);
 
                           try {
-                            await ref.read(authRepositoryProvider).joinFamily(code);
+                            await ref
+                                .read(authRepositoryProvider)
+                                .joinFamily(code);
                             if (!context.mounted) return;
-                            
+
                             // Refresh user state
                             ref.invalidate(userProvider);
-                            
+
                             Navigator.pop(context);
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Successfully joined the family plan!')),
+                              const SnackBar(
+                                  content: Text(
+                                      'Successfully joined the family plan!')),
                             );
                             // Optionally redirect to patient home
                             context.go('/patient_home');
@@ -81,7 +87,10 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                             if (!context.mounted) return;
                             setState(() => isSubmitting = false);
                             ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
+                              SnackBar(
+                                  content: Text(e
+                                      .toString()
+                                      .replaceAll('Exception: ', ''))),
                             );
                           }
                         },
@@ -123,16 +132,18 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(Icons.family_restroom, size: 64, color: Color(0xFFD4AF37)),
+                const Icon(Icons.family_restroom,
+                    size: 64, color: Color(0xFFD4AF37)),
                 const SizedBox(height: 24),
                 Text(
                   "You are on the Family Plan",
-                  style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
+                  style: theme.textTheme.headlineSmall
+                      ?.copyWith(fontWeight: FontWeight.bold),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  "Enjoy unlimited access to all premium features for you and your family.",
+                  "Enjoy Premium features and unlimited everyday AI support for each family member, subject to fair use.",
                   style: theme.textTheme.bodyMedium,
                   textAlign: TextAlign.center,
                 ),
@@ -145,8 +156,10 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFFD4AF37),
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 16),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
                     ),
                   ),
               ],
@@ -173,7 +186,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
               title: "Free Plan",
               price: "₦0/mo",
               features: [
-                "Limited AI chats per day",
+                "Limited AI chats per month",
                 "Standard Doctor Booking",
                 "Basic Health Tips"
               ],
@@ -184,11 +197,11 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
             _buildPlanCard(
               context,
               title: "MDQ+ Premium",
-              price: "₦3,000/mo",
+              price: "₦3,500/mo",
               features: [
-                "Unlimited AI Chats",
+                "Unlimited everyday AI support*",
                 "Priority Doctor Access",
-                "Urinalysis AI",
+                "10 AI photo/lab interpretations monthly",
                 "Advanced Health Analytics",
                 "Consultation Summaries"
               ],
@@ -202,7 +215,9 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
               title: "Family Plan",
               price: "₦10,000/mo",
               features: [
-                "4 Independent Premium Accounts",
+                "4 Independent Private Accounts",
+                "Unlimited everyday AI support per account*",
+                "10 AI photo/lab interpretations per account",
                 "Private Medical Records for each",
                 "All MDQ+ Premium Features",
                 "Centralized Billing"
@@ -222,7 +237,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
             ),
             const SizedBox(height: 10),
             Text(
-              'Subscriptions automatically renew unless cancelled. Use the cancel button to stop recurring charges. Terms and conditions apply.',
+              'Subscriptions automatically renew unless cancelled. *AI access is subject to fair use. Terms and conditions apply.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 10.5,
@@ -264,7 +279,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
             ? []
             : [
                 BoxShadow(
-                    color: Colors.grey.withOpacity(0.1),
+                    color: Colors.grey.withValues(alpha: 0.1),
                     blurRadius: 20,
                     offset: const Offset(0, 10))
               ],
@@ -337,7 +352,8 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                             price
                                 .replaceAll('₦', '')
                                 .replaceAll(',', '')
-                                .split('/').first
+                                .split('/')
+                                .first
                                 .trim(),
                           ) ??
                           0.0;

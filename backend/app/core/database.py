@@ -109,8 +109,7 @@ else:
         pool_size=db_pool_size,
         max_overflow=db_max_overflow,
         pool_timeout=db_pool_timeout,
-        pool_pre_ping=True,     # Validate connections before checkout (avoids stale-conn errors)
-        connect_args={"prepare_threshold": None}
+        pool_pre_ping=True,  # Validate connections before checkout.
     )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

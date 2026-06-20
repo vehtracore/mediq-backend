@@ -9,9 +9,17 @@ from app.models.user import User
 from app.models.doctor import Doctor
 from app.models.appointment import Appointment
 from app.models.audit import AuditLog
+from app.models.consultation_payout import ConsultationPayout
 from app.schemas.user import UserResponse
 from app.schemas.doctor import DoctorResponse
 from app.api import deps
+from app.services.consultation_payout_service import (
+    validate_admin_payout_decision,
+)
+from app.services.consultation_refund_service import (
+    eligible_consultation_refund_amount,
+    validate_admin_refund_approval,
+)
 
 router = APIRouter()
 
@@ -27,6 +35,8 @@ class AdminStats(BaseModel):
     pending_verifications: int
     total_completed_consultations: int
     active_appointments: int
+    pending_payout_approvals: int
+    pending_refund_approvals: int
 
 @router.get("/stats", response_model=AdminStats)
 def get_admin_stats(db: Session = Depends(get_db), admin: User = Depends(get_current_admin)):
@@ -78,6 +88,16 @@ def get_admin_stats(db: Session = Depends(get_db), admin: User = Depends(get_cur
         .filter(Appointment.status.in_(["pending", "confirmed"]))
         .count()
     )
+    pending_payout_approvals = (
+        db.query(ConsultationPayout)
+        .filter(ConsultationPayout.status == "awaiting_admin")
+        .count()
+    )
+    pending_refund_approvals = (
+        db.query(Appointment)
+        .filter(Appointment.refund_status == "awaiting_admin")
+        .count()
+    )
 
     return {
         "total_users": total_users,
@@ -86,6 +106,8 @@ def get_admin_stats(db: Session = Depends(get_db), admin: User = Depends(get_cur
         "pending_verifications": pending_verifications,
         "total_completed_consultations": total_completed_consultations,
         "active_appointments": active_appointments,
+        "pending_payout_approvals": pending_payout_approvals,
+        "pending_refund_approvals": pending_refund_approvals,
     }
 
 @router.get("/users", response_model=List[UserResponse])
@@ -273,40 +295,335 @@ def reject_doctor(
         "rejection_reason": rejection_reason,
     }
 
-# --- 🛠️ TEMP: DATABASE MIGRATION HELPER ---
-from sqlalchemy import text
-@router.post("/fix-schema")
-def fix_schema(db: Session = Depends(get_db)):
-    """Run this ONCE to add the missing column"""
-    try:
-        # PostgreSQL specific commands
-        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS image_url VARCHAR;"))
-        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token VARCHAR;"))
-        db.execute(text("ALTER TABLE doctors ADD COLUMN IF NOT EXISTS rejection_reason VARCHAR;"))
-        # Backfill: existing users (created before verification) should be verified
-        db.execute(text("UPDATE users SET is_verified = TRUE WHERE is_verified IS NULL OR is_verified = FALSE;"))
-        db.commit()
-        return {"message": "✅ Schema updated + existing users marked as verified."}
-    except Exception as e:
-        return {"message": f"❌ Error updating schema: {e}"}
+class RejectPayoutRequest(BaseModel):
+    rejection_reason: str
 
-# --- 🛠️ TEMP: Delete test users ---
-@router.post("/delete-test-users")
-def delete_test_users(emails: dict, db: Session = Depends(get_db)):
-    """Delete test users by email list. Body: {"emails": ["a@b.com"]}"""
-    try:
-        deleted = []
-        for email in emails.get("emails", []):
-            user = db.query(User).filter(User.email == email).first()
-            if user:
-                # Delete associated doctor record first (FK constraint)
-                doctor = db.query(Doctor).filter(Doctor.user_id == user.id).first()
-                if doctor:
-                    db.delete(doctor)
-                db.delete(user)
-                deleted.append(email)
-        db.commit()
-        return {"message": f"Deleted {len(deleted)} users", "deleted": deleted}
-    except Exception as e:
-        db.rollback()
-        return {"message": f"Error: {e}"}
+
+class RejectRefundRequest(BaseModel):
+    rejection_reason: str
+
+
+def _serialize_payout(payout: ConsultationPayout, db: Session) -> dict:
+    appointment = (
+        db.query(Appointment)
+        .filter(Appointment.id == payout.appointment_id)
+        .first()
+    )
+    doctor = db.query(Doctor).filter(Doctor.id == payout.doctor_id).first()
+    patient = (
+        db.query(User).filter(User.id == appointment.patient_id).first()
+        if appointment is not None
+        else None
+    )
+    return {
+        "id": payout.id,
+        "appointment_id": payout.appointment_id,
+        "doctor_id": payout.doctor_id,
+        "doctor_name": doctor.full_name if doctor else "Unavailable doctor",
+        "patient_name": (
+            f"{patient.first_name or ''} {patient.last_name or ''}".strip()
+            if patient
+            else "Unavailable patient"
+        ),
+        "amount": float(payout.amount),
+        "status": payout.status,
+        "reference": payout.reference,
+        "bank_ready": bool(
+            doctor and doctor.bank_code and doctor.account_number
+        ),
+        "appointment_status": appointment.status if appointment else None,
+        "payment_status": appointment.payment_status if appointment else None,
+        "patient_joined_at": appointment.patient_joined_at if appointment else None,
+        "doctor_joined_at": appointment.doctor_joined_at if appointment else None,
+        "consultation_started_at": (
+            appointment.consultation_started_at if appointment else None
+        ),
+        "created_at": payout.created_at,
+        "approved_at": payout.approved_at,
+        "approved_by_admin_id": payout.approved_by_admin_id,
+        "rejected_at": payout.rejected_at,
+        "rejected_by_admin_id": payout.rejected_by_admin_id,
+        "rejection_reason": payout.rejection_reason,
+        "last_error": payout.last_error,
+    }
+
+
+@router.get("/payouts")
+def list_consultation_payouts(
+    payout_status: Optional[str] = "awaiting_admin",
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """List general-queue payout obligations for administrative review."""
+    allowed_statuses = {
+        "awaiting_admin",
+        "approved",
+        "processing",
+        "otp_required",
+        "blocked",
+        "paid",
+        "failed",
+        "rejected",
+        "reversed",
+    }
+    query = db.query(ConsultationPayout)
+    if payout_status:
+        if payout_status not in allowed_statuses:
+            raise HTTPException(status_code=400, detail="Invalid payout status.")
+        query = query.filter(ConsultationPayout.status == payout_status)
+    payouts = query.order_by(ConsultationPayout.created_at.desc()).limit(200).all()
+    return [_serialize_payout(payout, db) for payout in payouts]
+
+
+@router.put("/payouts/{payout_id}/approve")
+def approve_consultation_payout(
+    payout_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Approve an eligible payout for the transfer worker."""
+    payout = (
+        db.query(ConsultationPayout)
+        .filter(ConsultationPayout.id == payout_id)
+        .with_for_update()
+        .first()
+    )
+    if payout is None:
+        raise HTTPException(status_code=404, detail="Payout not found.")
+    appointment = (
+        db.query(Appointment)
+        .filter(Appointment.id == payout.appointment_id)
+        .first()
+    )
+    doctor = db.query(Doctor).filter(Doctor.id == payout.doctor_id).first()
+    if not validate_admin_payout_decision(
+        payout,
+        action="approve",
+        appointment=appointment,
+        doctor=doctor,
+    ):
+        return _serialize_payout(payout, db)
+
+    payout.status = "approved"
+    payout.approved_by_admin_id = admin.id
+    payout.approved_at = datetime.utcnow()
+    payout.rejected_by_admin_id = None
+    payout.rejected_at = None
+    payout.rejection_reason = None
+    payout.last_error = None
+    db.add(
+        AuditLog(
+            admin_id=admin.id,
+            resource=f"ConsultationPayout:{payout.id}",
+            reason=(
+                f"Approved doctor payout of NGN {float(payout.amount):,.2f} "
+                f"for appointment {payout.appointment_id}"
+            ),
+        )
+    )
+    db.commit()
+    db.refresh(payout)
+    return _serialize_payout(payout, db)
+
+
+@router.put("/payouts/{payout_id}/reject")
+def reject_consultation_payout(
+    payout_id: int,
+    payload: RejectPayoutRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Reject an uninitiated payout and retain the review reason."""
+    reason = payload.rejection_reason.strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Rejection reason is required.")
+    if len(reason) > 1000:
+        raise HTTPException(status_code=400, detail="Rejection reason is too long.")
+
+    payout = (
+        db.query(ConsultationPayout)
+        .filter(ConsultationPayout.id == payout_id)
+        .with_for_update()
+        .first()
+    )
+    if payout is None:
+        raise HTTPException(status_code=404, detail="Payout not found.")
+    if not validate_admin_payout_decision(payout, action="reject"):
+        return _serialize_payout(payout, db)
+
+    payout.status = "rejected"
+    payout.rejected_by_admin_id = admin.id
+    payout.rejected_at = datetime.utcnow()
+    payout.rejection_reason = reason
+    payout.last_error = None
+    db.add(
+        AuditLog(
+            admin_id=admin.id,
+            resource=f"ConsultationPayout:{payout.id}",
+            reason=(
+                f"Rejected doctor payout for appointment "
+                f"{payout.appointment_id}: {reason}"
+            ),
+        )
+    )
+    db.commit()
+    db.refresh(payout)
+    return _serialize_payout(payout, db)
+
+
+def _serialize_refund(appointment: Appointment, db: Session) -> dict:
+    doctor = (
+        db.query(Doctor).filter(Doctor.id == appointment.doctor_id).first()
+        if appointment.doctor_id is not None
+        else None
+    )
+    patient = db.query(User).filter(User.id == appointment.patient_id).first()
+    return {
+        "appointment_id": appointment.id,
+        "doctor_id": appointment.doctor_id,
+        "doctor_name": doctor.full_name if doctor else "Unassigned doctor",
+        "patient_name": (
+            f"{patient.first_name or ''} {patient.last_name or ''}".strip()
+            if patient
+            else "Unavailable patient"
+        ),
+        "appointment_status": appointment.status,
+        "payment_status": appointment.payment_status,
+        "amount": float(appointment.amount or 0),
+        "refund_amount": float(
+            appointment.refund_amount
+            or eligible_consultation_refund_amount(appointment)
+            or 0
+        ),
+        "refund_status": appointment.refund_status,
+        "refund_reference": appointment.refund_reference,
+        "refund_id": appointment.refund_id,
+        "paystack_reference": appointment.paystack_reference,
+        "patient_joined_at": appointment.patient_joined_at,
+        "doctor_joined_at": appointment.doctor_joined_at,
+        "no_show_marked_at": appointment.no_show_marked_at,
+        "refund_approved_by_admin_id":
+            appointment.refund_approved_by_admin_id,
+        "refund_approved_at": appointment.refund_approved_at,
+        "refund_rejected_by_admin_id":
+            appointment.refund_rejected_by_admin_id,
+        "refund_rejected_at": appointment.refund_rejected_at,
+        "refund_processed_at": appointment.refund_processed_at,
+        "refund_last_error": appointment.refund_last_error,
+    }
+
+
+@router.get("/refunds")
+def list_consultation_refunds(
+    refund_status: Optional[str] = "awaiting_admin",
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    allowed_statuses = {
+        "awaiting_admin",
+        "approved",
+        "pending",
+        "processing",
+        "needs_attention",
+        "verification_required",
+        "processed",
+        "failed",
+        "rejected",
+    }
+    query = db.query(Appointment).filter(
+        Appointment.refund_status.is_not(None)
+    )
+    if refund_status:
+        normalized = refund_status.replace("-", "_")
+        if normalized not in allowed_statuses:
+            raise HTTPException(status_code=400, detail="Invalid refund status.")
+        query = query.filter(Appointment.refund_status == normalized)
+    appointments = query.order_by(Appointment.id.desc()).limit(200).all()
+    return [_serialize_refund(appointment, db) for appointment in appointments]
+
+
+@router.put("/refunds/{appointment_id}/approve")
+def approve_consultation_refund(
+    appointment_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    appointment = (
+        db.query(Appointment)
+        .filter(Appointment.id == appointment_id)
+        .with_for_update()
+        .first()
+    )
+    if appointment is None:
+        raise HTTPException(status_code=404, detail="Appointment not found.")
+    if not validate_admin_refund_approval(appointment):
+        return _serialize_refund(appointment, db)
+
+    refund_amount = eligible_consultation_refund_amount(appointment)
+    assert refund_amount is not None
+    appointment.refund_status = "approved"
+    appointment.refund_amount = float(refund_amount)
+    appointment.refund_approved_by_admin_id = admin.id
+    appointment.refund_approved_at = datetime.utcnow()
+    appointment.refund_rejected_by_admin_id = None
+    appointment.refund_rejected_at = None
+    appointment.refund_last_error = None
+    db.add(
+        AuditLog(
+            admin_id=admin.id,
+            resource=f"ConsultationRefund:{appointment.id}",
+            reason=(
+                f"Approved patient refund of NGN "
+                f"{float(refund_amount):,.2f} for appointment "
+                f"{appointment.id}"
+            ),
+        )
+    )
+    db.commit()
+    db.refresh(appointment)
+    return _serialize_refund(appointment, db)
+
+
+@router.put("/refunds/{appointment_id}/reject")
+def reject_consultation_refund(
+    appointment_id: int,
+    payload: RejectRefundRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    reason = payload.rejection_reason.strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Rejection reason is required.")
+    if len(reason) > 1000:
+        raise HTTPException(status_code=400, detail="Rejection reason is too long.")
+
+    appointment = (
+        db.query(Appointment)
+        .filter(Appointment.id == appointment_id)
+        .with_for_update()
+        .first()
+    )
+    if appointment is None:
+        raise HTTPException(status_code=404, detail="Appointment not found.")
+    if appointment.refund_status == "rejected":
+        return _serialize_refund(appointment, db)
+    if appointment.refund_status != "awaiting_admin":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only refunds awaiting approval may be rejected.",
+        )
+
+    appointment.refund_status = "rejected"
+    appointment.refund_rejected_by_admin_id = admin.id
+    appointment.refund_rejected_at = datetime.utcnow()
+    appointment.refund_last_error = reason
+    db.add(
+        AuditLog(
+            admin_id=admin.id,
+            resource=f"ConsultationRefund:{appointment.id}",
+            reason=f"Rejected patient refund: {reason}",
+        )
+    )
+    db.commit()
+    db.refresh(appointment)
+    return _serialize_refund(appointment, db)

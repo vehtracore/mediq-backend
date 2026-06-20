@@ -13,6 +13,7 @@ import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../lab/data/lab_result_model.dart';
 import 'widgets/lab_result_bubble.dart';
 import 'widgets/markdown_bubble.dart';
@@ -33,22 +34,127 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   // --- VOICE STATE ---
   late stt.SpeechToText _speech;
-  bool _isListening = false;        // Visual UI state (drives the pulsing mic)
+  bool _isListening = false; // Visual UI state (drives the pulsing mic)
   bool _isUserIntendingToListen = false; // Master toggle — survives OS kills
   bool _speechEnabled = false;
-  String _preListenText = '';        // Accumulated text snapshot before each listen cycle
+  String _preListenText =
+      ''; // Accumulated text snapshot before each listen cycle
 
   // --- TTS STATE ---
   // (Per-message speak — no global auto-play toggle)
 
   // --- IMAGE STAGING STATE ---
   String? _stagedImageUrl; // Cloudinary URL after upload
+  String? _stagedImagePublicId;
   bool _isUploadingImage = false;
+  bool _checkingConsent = true;
+  bool _hasAiConsent = false;
 
   @override
   void initState() {
     super.initState();
     _speech = stt.SpeechToText();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initializeAiConsent());
+  }
+
+  Future<void> _initializeAiConsent() async {
+    try {
+      final controller = ref.read(aiChatControllerProvider.notifier);
+      final hasConsent = await controller.hasActiveConsent();
+      if (!mounted) return;
+
+      if (hasConsent) {
+        setState(() {
+          _hasAiConsent = true;
+          _checkingConsent = false;
+        });
+        return;
+      }
+
+      final accepted = await _showAiConsentDialog();
+      if (!mounted) return;
+      if (!accepted) {
+        Navigator.of(context).pop();
+        return;
+      }
+
+      final granted = await controller.grantConsent();
+      if (!mounted) return;
+      if (!granted) {
+        throw StateError('Consent was not recorded.');
+      }
+
+      setState(() {
+        _hasAiConsent = true;
+        _checkingConsent = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to confirm AI consent. Please try again.'),
+        ),
+      );
+      Navigator.of(context).pop();
+    }
+  }
+
+  Future<bool> _showAiConsentDialog() async {
+    final accepted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Before using MDQ+ AI'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Your symptoms, health text, chronic conditions, and uploaded '
+                'images may be processed by our third-party AI provider.',
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'MDQ+ AI provides health information and preliminary guidance. '
+                'It is not a confirmed diagnosis, prescription, or emergency service.',
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                children: [
+                  TextButton(
+                    onPressed: () => launchUrl(
+                      Uri.parse('https://mdqplus.com/legal.html#privacy'),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                    child: const Text('Privacy Policy'),
+                  ),
+                  TextButton(
+                    onPressed: () => launchUrl(
+                      Uri.parse('https://mdqplus.com/legal.html#terms'),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                    child: const Text('Terms'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('I understand and continue'),
+          ),
+        ],
+      ),
+    );
+    return accepted == true;
   }
 
   /// Lazy speech initialization with aggressive restart callbacks
@@ -69,7 +175,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
               // OS killed the listener against the user's will.
               // Snapshot whatever we have so far, then restart.
               _preListenText = _messageController.text.trim();
-              debugPrint('🔄 Auto-restarting listener (OS timeout). Snapshot: "${_preListenText.length} chars"');
+              debugPrint(
+                  '🔄 Auto-restarting listener (OS timeout). Snapshot: "${_preListenText.length} chars"');
               Future.delayed(const Duration(milliseconds: 50), () {
                 if (_isUserIntendingToListen && mounted) {
                   _startListeningSession();
@@ -85,7 +192,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
           if (_isUserIntendingToListen && mounted) {
             // Error (e.g. error_speech_timeout) — restart if user still wants to talk
             _preListenText = _messageController.text.trim();
-            debugPrint('🔄 Auto-restarting listener after error: ${e.errorMsg}');
+            debugPrint(
+                '🔄 Auto-restarting listener after error: ${e.errorMsg}');
             Future.delayed(const Duration(milliseconds: 50), () {
               if (_isUserIntendingToListen && mounted) {
                 _startListeningSession();
@@ -115,9 +223,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     _speech.listen(
       onResult: (result) {
         final recognized = result.recognizedWords;
-        final appended = _preListenText.isEmpty
-            ? recognized
-            : '$_preListenText $recognized';
+        final appended =
+            _preListenText.isEmpty ? recognized : '$_preListenText $recognized';
         if (mounted) {
           setState(() {
             _messageController.text = appended;
@@ -157,7 +264,6 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     }
   }
 
-
   @override
   void dispose() {
     _isUserIntendingToListen = false; // Kill the restart loop before disposing
@@ -186,16 +292,26 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   /// Stage an image: pick → upload → store URL for preview
   Future<void> _stageImage() async {
+    await _deleteStagedImage();
+    if (!mounted) return;
     setState(() => _isUploadingImage = true);
     try {
-      final url = await ref.read(imageUploadServiceProvider).pickAndUploadImage();
-      if (url != null && mounted) {
-        setState(() => _stagedImageUrl = url);
+      final image = await ref
+          .read(imageUploadServiceProvider)
+          .pickAndUploadTemporaryAiImage();
+      if (image != null && mounted) {
+        setState(() {
+          _stagedImageUrl = image.url;
+          _stagedImagePublicId = image.publicId;
+        });
       }
     } catch (e) {
+      debugPrint('[AiChatScreen] image staging failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Image upload failed: $e")),
+          const SnackBar(
+            content: Text('Image upload is unavailable. Please try again.'),
+          ),
         );
       }
     } finally {
@@ -203,25 +319,45 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     }
   }
 
-  void _clearStagedImage() {
-    setState(() => _stagedImageUrl = null);
+  Future<void> _deleteStagedImage() async {
+    final publicId = _stagedImagePublicId;
+    if (mounted) {
+      setState(() {
+        _stagedImageUrl = null;
+        _stagedImagePublicId = null;
+      });
+    }
+    if (publicId != null) {
+      await ref
+          .read(aiChatControllerProvider.notifier)
+          .deleteTemporaryImage(publicId);
+    }
   }
 
   /// Send message with optional staged image
   void _sendMessage() {
+    final chatState = ref.read(aiChatControllerProvider);
+    if (chatState.isLoading || _isUploadingImage) return;
+
     final text = _messageController.text.trim();
     final imageUrl = _stagedImageUrl;
+    final imagePublicId = _stagedImagePublicId;
 
     // Need either text or an image
     if (text.isEmpty && imageUrl == null) return;
 
     final messageText = text.isNotEmpty ? text : "Analyze this image";
 
-    ref.read(aiChatControllerProvider.notifier)
-        .sendMessage(messageText, imageUrl: imageUrl, language: _selectedLanguage);
+    ref.read(aiChatControllerProvider.notifier).sendMessage(messageText,
+        imageUrl: imageUrl,
+        imagePublicId: imagePublicId,
+        language: _selectedLanguage);
 
     _messageController.clear();
-    setState(() => _stagedImageUrl = null);
+    setState(() {
+      _stagedImageUrl = null;
+      _stagedImagePublicId = null;
+    });
 
     // Scroll after state update
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
@@ -239,7 +375,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
               subtitle: const Text('Analyze urinalysis strip with AI'),
               onTap: () async {
                 Navigator.pop(context); // Close menu
-                
+
                 final user = ref.read(userProvider).value;
                 if (user?.isPremium != true) {
                   // SHOW PAYWALL DIALOG
@@ -250,22 +386,26 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                         children: [
                           Icon(Icons.star, color: Colors.amber),
                           SizedBox(width: 8),
-                          Text("MDQ+ Premium Required", style: TextStyle(fontSize: 18)),
+                          Text("MDQ+ Premium Required",
+                              style: TextStyle(fontSize: 18)),
                         ],
                       ),
                       content: Text(
-                        "AI Urinalysis is exclusively available for MDQ+ Premium subscribers. Upgrade your plan to unlock this and other advanced medical analysis features."
-                      ),
+                          "AI Urinalysis is exclusively available for MDQ+ Premium subscribers. Upgrade your plan to unlock this and other advanced medical analysis features."),
                     ),
                   );
                   return;
                 }
 
                 // Premium User -> Proceed to scanner
-                final result = await context.push<LabAnalysisResponse>('/lab_scanner');
+                final result =
+                    await context.push<LabAnalysisResponse>('/lab_scanner');
                 if (result != null) {
-                  ref.read(aiChatControllerProvider.notifier).sendLabResult(result);
-                  WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+                  ref
+                      .read(aiChatControllerProvider.notifier)
+                      .sendLabResult(result);
+                  WidgetsBinding.instance
+                      .addPostFrameCallback((_) => _scrollToBottom());
                 }
               },
             ),
@@ -314,7 +454,10 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             icon: const Icon(Icons.health_and_safety_outlined, size: 18),
             label: const Text('Exit & Save'),
             onPressed: () async {
-              Navigator.of(dialogContext).pop(false); // keep screen alive for now
+              Navigator.of(dialogContext)
+                  .pop(false); // keep screen alive for now
+              await _deleteStagedImage();
+              if (!mounted) return;
               final success = await ref
                   .read(aiChatControllerProvider.notifier)
                   .saveSummary();
@@ -337,6 +480,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     );
 
     if (shouldClose == true && mounted) {
+      await _deleteStagedImage();
+      if (!mounted) return;
       Navigator.of(context).pop();
     }
   }
@@ -351,7 +496,6 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     // Scroll to bottom when messages change
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
-
     return PopScope(
       canPop: false, // Prevent immediate close
       onPopInvokedWithResult: (didPop, _) async {
@@ -359,228 +503,312 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         _showExitDialog();
       },
       child: Scaffold(
-      backgroundColor: theme.colorScheme.surface,
-      appBar: AppBar(
-        title: Row(
-          children: [
-            const Icon(Icons.auto_awesome, color: Colors.blue),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text("MDQ+ AI Assistant", style: TextStyle(color: theme.colorScheme.onSurface, fontSize: 18, fontWeight: FontWeight.w600)),
-                userAsync.when(
-                  data: (user) => Text(
-                    user?.isPremium == true
-                        ? "Premium Mode ⚡"
-                        : "Free Mode",
-                    style: const TextStyle(fontSize: 10, color: Colors.greenAccent, fontWeight: FontWeight.w500, letterSpacing: 0.5),
+        backgroundColor: theme.colorScheme.surface,
+        appBar: AppBar(
+          title: Row(
+            children: [
+              const Icon(Icons.auto_awesome, color: Colors.blue),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text("MDQ+ AI Assistant",
+                      style: TextStyle(
+                          color: theme.colorScheme.onSurface,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600)),
+                  userAsync.when(
+                    data: (user) => Text(
+                      user?.isPremium == true ? "Premium Mode ⚡" : "Free Mode",
+                      style: const TextStyle(
+                          fontSize: 10,
+                          color: Colors.greenAccent,
+                          fontWeight: FontWeight.w500,
+                          letterSpacing: 0.5),
+                    ),
+                    loading: () => Text("Connecting...",
+                        style: TextStyle(
+                            fontSize: 10,
+                            color: theme.colorScheme.onSurfaceVariant)),
+                    error: (_, __) => const SizedBox.shrink(),
                   ),
-                  loading: () => Text("Connecting...",
-                      style: TextStyle(fontSize: 10, color: theme.colorScheme.onSurfaceVariant)),
-                  error: (_, __) => const SizedBox.shrink(),
-                ),
-              ],
+                ],
+              ),
+            ],
+          ),
+          backgroundColor:
+              isDark ? theme.colorScheme.surface : Colors.grey.shade50,
+          foregroundColor: theme.colorScheme.onSurface,
+          elevation: 2,
+          shadowColor: Colors.black.withValues(alpha: 0.1),
+          surfaceTintColor: Colors.transparent,
+          actions: [
+            PopupMenuButton<String>(
+              icon: Icon(Icons.language, color: theme.colorScheme.onSurface),
+              onSelected: (String lang) {
+                setState(() => _selectedLanguage = lang);
+              },
+              color: theme.colorScheme.surface,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              elevation: 4,
+              itemBuilder: (BuildContext context) {
+                return ['English', 'Nigerian Pidgin', 'Yoruba', 'Hausa', 'Igbo']
+                    .map((String choice) {
+                  return PopupMenuItem<String>(
+                    value: choice,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(choice,
+                            style: TextStyle(
+                                color: _selectedLanguage == choice
+                                    ? Colors.blue
+                                    : theme.colorScheme.onSurface)),
+                        if (_selectedLanguage == choice)
+                          const Icon(Icons.check, color: Colors.blue, size: 20),
+                      ],
+                    ),
+                  );
+                }).toList();
+              },
             ),
           ],
         ),
-        backgroundColor: isDark ? theme.colorScheme.surface : Colors.grey.shade50,
-        foregroundColor: theme.colorScheme.onSurface,
-        elevation: 2,
-        shadowColor: Colors.black.withValues(alpha: 0.1),
-        surfaceTintColor: Colors.transparent,
-        actions: [
-          PopupMenuButton<String>(
-            icon: Icon(Icons.language, color: theme.colorScheme.onSurface),
-            onSelected: (String lang) {
-              setState(() => _selectedLanguage = lang);
-            },
-            color: theme.colorScheme.surface,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            elevation: 4,
-            itemBuilder: (BuildContext context) {
-              return ['English', 'Nigerian Pidgin', 'Yoruba', 'Hausa', 'Igbo'].map((String choice) {
-                return PopupMenuItem<String>(
-                  value: choice,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(choice, style: TextStyle(color: _selectedLanguage == choice ? Colors.blue : theme.colorScheme.onSurface)),
-                      if (_selectedLanguage == choice) const Icon(Icons.check, color: Colors.blue, size: 20),
-                    ],
-                  ),
-                );
-              }).toList();
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: chatState.messages.isEmpty
-                ? _buildEmptyState(theme)
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(16),
-                    itemCount: chatState.messages.length,
-                    itemBuilder: (context, index) {
-                      final msg = chatState.messages[index];
-                      final isMe = msg['role'] == 'user';
-                      
-                      // 1. Check for Lab Result Message
-                      if (msg['type'] == 'lab_result' && msg['lab_data'] != null) {
-                        return LabResultBubble(
-                          result: msg['lab_data'] as LabAnalysisResponse,
-                          isMe: isMe,
-                        );
-                      }
-
-                      return _buildMessageBubble(
-                        msg['message'],
-                        isMe,
-                        imageUrl: msg['image'],
-                        isSending: msg['isSending'] == true,
-                        theme: theme,
-                        isDark: isDark,
-                      );
-                    },
-                  ),
-          ),
-          if (chatState.isLoading)
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Text("MDQ+ is analyzing...",
-                  style: TextStyle(color: theme.hintColor)),
-            ),
-
-          // --- STAGED IMAGE PREVIEW ---
-          if (_stagedImageUrl != null)
+        body: Column(
+          children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              color: isDark ? Colors.grey[900] : Colors.grey[100],
-              child: Row(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.network(
-                      _stagedImageUrl!,
-                      width: 60,
-                      height: 60,
-                      fit: BoxFit.cover,
-                      errorBuilder: (c, e, s) => Container(
-                        width: 60, height: 60,
-                        color: Colors.grey[300],
-                        child: const Icon(Icons.broken_image, size: 24),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      "Image attached",
-                      style: TextStyle(
-                        color: isDark ? Colors.grey[400] : Colors.grey[600],
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close, size: 20),
-                    onPressed: _clearStagedImage,
-                    color: Colors.redAccent,
-                    tooltip: "Remove image",
-                  ),
-                ],
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+              color: theme.colorScheme.primaryContainer.withValues(alpha: 0.45),
+              child: Text(
+                'AI support only - not a confirmed diagnosis.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: theme.colorScheme.onPrimaryContainer,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
+            Expanded(
+              child: _checkingConsent || !_hasAiConsent
+                  ? const Center(child: CircularProgressIndicator())
+                  : chatState.messages.isEmpty
+                      ? _buildEmptyState(theme)
+                      : ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.all(16),
+                          itemCount: chatState.messages.length,
+                          itemBuilder: (context, index) {
+                            final msg = chatState.messages[index];
+                            final isMe = msg['role'] == 'user';
 
-          // --- UPLOADING INDICATOR ---
-          if (_isUploadingImage)
+                            if (msg['type'] == 'usage_notice') {
+                              return Container(
+                                margin: const EdgeInsets.symmetric(vertical: 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.secondaryContainer,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  msg['message'] as String,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color:
+                                        theme.colorScheme.onSecondaryContainer,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              );
+                            }
+
+                            // 1. Check for Lab Result Message
+                            if (msg['type'] == 'lab_result' &&
+                                msg['lab_data'] != null) {
+                              return LabResultBubble(
+                                result: msg['lab_data'] as LabAnalysisResponse,
+                                isMe: isMe,
+                              );
+                            }
+
+                            return _buildMessageBubble(
+                              msg['message'],
+                              isMe,
+                              imageUrl: msg['image'],
+                              isSending: msg['isSending'] == true,
+                              theme: theme,
+                              isDark: isDark,
+                            );
+                          },
+                        ),
+            ),
+            if (chatState.isLoading)
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text("MDQ+ is analyzing...",
+                    style: TextStyle(color: theme.hintColor)),
+              ),
+
+            // --- STAGED IMAGE PREVIEW ---
+            if (_stagedImageUrl != null)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                color: isDark ? Colors.grey[900] : Colors.grey[100],
+                child: Row(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(
+                        _stagedImageUrl!,
+                        width: 60,
+                        height: 60,
+                        fit: BoxFit.cover,
+                        errorBuilder: (c, e, s) => Container(
+                          width: 60,
+                          height: 60,
+                          color: Colors.grey[300],
+                          child: const Icon(Icons.broken_image, size: 24),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        "Image attached",
+                        style: TextStyle(
+                          color: isDark ? Colors.grey[400] : Colors.grey[600],
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 20),
+                      onPressed: () => _deleteStagedImage(),
+                      color: Colors.redAccent,
+                      tooltip: "Remove image",
+                    ),
+                  ],
+                ),
+              ),
+
+            // --- UPLOADING INDICATOR ---
+            if (_isUploadingImage)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                color: isDark ? Colors.grey[900] : Colors.grey[100],
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 10),
+                    Text("Uploading image...",
+                        style: TextStyle(color: theme.hintColor, fontSize: 13)),
+                  ],
+                ),
+              ),
+
+            // --- INPUT BAR ---
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              color: isDark ? Colors.grey[900] : Colors.grey[100],
-              child: Row(
-                children: [
-                  const SizedBox(
-                    width: 20, height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  const SizedBox(width: 10),
-                  Text("Uploading image...",
-                    style: TextStyle(color: theme.hintColor, fontSize: 13)),
-                ],
-              ),
-            ),
-
-          // --- INPUT BAR ---
-          Container(
-            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 24, top: 12),
-            color: theme.colorScheme.surface,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-              decoration: BoxDecoration(
-                color: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.grey[100],
-                borderRadius: BorderRadius.circular(30),
-                border: Border.all(color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.transparent),
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.add_circle, color: Colors.blueAccent),
-                    onPressed: _showAttachmentMenu,
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _messageController,
-                      style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-                      minLines: 1,
-                      maxLines: 5,
-                      keyboardType: TextInputType.multiline,
-                      textInputAction: TextInputAction.newline,
-                      decoration: InputDecoration(
-                        hintText: _isListening
-                            ? "Listening..."
-                            : (_stagedImageUrl != null
-                                ? "Add a message..."
-                                : "Describe symptoms..."),
-                        hintStyle: TextStyle(
-                            color: _isListening ? Colors.redAccent : (isDark ? Colors.white54 : Colors.black54),
-                            fontSize: 15),
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+              padding: const EdgeInsets.only(
+                  left: 16, right: 16, bottom: 24, top: 12),
+              color: theme.colorScheme.surface,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.1)
+                      : Colors.grey[100],
+                  borderRadius: BorderRadius.circular(30),
+                  border: Border.all(
+                      color: isDark
+                          ? Colors.white.withValues(alpha: 0.05)
+                          : Colors.transparent),
+                ),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.add_circle,
+                          color: Colors.blueAccent),
+                      onPressed: _hasAiConsent &&
+                              !chatState.isLoading &&
+                              !_isUploadingImage
+                          ? _showAttachmentMenu
+                          : null,
+                    ),
+                    Expanded(
+                      child: TextField(
+                        controller: _messageController,
+                        enabled: _hasAiConsent &&
+                            !chatState.isLoading &&
+                            !_isUploadingImage,
+                        style: TextStyle(
+                            color: isDark ? Colors.white : Colors.black87),
+                        minLines: 1,
+                        maxLines: 5,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.newline,
+                        decoration: InputDecoration(
+                          hintText: _isListening
+                              ? "Listening..."
+                              : (_stagedImageUrl != null
+                                  ? "Add a message..."
+                                  : "Describe symptoms..."),
+                          hintStyle: TextStyle(
+                              color: _isListening
+                                  ? Colors.redAccent
+                                  : (isDark ? Colors.white54 : Colors.black54),
+                              fontSize: 15),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 12),
+                        ),
                       ),
                     ),
-                  ),
-                  GestureDetector(
-                    onTap: _toggleListening,
-                    child: CircleAvatar(
-                      backgroundColor: _isListening ? Colors.redAccent : Colors.transparent,
-                      radius: 20,
-                      child: Icon(
-                        _isListening ? Icons.mic : Icons.mic_none,
-                        color: _isListening ? Colors.white : Theme.of(context).colorScheme.onSurfaceVariant,
-                        size: 22,
+                    GestureDetector(
+                      onTap: _hasAiConsent ? _toggleListening : null,
+                      child: CircleAvatar(
+                        backgroundColor: _isListening
+                            ? Colors.redAccent
+                            : Colors.transparent,
+                        radius: 20,
+                        child: Icon(
+                          _isListening ? Icons.mic : Icons.mic_none,
+                          color: _isListening
+                              ? Colors.white
+                              : Theme.of(context).colorScheme.onSurfaceVariant,
+                          size: 22,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 4),
-                  Container(
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF4A90E2),
-                      shape: BoxShape.circle,
+                    const SizedBox(width: 4),
+                    Container(
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF4A90E2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: IconButton(
+                        onPressed: _hasAiConsent &&
+                                !chatState.isLoading &&
+                                !_isUploadingImage
+                            ? _sendMessage
+                            : null,
+                        icon: const Icon(Icons.arrow_upward,
+                            color: Colors.white, size: 20),
+                      ),
                     ),
-                    child: IconButton(
-                      onPressed: _sendMessage,
-                      icon: const Icon(Icons.arrow_upward, color: Colors.white, size: 20),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
@@ -590,7 +818,6 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
       bool isSending = false,
       required ThemeData theme,
       required bool isDark}) {
-
     // Resolve the image URL: if it's already a full URL, use it directly
     String? resolvedImageUrl;
     if (imageUrl != null) {
@@ -650,7 +877,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                               height: 120,
                               color: Colors.grey[300],
                               child: const Center(
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
                               ),
                             );
                           },
@@ -680,9 +908,11 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                           ? const SizedBox(
                               width: 12,
                               height: 12,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white70),
                             )
-                          : const Icon(Icons.check, size: 14, color: Colors.white70),
+                          : const Icon(Icons.check,
+                              size: 14, color: Colors.white70),
                     ),
                   ),
               ],
@@ -714,12 +944,19 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
               color: Colors.blue.withValues(alpha: 0.05),
               shape: BoxShape.circle,
             ),
-            child: Icon(Icons.auto_awesome, size: 64, color: Colors.blue.withValues(alpha: 0.8)),
+            child: Icon(Icons.auto_awesome,
+                size: 64, color: Colors.blue.withValues(alpha: 0.8)),
           ),
           const SizedBox(height: 24),
-          Text("Hello! I'm MDQ+.", style: TextStyle(color: theme.colorScheme.onSurfaceVariant, fontSize: 18)),
+          Text("Hello! I'm MDQ+.",
+              style: TextStyle(
+                  color: theme.colorScheme.onSurfaceVariant, fontSize: 18)),
           const SizedBox(height: 8),
-          Text("I can help assess your symptoms.", style: TextStyle(color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7), fontSize: 14)),
+          Text("I can help assess your symptoms.",
+              style: TextStyle(
+                  color:
+                      theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                  fontSize: 14)),
         ],
       ),
     );
@@ -740,7 +977,8 @@ class _PremiumVoiceButton extends ConsumerStatefulWidget {
   });
 
   @override
-  ConsumerState<_PremiumVoiceButton> createState() => _PremiumVoiceButtonState();
+  ConsumerState<_PremiumVoiceButton> createState() =>
+      _PremiumVoiceButtonState();
 }
 
 class _PremiumVoiceButtonState extends ConsumerState<_PremiumVoiceButton> {
@@ -775,18 +1013,19 @@ class _PremiumVoiceButtonState extends ConsumerState<_PremiumVoiceButton> {
 
     try {
       final dio = ref.read(dioProvider);
-      
+
       final cleanText = widget.text
-        .replaceAll(RegExp(r'[*_`#>~]'), '')
-        .replaceAll(RegExp(r'\n+'), '. ')
-        .trim();
+          .replaceAll(RegExp(r'[*_`#>~]'), '')
+          .replaceAll(RegExp(r'\n+'), '. ')
+          .trim();
 
       final dir = await getTemporaryDirectory();
       final languageKey = widget.language
           .trim()
           .toLowerCase()
           .replaceAll(RegExp(r'[^a-z0-9]+'), '_');
-      final file = File('${dir.path}/temp_voice_${languageKey}_${cleanText.hashCode}.mp3');
+      final file = File(
+          '${dir.path}/temp_voice_${languageKey}_${cleanText.hashCode}.mp3');
 
       if (file.existsSync()) {
         await _player.setFilePath(file.path);
@@ -814,7 +1053,9 @@ class _PremiumVoiceButtonState extends ConsumerState<_PremiumVoiceButton> {
       if (mounted) {
         setState(() => _state = _VoiceState.idle);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not load audio: $e')),
+          const SnackBar(
+            content: Text('Voice playback is unavailable. Please try again.'),
+          ),
         );
       }
     }
@@ -857,7 +1098,8 @@ class _BouncingDots extends StatefulWidget {
   State<_BouncingDots> createState() => _BouncingDotsState();
 }
 
-class _BouncingDotsState extends State<_BouncingDots> with SingleTickerProviderStateMixin {
+class _BouncingDotsState extends State<_BouncingDots>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
 
   @override

@@ -60,6 +60,14 @@ class AppointmentResponse(BaseModel):
     payment_status: str
     is_acknowledged: bool = False
     start_time: Optional[datetime] = None
+    patient_joined_at: Optional[datetime] = None
+    doctor_joined_at: Optional[datetime] = None
+    consultation_started_at: Optional[datetime] = None
+    no_show_marked_at: Optional[datetime] = None
+    refund_status: Optional[str] = None
+    refund_reference: Optional[str] = None
+    refund_amount: Optional[float] = None
+    refund_processed_at: Optional[datetime] = None
     notes: Optional[str] = None
     amount: float = 0.0
     has_review: bool = False
@@ -68,7 +76,13 @@ class AppointmentResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    @field_validator("start_time")
+    @field_validator(
+        "start_time",
+        "patient_joined_at",
+        "doctor_joined_at",
+        "consultation_started_at",
+        "no_show_marked_at",
+    )
     @classmethod
     def restore_utc_timezone(cls, value: Optional[datetime]) -> Optional[datetime]:
         if value is None:

@@ -30,12 +30,15 @@ class _DoctorEditProfileScreenState
     super.initState();
     _bioCtrl = TextEditingController(text: widget.doctor.bio ?? "");
     _rateCtrl =
-        TextEditingController(text: widget.doctor.hourlyRate.toString());
+        TextEditingController(text: widget.doctor.consultationFee.toString());
     _expCtrl =
         TextEditingController(text: widget.doctor.yearsExperience.toString());
   }
 
   String? _rateError;
+
+  static const int _durationMinutes = 30;
+  static const double _minimumFee = 4000;
 
   Future<void> _pickImage() async {
     final picker = ImagePicker();
@@ -57,8 +60,9 @@ class _DoctorEditProfileScreenState
 
   Future<void> _handleSave() async {
     final rate = double.tryParse(_rateCtrl.text.trim()) ?? 0;
-    if (rate < 3000) {
-      setState(() => _rateError = "Minimum fee is ₦3,000");
+    if (rate < _minimumFee) {
+      setState(() => _rateError =
+          "Minimum fee for $_durationMinutes minutes is ₦${_minimumFee.toInt()}");
       return;
     }
 
@@ -77,16 +81,18 @@ class _DoctorEditProfileScreenState
       // Update DOCTOR Profile
       await ref.read(doctorRepositoryProvider).updateDoctorProfile(
             bio: _bioCtrl.text.trim(),
-            hourlyRate: rate,
+            consultationFee: rate,
             yearsExperience: int.tryParse(_expCtrl.text.trim()),
             imageUrl: uploadedImageUrl,
           );
-      
+
       // Update USER Profile (For persistence fallback)
       if (uploadedImageUrl != null) {
         // Need to import AuthRepository at top if not present
         // Actually we can read provider directly
-        await ref.read(authRepositoryProvider).updateUser(imageUrl: uploadedImageUrl);
+        await ref
+            .read(authRepositoryProvider)
+            .updateUser(imageUrl: uploadedImageUrl);
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -94,9 +100,12 @@ class _DoctorEditProfileScreenState
         context.pop();
       }
     } catch (e) {
+      debugPrint('[DoctorEditProfile] Save failed: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("$e"), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text("Unable to update profile. Please try again."),
+          backgroundColor: Colors.red,
+        ));
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -108,7 +117,8 @@ class _DoctorEditProfileScreenState
     ImageProvider? backgroundImage;
     if (_webImageBytes != null) {
       backgroundImage = MemoryImage(_webImageBytes!);
-    } else if (widget.doctor.imageUrl.isNotEmpty && widget.doctor.imageUrl.startsWith('http')) {
+    } else if (widget.doctor.imageUrl.isNotEmpty &&
+        widget.doctor.imageUrl.startsWith('http')) {
       backgroundImage = NetworkImage(widget.doctor.imageUrl);
     }
 
@@ -162,10 +172,19 @@ class _DoctorEditProfileScreenState
                   if (_rateError != null) setState(() => _rateError = null);
                 },
                 decoration: InputDecoration(
-                    labelText: "Rate (₦)",
+                    labelText: "Flat consultation fee (₦)",
                     errorText: _rateError,
                     border: const OutlineInputBorder(),
                     prefixIcon: const Icon(Icons.payments))),
+            const SizedBox(height: 16),
+            const InputDecorator(
+              decoration: InputDecoration(
+                labelText: "Consultation duration",
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.timer_outlined),
+              ),
+              child: Text("30 minutes"),
+            ),
             const SizedBox(height: 16),
             TextField(
                 controller: _expCtrl,

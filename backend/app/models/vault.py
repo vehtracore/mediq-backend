@@ -18,10 +18,19 @@ class AIChatSummary(Base):
     patient_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     topic = Column(String, nullable=False)
     summary_text = Column(Text, nullable=False)
+    source = Column(String, nullable=False, default="ai_generated")
+    doctor_review_status = Column(String, nullable=False, default="not_reviewed")
+    reviewed_by_doctor_id = Column(
+        Integer,
+        ForeignKey("doctors.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False)
 
     # Relationships
     patient = relationship("User", foreign_keys=[patient_id])
+    reviewed_by_doctor = relationship("Doctor", foreign_keys=[reviewed_by_doctor_id])
 
 
 class ConsultationRecord(Base):

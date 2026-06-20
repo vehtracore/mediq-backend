@@ -1,10 +1,11 @@
-
 class Doctor {
   final int id;
   final String fullName;
   final String specialty;
   final String imageUrl;
   final double hourlyRate;
+  final double consultationFee;
+  final int consultationDurationMinutes;
   final double rating;
   final int reviewCount;
   final bool isAvailable;
@@ -20,11 +21,25 @@ class Doctor {
   final String? paystackSubaccountCode;
 
   Doctor({
-    required this.id, required this.fullName, required this.specialty, required this.imageUrl,
-    required this.hourlyRate, required this.rating, required this.reviewCount, required this.isAvailable,
-    this.bio, required this.isVerified, required this.yearsExperience, this.licenseNumber,
-    this.status = 'pending', this.rejectionReason,
-    this.bankCode, this.accountNumber, this.paystackSubaccountCode,
+    required this.id,
+    required this.fullName,
+    required this.specialty,
+    required this.imageUrl,
+    required this.hourlyRate,
+    required this.consultationFee,
+    required this.consultationDurationMinutes,
+    required this.rating,
+    required this.reviewCount,
+    required this.isAvailable,
+    this.bio,
+    required this.isVerified,
+    required this.yearsExperience,
+    this.licenseNumber,
+    this.status = 'pending',
+    this.rejectionReason,
+    this.bankCode,
+    this.accountNumber,
+    this.paystackSubaccountCode,
   });
 
   factory Doctor.fromJson(Map<String, dynamic> json) {
@@ -33,7 +48,13 @@ class Doctor {
       fullName: json['full_name'],
       specialty: json['specialty'],
       imageUrl: json['image_url'] ?? '',
-      hourlyRate: (json['hourly_rate'] as num).toDouble(),
+      hourlyRate:
+          ((json['consultation_fee'] ?? json['hourly_rate'] ?? 4000) as num)
+              .toDouble(),
+      consultationFee:
+          ((json['consultation_fee'] ?? json['hourly_rate'] ?? 4000) as num)
+              .toDouble(),
+      consultationDurationMinutes: json['consultation_duration_minutes'] ?? 30,
       rating: (json['rating'] as num).toDouble(),
       reviewCount: json['review_count'],
       isAvailable: json['is_available'] ?? false,

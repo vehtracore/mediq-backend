@@ -23,6 +23,9 @@ the calling endpoint can surface it directly to the client.
 import logging
 import os
 from typing import Optional
+from app.services.consultation_pricing import (
+    PAYSTACK_PLATFORM_PERCENTAGE_CHARGE,
+)
 
 import httpx
 from fastapi import HTTPException
@@ -65,7 +68,7 @@ class PaystackService:
         business_name: str,
         bank_code: str,
         account_number: str,
-        percentage_charge: float = 30.0,
+        percentage_charge: float = PAYSTACK_PLATFORM_PERCENTAGE_CHARGE,
     ) -> str:
         """
         Create a Paystack split-payment subaccount for a doctor.
@@ -80,7 +83,7 @@ class PaystackService:
             bank_code:         Paystack bank code, e.g. "058" for GTBank.
                                Full list: GET https://api.paystack.co/bank
             account_number:    10-digit NUBAN account number.
-            percentage_charge: Platform's commission cut (default 30 %).
+            percentage_charge: Platform's configured commission percentage.
                                Paystack stores this as the *platform's* share.
 
         Returns:
@@ -243,6 +246,150 @@ class PaystackService:
             account_name,
         )
         return account_name
+
+    async def create_transfer_recipient(
+        self,
+        *,
+        doctor_id: int,
+        name: str,
+        bank_code: str,
+        account_number: str,
+    ) -> str:
+        """Create or retrieve a Nigerian NUBAN transfer recipient."""
+        endpoint = f"{PAYSTACK_BASE_URL}/transferrecipient"
+        body = {
+            "type": "nuban",
+            "name": name,
+            "bank_code": bank_code,
+            "account_number": account_number,
+            "currency": "NGN",
+            "metadata": {"doctor_id": doctor_id},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(
+                    endpoint,
+                    json=body,
+                    headers=self._headers,
+                )
+        except httpx.RequestError as exc:
+            logger.error(
+                "[PAYSTACK] Transfer-recipient network error: %s",
+                exc,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Payout service is temporarily unavailable.",
+            ) from exc
+
+        payload = response.json()
+        if not response.is_success or not payload.get("status"):
+            raise HTTPException(
+                status_code=400,
+                detail=payload.get(
+                    "message",
+                    "Paystack rejected the transfer recipient.",
+                ),
+            )
+        recipient_code = (payload.get("data") or {}).get("recipient_code")
+        if not recipient_code:
+            raise HTTPException(
+                status_code=502,
+                detail="Paystack did not return a transfer recipient code.",
+            )
+        return str(recipient_code)
+
+    async def initiate_transfer(
+        self,
+        *,
+        amount_kobo: int,
+        recipient_code: str,
+        reference: str,
+        reason: str,
+    ) -> dict:
+        """Initiate a transfer from the Paystack balance."""
+        endpoint = f"{PAYSTACK_BASE_URL}/transfer"
+        body = {
+            "source": "balance",
+            "amount": amount_kobo,
+            "recipient": recipient_code,
+            "reference": reference,
+            "reason": reason,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(
+                    endpoint,
+                    json=body,
+                    headers=self._headers,
+                )
+        except httpx.RequestError as exc:
+            logger.error(
+                "[PAYSTACK] Transfer network error for reference=%s: %s",
+                reference,
+                exc,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Payout service is temporarily unavailable.",
+            ) from exc
+
+        payload = response.json()
+        if not response.is_success or not payload.get("status"):
+            raise HTTPException(
+                status_code=400,
+                detail=payload.get("message", "Paystack rejected the transfer."),
+            )
+        return payload.get("data") or {}
+
+    async def create_refund(
+        self,
+        *,
+        transaction_reference: str,
+        amount_kobo: int,
+        customer_note: str,
+        merchant_note: str,
+    ) -> dict:
+        """Initiate a Paystack refund for a verified consultation payment."""
+        endpoint = f"{PAYSTACK_BASE_URL}/refund"
+        body = {
+            "transaction": transaction_reference,
+            "amount": amount_kobo,
+            "currency": "NGN",
+            "customer_note": customer_note,
+            "merchant_note": merchant_note,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(
+                    endpoint,
+                    json=body,
+                    headers=self._headers,
+                )
+        except httpx.RequestError as exc:
+            logger.error(
+                "[PAYSTACK] Refund network error for transaction=%s: %s",
+                transaction_reference,
+                exc,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Refund service is temporarily unavailable.",
+            ) from exc
+
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {}
+        if not response.is_success or not payload.get("status"):
+            raise HTTPException(
+                status_code=400,
+                detail=payload.get("message", "Paystack rejected the refund."),
+            )
+        return payload.get("data") or {}
 
     async def disable_subscription(
         self,

@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,7 +6,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../data/lab_result_model.dart';
 import 'lab_controller.dart';
-import '../../chat/presentation/chat_screen.dart';
 
 class LabScannerScreen extends ConsumerStatefulWidget {
   const LabScannerScreen({super.key});
@@ -16,7 +14,8 @@ class LabScannerScreen extends ConsumerStatefulWidget {
   ConsumerState<LabScannerScreen> createState() => _LabScannerScreenState();
 }
 
-class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with WidgetsBindingObserver {
+class _LabScannerScreenState extends ConsumerState<LabScannerScreen>
+    with WidgetsBindingObserver {
   CameraController? _controller;
   Future<void>? _initializeControllerFuture;
   bool _isCameraInitialized = false;
@@ -57,7 +56,8 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
     if (status != PermissionStatus.granted) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Camera permission is required to scan.')),
+          const SnackBar(
+              content: Text('Camera permission is required to scan.')),
         );
         setState(() => _isCameraMode = false);
       }
@@ -98,24 +98,27 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
   Future<void> _takePicture() async {
     try {
       await _initializeControllerFuture;
-      
+
       final image = await _controller!.takePicture();
-      
+
       // Trigger logic
       await ref.read(labControllerProvider.notifier).analyzeImage(image);
-      
-      _checkResult();
 
+      _checkResult();
     } catch (e) {
+      debugPrint('[LabScanner] capture error: $e');
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error capturing: $e')),
+        const SnackBar(
+          content: Text('Unable to capture the image. Please try again.'),
+        ),
       );
     }
   }
 
   void _checkResult() {
     final state = ref.read(labControllerProvider);
-    
+
     if (state.errorMessage != null) {
       _showErrorDialog(state.errorMessage!);
     } else if (state.result != null && state.result!.status == 'SUCCESS') {
@@ -160,33 +163,38 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Center(
-              child: Container(
-                width: 40, 
-                height: 5, 
-                decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10))
-              )
-            ),
+                child: Container(
+                    width: 40,
+                    height: 5,
+                    decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(10)))),
             const SizedBox(height: 20),
             const Row(
               children: [
                 Icon(Icons.check_circle, color: Colors.green, size: 28),
                 SizedBox(width: 10),
-                Text("Scan Successful", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                Text("Scan Successful",
+                    style:
+                        TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
               ],
             ),
             const SizedBox(height: 10),
-            Text("Lighting Score: ${result.lightingScore}", style: const TextStyle(color: Colors.grey)),
+            Text("Lighting Score: ${result.lightingScore}",
+                style: const TextStyle(color: Colors.grey)),
             const Divider(),
             Expanded(
               child: ListView(
                 children: [
-                   _buildResultItem("Leukocytes", result.readings?.leukocytes?.value),
-                   _buildResultItem("Nitrites", result.readings?.nitrites?.value),
-                   _buildResultItem("Protein", result.readings?.protein?.value),
-                   _buildResultItem("pH", result.readings?.ph?.value),
-                   _buildResultItem("Blood", result.readings?.blood?.value),
-                   _buildResultItem("Glucose", result.readings?.glucose?.value),
-                   _buildResultItem("Ketones", result.readings?.ketones?.value),
+                  _buildResultItem(
+                      "Leukocytes", result.readings?.leukocytes?.value),
+                  _buildResultItem(
+                      "Nitrites", result.readings?.nitrites?.value),
+                  _buildResultItem("Protein", result.readings?.protein?.value),
+                  _buildResultItem("pH", result.readings?.ph?.value),
+                  _buildResultItem("Blood", result.readings?.blood?.value),
+                  _buildResultItem("Glucose", result.readings?.glucose?.value),
+                  _buildResultItem("Ketones", result.readings?.ketones?.value),
                 ],
               ),
             ),
@@ -196,8 +204,8 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                 Expanded(
                   child: OutlinedButton(
                     onPressed: () {
-                       ref.read(labControllerProvider.notifier).reset();
-                       Navigator.pop(context);
+                      ref.read(labControllerProvider.notifier).reset();
+                      Navigator.pop(context);
                     },
                     child: const Text("Retake"),
                   ),
@@ -207,12 +215,14 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                   child: ElevatedButton(
                     onPressed: () {
                       Navigator.pop(context); // Close bottom sheet
-                      
+
                       // Return result to previous screen (Chat)
-                      context.pop(result); 
+                      context.pop(result);
                     },
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0D47A1)),
-                    child: const Text("Confirm & Save", style: TextStyle(color: Colors.white)),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0D47A1)),
+                    child: const Text("Confirm & Save",
+                        style: TextStyle(color: Colors.white)),
                   ),
                 ),
               ],
@@ -225,11 +235,11 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
 
   Widget _buildResultItem(String label, String? value) {
     if (value == null) return const SizedBox.shrink();
-    
+
     // Simple highlight logic
-    bool isAbnormal = !['Negative', 'Normal'].contains(value) && 
-                      !value.startsWith('1.0') && // Specific Gravity
-                      !['5.0', '5.5', '6.0', '6.5', '7.0'].contains(value); // pH common range
+    bool isAbnormal = !['Negative', 'Normal'].contains(value) &&
+        !value.startsWith('1.0') && // Specific Gravity
+        !['5.0', '5.5', '6.0', '6.5', '7.0'].contains(value); // pH common range
 
     return ListTile(
       title: Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
@@ -288,14 +298,15 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.science_outlined, size: 80, color: Colors.blueAccent),
+                const Icon(Icons.science_outlined,
+                    size: 80, color: Colors.blueAccent),
                 const SizedBox(height: 24),
                 Text(
                   "How would you like to scan?",
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 8),
@@ -312,13 +323,17 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                   height: 56,
                   child: ElevatedButton.icon(
                     icon: const Icon(Icons.photo_library, size: 24),
-                    label: const Text("Upload from Gallery", style: TextStyle(fontSize: 16)),
+                    label: const Text("Upload from Gallery",
+                        style: TextStyle(fontSize: 16)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.blueAccent,
                       foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16)),
                     ),
-                    onPressed: labState.isLoading ? null : () => _pickAndAnalyzeImage(ImageSource.gallery),
+                    onPressed: labState.isLoading
+                        ? null
+                        : () => _pickAndAnalyzeImage(ImageSource.gallery),
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -329,16 +344,21 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                   height: 56,
                   child: OutlinedButton.icon(
                     icon: const Icon(Icons.camera_alt, size: 24),
-                    label: const Text("Capture with Scanner", style: TextStyle(fontSize: 16)),
+                    label: const Text("Capture with Scanner",
+                        style: TextStyle(fontSize: 16)),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.white,
-                      side: const BorderSide(color: Colors.blueAccent, width: 1.5),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      side: const BorderSide(
+                          color: Colors.blueAccent, width: 1.5),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16)),
                     ),
-                    onPressed: labState.isLoading ? null : () {
-                      setState(() => _isCameraMode = true);
-                      _initCamera();
-                    },
+                    onPressed: labState.isLoading
+                        ? null
+                        : () {
+                            setState(() => _isCameraMode = true);
+                            _initCamera();
+                          },
                   ),
                 ),
 
@@ -346,7 +366,8 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                   const SizedBox(height: 24),
                   const CircularProgressIndicator(color: Colors.blueAccent),
                   const SizedBox(height: 12),
-                  Text("Analyzing strip...", style: TextStyle(color: Colors.grey[400])),
+                  Text("Analyzing strip...",
+                      style: TextStyle(color: Colors.grey[400])),
                 ],
               ],
             ),
@@ -418,7 +439,8 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                 ),
                 const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   decoration: BoxDecoration(
                     color: Colors.black54,
                     borderRadius: BorderRadius.circular(20),
@@ -434,16 +456,16 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                       width: 304, // Slightly larger than hole
                       height: 504,
                       decoration: BoxDecoration(
-                        border: Border.all(color: Colors.greenAccent, width: 3),
-                        borderRadius: BorderRadius.circular(22),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.greenAccent.withOpacity(0.3),
-                            blurRadius: 10,
-                            spreadRadius: 2,
-                          )
-                        ]
-                      ),
+                          border:
+                              Border.all(color: Colors.greenAccent, width: 3),
+                          borderRadius: BorderRadius.circular(22),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.greenAccent.withValues(alpha: 0.3),
+                              blurRadius: 10,
+                              spreadRadius: 2,
+                            )
+                          ]),
                     ),
                   ),
                 ),
@@ -451,7 +473,7 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
               ],
             ),
           ),
-          
+
           // 4. Controls
           Positioned(
             bottom: 40,
@@ -470,9 +492,10 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                       _controller = null;
                     });
                   },
-                  icon: const Icon(Icons.arrow_back, color: Colors.white, size: 32),
+                  icon: const Icon(Icons.arrow_back,
+                      color: Colors.white, size: 32),
                 ),
-                
+
                 // Shutter Button — captures with existing camera
                 GestureDetector(
                   onTap: labState.isLoading ? null : _takePicture,
@@ -484,21 +507,22 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                       border: Border.all(color: Colors.white, width: 4),
                       color: labState.isLoading ? Colors.grey : Colors.white24,
                     ),
-                    child: labState.isLoading 
-                      ? const Padding(
-                          padding: EdgeInsets.all(16.0),
-                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
-                        )
-                      : Container(
-                          margin: const EdgeInsets.all(8),
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white,
+                    child: labState.isLoading
+                        ? const Padding(
+                            padding: EdgeInsets.all(16.0),
+                            child: CircularProgressIndicator(
+                                color: Colors.white, strokeWidth: 3),
+                          )
+                        : Container(
+                            margin: const EdgeInsets.all(8),
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white,
+                            ),
                           ),
-                        ),
                   ),
                 ),
-                
+
                 // Flash Toggle
                 IconButton(
                   onPressed: () async {
@@ -510,12 +534,11 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen> with Widget
                     setState(() {});
                   },
                   icon: Icon(
-                    _controller?.value.flashMode == FlashMode.torch 
-                        ? Icons.flash_on 
-                        : Icons.flash_off,
-                    color: Colors.white, 
-                    size: 32
-                  ),
+                      _controller?.value.flashMode == FlashMode.torch
+                          ? Icons.flash_on
+                          : Icons.flash_off,
+                      color: Colors.white,
+                      size: 32),
                 ),
               ],
             ),

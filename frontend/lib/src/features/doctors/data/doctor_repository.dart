@@ -24,12 +24,15 @@ class DoctorRepository {
 
   Future<void> updateDoctorProfile(
       {String? bio,
-      double? hourlyRate,
+      double? consultationFee,
+      int? consultationDurationMinutes,
       int? yearsExperience,
       String? imageUrl}) async {
     await _dio.put('/api/v1/doctors/me', data: {
       if (bio != null) "bio": bio,
-      if (hourlyRate != null) "hourly_rate": hourlyRate,
+      if (consultationFee != null) "consultation_fee": consultationFee,
+      if (consultationDurationMinutes != null)
+        "consultation_duration_minutes": consultationDurationMinutes,
       if (yearsExperience != null) "years_experience": yearsExperience,
       if (imageUrl != null) "image_url": imageUrl,
     });

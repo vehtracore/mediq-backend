@@ -1,5 +1,13 @@
 
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Float,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+)
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -14,7 +22,11 @@ class Doctor(Base):
     bio = Column(String, nullable=True)
     image_url = Column(String, nullable=True)
     
-    hourly_rate = Column(Float, default=0.0)
+    # Legacy field retained temporarily while appointment booking is migrated.
+    # It is kept synchronized with consultation_fee by the profile endpoint.
+    hourly_rate = Column(Float, default=4000.0)
+    consultation_fee = Column(Float, nullable=False, default=4000.0)
+    consultation_duration_minutes = Column(Integer, nullable=False, default=30)
     rating = Column(Float, default=5.0)
     review_count = Column(Integer, default=0)
     years_experience = Column(Integer, default=1) # <--- NEW FIELD
@@ -34,6 +46,8 @@ class Doctor(Base):
     bank_code = Column(String, nullable=True)               # e.g. "058" (GTBank)
     account_number = Column(String, nullable=True)           # 10-digit NUBAN
     paystack_subaccount_code = Column(String, nullable=True) # e.g. "SUB_abc123"
+    paystack_recipient_code = Column(String, nullable=True)  # e.g. "RCP_abc123"
+    total_earnings = Column(Numeric(14, 2), nullable=False, default=0)
 
     user = relationship("User")
 

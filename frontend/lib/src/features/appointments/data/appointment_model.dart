@@ -16,6 +16,11 @@ class Appointment {
   final String patientName;
   final DateTime?
       startTime; // null for VIP requests pending doctor's time proposal
+  final DateTime? patientJoinedAt;
+  final DateTime? doctorJoinedAt;
+  final DateTime? consultationStartedAt;
+  final DateTime? noShowMarkedAt;
+  final String? refundStatus;
   final String status;
   final String paymentStatus;
   final bool isAcknowledged;
@@ -33,6 +38,11 @@ class Appointment {
     this.patientId,
     required this.patientName,
     this.startTime,
+    this.patientJoinedAt,
+    this.doctorJoinedAt,
+    this.consultationStartedAt,
+    this.noShowMarkedAt,
+    this.refundStatus,
     required this.status,
     required this.paymentStatus,
     this.isAcknowledged = false,
@@ -72,6 +82,19 @@ class Appointment {
       startTime: json['start_time'] != null
           ? DateTime.parse(json['start_time'] as String).toLocal()
           : null,
+      patientJoinedAt: json['patient_joined_at'] != null
+          ? DateTime.parse(json['patient_joined_at'] as String).toLocal()
+          : null,
+      doctorJoinedAt: json['doctor_joined_at'] != null
+          ? DateTime.parse(json['doctor_joined_at'] as String).toLocal()
+          : null,
+      consultationStartedAt: json['consultation_started_at'] != null
+          ? DateTime.parse(json['consultation_started_at'] as String).toLocal()
+          : null,
+      noShowMarkedAt: json['no_show_marked_at'] != null
+          ? DateTime.parse(json['no_show_marked_at'] as String).toLocal()
+          : null,
+      refundStatus: json['refund_status'] as String?,
       status: (json['status'] as String?) ?? 'pending',
       paymentStatus: (json['payment_status'] as String?) ?? 'unpaid',
       isAcknowledged: json['is_acknowledged'] == true,
@@ -86,6 +109,11 @@ class Appointment {
   bool get isGeneralQueue => appointmentType == generalQueueType;
   bool get isSpecialistScheduled => appointmentType == specialistScheduledType;
   bool get isVipRequest => appointmentType == vipRequestType;
+  bool get isNoShow => const {
+        'patient_no_show',
+        'doctor_no_show',
+        'both_no_show',
+      }.contains(status);
 
   bool get canPatientCancel {
     final cancellableStatus = status == 'pending' ||
@@ -107,11 +135,23 @@ class Appointment {
   }
 
   bool get isConsultationUnlocked {
-    if (isGeneralQueue) return true;
+    if (status != 'confirmed') return false;
+    final actualStart = consultationStartedAt;
+    if (actualStart != null) {
+      return DateTime.now().isBefore(
+        actualStart.add(const Duration(minutes: 40)),
+      );
+    }
     final scheduledStart = startTime;
     if (scheduledStart == null) return false;
+    final now = DateTime.now();
+    if (isGeneralQueue) {
+      return !now.isBefore(scheduledStart) &&
+          now.isBefore(scheduledStart.add(const Duration(minutes: 5)));
+    }
     final unlockTime = scheduledStart.subtract(const Duration(minutes: 10));
-    return !DateTime.now().isBefore(unlockTime);
+    final joinDeadline = scheduledStart.add(const Duration(minutes: 15));
+    return !now.isBefore(unlockTime) && now.isBefore(joinDeadline);
   }
 
   bool get canPatientPay {

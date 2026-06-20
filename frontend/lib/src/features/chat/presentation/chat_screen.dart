@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/services.dart';
@@ -46,6 +47,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _isLoadingMore = false;
 
   bool _isPeerOnline = false;
+  bool _isConsultationClosed = false;
+  bool _isMessageGracePeriod = false;
+  bool _consultationHasStarted = false;
+  Timer? _videoEndTimer;
+  Timer? _messageEndTimer;
 
   RealtimeChannel? _supabaseChannel;
   bool _isPeerWaitingOnVideo = false;
@@ -106,8 +112,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           _isLoadingMore = false;
         });
       }
-    } catch (e) {
-      print("Fetch More Error: $e");
+    } catch (_) {
       if (mounted) {
         setState(() {
           _isLoadingMore = false;
@@ -132,8 +137,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             _mdcnNumber = doctor.licenseNumber;
           });
         }
-      } catch (e) {
-        print("Doctor fetch error: $e");
+      } catch (_) {
+        // The doctor identifier remains optional if profile lookup fails.
       }
     }
 
@@ -161,8 +166,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           _isLoading = false;
         });
       }
-    } catch (e) {
-      print("History Error: $e");
+    } catch (_) {
       if (mounted) setState(() => _isLoading = false);
     }
 
@@ -201,6 +205,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
       _channel!.stream.listen((data) {
         final newMessage = jsonDecode(data);
+
+        if (newMessage['type'] == 'consultation_timing') {
+          if (mounted) {
+            setState(() => _consultationHasStarted = true);
+          }
+          _scheduleConsultationTiming(
+            videoEndsAt:
+                DateTime.parse(newMessage['video_ends_at'] as String).toLocal(),
+            messagesEndAt:
+                DateTime.parse(newMessage['messages_end_at'] as String)
+                    .toLocal(),
+          );
+          return;
+        }
+
+        if (newMessage['type'] == 'consultation_closed') {
+          if (mounted) {
+            setState(() {
+              _isConsultationClosed = true;
+              _isMessageGracePeriod = false;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(newMessage['message'] as String)),
+            );
+          }
+          return;
+        }
 
         if (newMessage['type'] == 'call_signal' &&
             newMessage['user_id'] != _myUserId) {
@@ -259,7 +290,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             }
           });
         }
-      }, onError: (error) => print("WS Error: $error"));
+      }, onError: (_) {
+        if (mounted) setState(() => _isPeerOnline = false);
+      });
 
       // Setup Supabase Realtime Presence & Broadcast
       _supabaseChannel =
@@ -318,10 +351,55 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             });
           }
         });
-    } catch (e) {
-      print("Connection Error: $e");
+    } catch (_) {
+      if (mounted) setState(() => _isPeerOnline = false);
     }
   }
+
+  void _scheduleConsultationTiming({
+    required DateTime videoEndsAt,
+    required DateTime messagesEndAt,
+  }) {
+    _videoEndTimer?.cancel();
+    _messageEndTimer?.cancel();
+    final now = DateTime.now();
+
+    void startGracePeriod() {
+      if (!mounted || _isConsultationClosed) return;
+      setState(() => _isMessageGracePeriod = true);
+    }
+
+    if (!now.isBefore(messagesEndAt)) {
+      if (mounted) {
+        setState(() {
+          _isConsultationClosed = true;
+          _isMessageGracePeriod = false;
+        });
+      }
+      return;
+    }
+
+    if (!now.isBefore(videoEndsAt)) {
+      startGracePeriod();
+    } else {
+      _videoEndTimer = Timer(videoEndsAt.difference(now), startGracePeriod);
+    }
+
+    _messageEndTimer = Timer(messagesEndAt.difference(now), () {
+      if (!mounted) return;
+      setState(() {
+        _isConsultationClosed = true;
+        _isMessageGracePeriod = false;
+      });
+      _channel?.sink.close();
+    });
+  }
+
+  bool get _canStartCall =>
+      _consultationHasStarted &&
+      !_isMessageGracePeriod &&
+      !_isConsultationClosed &&
+      !widget.isCompleted;
 
   void _sendMessage({String? content, String? tempId}) {
     final textToSend = content ?? _msgController.text.trim();
@@ -395,6 +473,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
+    _videoEndTimer?.cancel();
+    _messageEndTimer?.cancel();
     _supabaseChannel?.unsubscribe();
     _channel?.sink.close();
     _msgController.dispose();
@@ -484,36 +564,41 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       children: [
                         IconButton(
                           icon: Icon(Icons.phone_outlined,
-                              color: theme.colorScheme.primary, size: 20),
-                          onPressed: () {
-                            if (_channel != null && _myUserId != null) {
-                              _channel!.sink.add(jsonEncode({
-                                "type": "call_signal",
-                                "media": "audio",
-                                "status": "initiated",
-                                "user_id": _myUserId
-                              }));
-                            }
-                            _supabaseChannel?.sendBroadcastMessage(
-                              event: 'call_waiting',
-                              payload: {
-                                'type': 'voice_waiting',
-                                'user_id': _myUserId
-                              },
-                            );
-                            context
-                                .push('/video_call?type=voice',
-                                    extra: widget.appointmentId)
-                                .then((_) {
-                              _supabaseChannel?.sendBroadcastMessage(
-                                event: 'call_waiting',
-                                payload: {
-                                  'type': 'cancel',
-                                  'user_id': _myUserId
-                                },
-                              );
-                            });
-                          },
+                              color: _canStartCall
+                                  ? theme.colorScheme.primary
+                                  : Colors.grey,
+                              size: 20),
+                          onPressed: _canStartCall
+                              ? () {
+                                  if (_channel != null && _myUserId != null) {
+                                    _channel!.sink.add(jsonEncode({
+                                      "type": "call_signal",
+                                      "media": "audio",
+                                      "status": "initiated",
+                                      "user_id": _myUserId
+                                    }));
+                                  }
+                                  _supabaseChannel?.sendBroadcastMessage(
+                                    event: 'call_waiting',
+                                    payload: {
+                                      'type': 'voice_waiting',
+                                      'user_id': _myUserId
+                                    },
+                                  );
+                                  context
+                                      .push('/video_call?type=voice',
+                                          extra: widget.appointmentId)
+                                      .then((_) {
+                                    _supabaseChannel?.sendBroadcastMessage(
+                                      event: 'call_waiting',
+                                      payload: {
+                                        'type': 'cancel',
+                                        'user_id': _myUserId
+                                      },
+                                    );
+                                  });
+                                }
+                              : null,
                         ),
                         if (_isPeerWaitingOnVoice)
                           const Positioned(
@@ -535,36 +620,41 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       children: [
                         IconButton(
                           icon: Icon(Icons.videocam_outlined,
-                              color: theme.colorScheme.primary, size: 20),
-                          onPressed: () {
-                            if (_channel != null && _myUserId != null) {
-                              _channel!.sink.add(jsonEncode({
-                                "type": "call_signal",
-                                "media": "video",
-                                "status": "initiated",
-                                "user_id": _myUserId
-                              }));
-                            }
-                            _supabaseChannel?.sendBroadcastMessage(
-                              event: 'call_waiting',
-                              payload: {
-                                'type': 'video_waiting',
-                                'user_id': _myUserId
-                              },
-                            );
-                            context
-                                .push('/video_call',
-                                    extra: widget.appointmentId)
-                                .then((_) {
-                              _supabaseChannel?.sendBroadcastMessage(
-                                event: 'call_waiting',
-                                payload: {
-                                  'type': 'cancel',
-                                  'user_id': _myUserId
-                                },
-                              );
-                            });
-                          },
+                              color: _canStartCall
+                                  ? theme.colorScheme.primary
+                                  : Colors.grey,
+                              size: 20),
+                          onPressed: _canStartCall
+                              ? () {
+                                  if (_channel != null && _myUserId != null) {
+                                    _channel!.sink.add(jsonEncode({
+                                      "type": "call_signal",
+                                      "media": "video",
+                                      "status": "initiated",
+                                      "user_id": _myUserId
+                                    }));
+                                  }
+                                  _supabaseChannel?.sendBroadcastMessage(
+                                    event: 'call_waiting',
+                                    payload: {
+                                      'type': 'video_waiting',
+                                      'user_id': _myUserId
+                                    },
+                                  );
+                                  context
+                                      .push('/video_call',
+                                          extra: widget.appointmentId)
+                                      .then((_) {
+                                    _supabaseChannel?.sendBroadcastMessage(
+                                      event: 'call_waiting',
+                                      payload: {
+                                        'type': 'cancel',
+                                        'user_id': _myUserId
+                                      },
+                                    );
+                                  });
+                                }
+                              : null,
                         ),
                         if (_isPeerWaitingOnVideo)
                           const Positioned(
@@ -740,7 +830,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     },
                   ),
           ),
-          widget.isCompleted
+          widget.isCompleted || _isConsultationClosed
               ? Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -755,67 +845,106 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     ),
                   ),
                 )
-              : Container(
-                  padding: const EdgeInsets.only(
-                      left: 16, right: 16, bottom: 24, top: 12),
-                  color: theme.colorScheme.surface,
-                  child: SafeArea(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? Colors.white.withOpacity(0.05)
-                            : Colors.grey[200],
-                        borderRadius: BorderRadius.circular(30),
-                        border: Border.all(
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_isMessageGracePeriod)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        color: Colors.amber.shade100,
+                        child: const Text(
+                          "Video has ended. Messaging remains open briefly to wrap up.",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.black87,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    if (!_consultationHasStarted && !_isConsultationClosed)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        color: theme.colorScheme.primary.withOpacity(0.08),
+                        child: const Text(
+                          "Waiting for the other participant. Calls unlock when both participants have joined.",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    Container(
+                      padding: const EdgeInsets.only(
+                          left: 16, right: 16, bottom: 24, top: 12),
+                      color: theme.colorScheme.surface,
+                      child: SafeArea(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 6),
+                          decoration: BoxDecoration(
                             color: isDark
                                 ? Colors.white.withOpacity(0.05)
-                                : Colors.transparent),
-                      ),
-                      child: Row(
-                        children: [
-                          IconButton(
-                            icon: Icon(Icons.add_photo_alternate,
-                                color: theme.colorScheme.onSurfaceVariant),
-                            onPressed: _handleImageUpload,
+                                : Colors.grey[200],
+                            borderRadius: BorderRadius.circular(30),
+                            border: Border.all(
+                                color: isDark
+                                    ? Colors.white.withOpacity(0.05)
+                                    : Colors.transparent),
                           ),
-                          Expanded(
-                            child: TextField(
-                              controller: _msgController,
-                              style: TextStyle(
-                                  color: theme.colorScheme.onSurfaceVariant),
-                              minLines: 1,
-                              maxLines: 5,
-                              keyboardType: TextInputType.multiline,
-                              textInputAction: TextInputAction.newline,
-                              decoration: InputDecoration(
-                                hintText: "Type a message...",
-                                hintStyle: TextStyle(
-                                    color: theme.colorScheme.onSurfaceVariant
-                                        .withOpacity(0.6)),
-                                border: InputBorder.none,
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 12),
+                          child: Row(
+                            children: [
+                              IconButton(
+                                icon: Icon(Icons.add_photo_alternate,
+                                    color: theme.colorScheme.onSurfaceVariant),
+                                onPressed: _handleImageUpload,
                               ),
-                            ),
+                              Expanded(
+                                child: TextField(
+                                  controller: _msgController,
+                                  style: TextStyle(
+                                      color:
+                                          theme.colorScheme.onSurfaceVariant),
+                                  minLines: 1,
+                                  maxLines: 5,
+                                  keyboardType: TextInputType.multiline,
+                                  textInputAction: TextInputAction.newline,
+                                  decoration: InputDecoration(
+                                    hintText: "Type a message...",
+                                    hintStyle: TextStyle(
+                                        color: theme
+                                            .colorScheme.onSurfaceVariant
+                                            .withOpacity(0.6)),
+                                    border: InputBorder.none,
+                                    contentPadding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 12),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.primary,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: IconButton(
+                                  onPressed: () => _sendMessage(),
+                                  icon: Icon(Icons.arrow_upward,
+                                      color: theme.colorScheme.onPrimary,
+                                      size: 20),
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 8),
-                          Container(
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primary,
-                              shape: BoxShape.circle,
-                            ),
-                            child: IconButton(
-                              onPressed: () => _sendMessage(),
-                              icon: Icon(Icons.arrow_upward,
-                                  color: theme.colorScheme.onPrimary, size: 20),
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ),
         ],
       ),

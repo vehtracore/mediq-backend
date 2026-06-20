@@ -221,7 +221,9 @@ async def register_doctor(
         indemnity_cert_url=indemnity_cert_url,
         is_verified=False, 
         is_available=False, 
-        hourly_rate=0.0,
+        hourly_rate=4000.0,
+        consultation_fee=4000.0,
+        consultation_duration_minutes=30,
         status="pending" # ✅ Pending State
     )
     db.add(new_doctor)
@@ -324,7 +326,9 @@ def get_my_doctor_profile(
             license_number=f"TBD-{current_user.id}",
             is_verified=False,
             is_available=True,
-            hourly_rate=5000.0,
+            hourly_rate=4000.0,
+            consultation_fee=4000.0,
+            consultation_duration_minutes=30,
             years_experience=0,
             bio="No bio yet."
         )

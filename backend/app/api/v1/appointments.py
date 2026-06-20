@@ -23,6 +23,10 @@ from app.models.user import User
 from app.models.review import Review
 from app.models.vault import ConsultationRecord
 from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, AppointmentUpdate, GeneralBookRequest, ReferralRequest, ReferralResponse, AppointmentProposeRequest, VIPBookRequest, ReferralCreate
+from app.services.consultation_pricing import calculate_consultation_split
+from app.services.consultation_payout_service import (
+    ensure_general_queue_payout,
+)
 from app.api import deps
 from app.core.notifications import dispatch_push
 
@@ -238,6 +242,14 @@ def map_appt(a, doc_name=None, patient_name=None):
         payment_status=a.payment_status,
         is_acknowledged=getattr(a, 'is_acknowledged', False),
         start_time=s_time,
+        patient_joined_at=getattr(a, 'patient_joined_at', None),
+        doctor_joined_at=getattr(a, 'doctor_joined_at', None),
+        consultation_started_at=getattr(a, 'consultation_started_at', None),
+        no_show_marked_at=getattr(a, 'no_show_marked_at', None),
+        refund_status=getattr(a, 'refund_status', None),
+        refund_reference=getattr(a, 'refund_reference', None),
+        refund_amount=getattr(a, 'refund_amount', None),
+        refund_processed_at=getattr(a, 'refund_processed_at', None),
         notes=a.notes,
         amount=getattr(a, 'amount', 0.0),
         has_review=has_rev,
@@ -545,9 +557,12 @@ def book_appointment(
         )
 
     # --- Step 2: Calculate financials ---
-    amount: float = slot.doctor.hourly_rate or 0.0
-    commission: float = round(amount * 0.30, 2)
-    payout: float = round(amount - commission, 2)
+    amount: float = (
+        slot.doctor.consultation_fee
+        or slot.doctor.hourly_rate
+        or 0.0
+    )
+    commission, payout = calculate_consultation_split(amount)
 
     # --- Step 3: Mark slot as booked and create appointment ---
     slot.is_booked = True
@@ -612,8 +627,9 @@ def book_appointment(
 @router.post("/book-general", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
 def book_general_consultation(req: GeneralBookRequest, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
     patient_price = 4000.0
-    platform_commission = round(patient_price * 0.30, 2)
-    doctor_payout = round(patient_price - platform_commission, 2)
+    platform_commission, doctor_payout = calculate_consultation_split(
+        patient_price
+    )
     new_appointment = Appointment(
         patient_id=current_user.id, doctor_id=None, slot_id=None,
         appointment_type=APPOINTMENT_TYPE_GENERAL_QUEUE,
@@ -651,16 +667,13 @@ def request_vip_appointment(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
-    # ── VIP FEE FLOOR: default to ₦3,000 when doctor hasn't set a rate ────
-    if not doctor.hourly_rate:
-        doctor.hourly_rate = 3000
-
     # Guardrail: refuse VIP requests for doctors who haven't configured their rate.
     # This prevents ₦0 appointments and confusing zero-value Paystack checkouts.
-    if not doctor.hourly_rate or doctor.hourly_rate <= 0:
+    consultation_fee = doctor.consultation_fee or doctor.hourly_rate or 0.0
+    if consultation_fee < 4000:
         raise HTTPException(
             status_code=400,
-            detail="Doctor has not set a consultation rate. Please try again later.",
+            detail="Doctor has not set a valid consultation rate. Please try again later.",
         )
 
     # ── PENDING-LOCK: Rule 2 — Global cap (max 3 pending requests platform-wide) ──
@@ -695,16 +708,14 @@ def request_vip_appointment(
             detail="You already have a pending request with this specialist.",
         )
 
-    # Pricing: derive from the doctor's actual rate, matching the /book endpoint
-    # commission model (30% platform / 70% doctor payout).
-    patient_price: float = doctor.hourly_rate
-    commission: float = round(patient_price * 0.30, 2)
-    doctor_payout: float = round(patient_price - commission, 2)
+    # Pricing: derive from the doctor's actual rate using the central split rule.
+    patient_price: float = consultation_fee
+    commission, doctor_payout = calculate_consultation_split(patient_price)
 
     logger.info(
-        "[VIP Request] Pricing resolved — doctor_id=%s hourly_rate=%.2f "
+        "[VIP Request] Pricing resolved — doctor_id=%s consultation_fee=%.2f "
         "patient_price=%.2f commission=%.2f payout=%.2f",
-        doctor.id, doctor.hourly_rate or 0.0,
+        doctor.id, consultation_fee,
         patient_price, commission, doctor_payout,
     )
 
@@ -925,6 +936,14 @@ def get_doctor_requests(db: Session = Depends(get_db), current_user: User = Depe
             payment_status=a.payment_status,
             is_acknowledged=getattr(a, 'is_acknowledged', False),
             start_time=a.slot.start_time if a.slot else a.start_time,
+            patient_joined_at=getattr(a, 'patient_joined_at', None),
+            doctor_joined_at=getattr(a, 'doctor_joined_at', None),
+            consultation_started_at=getattr(a, 'consultation_started_at', None),
+            no_show_marked_at=getattr(a, 'no_show_marked_at', None),
+            refund_status=getattr(a, 'refund_status', None),
+            refund_reference=getattr(a, 'refund_reference', None),
+            refund_amount=getattr(a, 'refund_amount', None),
+            refund_processed_at=getattr(a, 'refund_processed_at', None),
             notes=enriched_notes,
             has_review=False,
             amount=getattr(a, 'amount', 0.0),
@@ -979,6 +998,14 @@ def get_general_queue(db: Session = Depends(get_db), current_user: User = Depend
             payment_status=a.payment_status,
             is_acknowledged=getattr(a, 'is_acknowledged', False),
             start_time=a.start_time,
+            patient_joined_at=getattr(a, 'patient_joined_at', None),
+            doctor_joined_at=getattr(a, 'doctor_joined_at', None),
+            consultation_started_at=getattr(a, 'consultation_started_at', None),
+            no_show_marked_at=getattr(a, 'no_show_marked_at', None),
+            refund_status=getattr(a, 'refund_status', None),
+            refund_reference=getattr(a, 'refund_reference', None),
+            refund_amount=getattr(a, 'refund_amount', None),
+            refund_processed_at=getattr(a, 'refund_processed_at', None),
             notes=triage_summary or None,
             has_review=False,
             amount=getattr(a, 'amount', 0.0),
@@ -1010,6 +1037,7 @@ def claim_appointment(appt_id: int, db: Session = Depends(get_db), current_user:
             {
                 Appointment.doctor_id: doctor.id,
                 Appointment.status: "confirmed",
+                Appointment.start_time: datetime.utcnow(),
             },
             synchronize_session=False,
         )
@@ -1170,6 +1198,12 @@ def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_us
             detail="An appointment cannot be completed before payment is verified.",
         )
 
+    if getattr(appt, "consultation_started_at", None) is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The consultation cannot be completed before both participants join.",
+        )
+
     appt.status = "completed"
 
     # ── Compile referral data if the doctor issued a hospital referral ───
@@ -1214,6 +1248,7 @@ def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_us
             appt.id, bool(appt.prescription), bool(referrals),
         )
 
+    ensure_general_queue_payout(db, appt)
     db.commit()
     db.refresh(appt)
     _notify_patient(
@@ -1366,6 +1401,14 @@ def get_doctor_confirmed_appointments(db: Session = Depends(get_db), current_use
             payment_status=a.payment_status,
             is_acknowledged=getattr(a, 'is_acknowledged', False),
             start_time=start,
+            patient_joined_at=getattr(a, 'patient_joined_at', None),
+            doctor_joined_at=getattr(a, 'doctor_joined_at', None),
+            consultation_started_at=getattr(a, 'consultation_started_at', None),
+            no_show_marked_at=getattr(a, 'no_show_marked_at', None),
+            refund_status=getattr(a, 'refund_status', None),
+            refund_reference=getattr(a, 'refund_reference', None),
+            refund_amount=getattr(a, 'refund_amount', None),
+            refund_processed_at=getattr(a, 'refund_processed_at', None),
             notes=enriched_notes,
             has_review=False,
             amount=getattr(a, 'amount', 0.0),
@@ -1457,6 +1500,14 @@ def propose_appointment_time(
         payment_status=appt.payment_status,
         is_acknowledged=getattr(appt, 'is_acknowledged', False),
         start_time=appt.start_time,
+        patient_joined_at=getattr(appt, 'patient_joined_at', None),
+        doctor_joined_at=getattr(appt, 'doctor_joined_at', None),
+        consultation_started_at=getattr(appt, 'consultation_started_at', None),
+        no_show_marked_at=getattr(appt, 'no_show_marked_at', None),
+        refund_status=getattr(appt, 'refund_status', None),
+        refund_reference=getattr(appt, 'refund_reference', None),
+        refund_amount=getattr(appt, 'refund_amount', None),
+        refund_processed_at=getattr(appt, 'refund_processed_at', None),
         notes=appt.notes,
         has_review=False,
         amount=getattr(appt, 'amount', 0.0),

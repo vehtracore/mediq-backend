@@ -78,7 +78,7 @@ from app.core.limiter import limiter
 from app.core.database import engine, Base, SessionLocal
 
 # ✅ KEEP "app." prefix because your main.py is inside the app folder
-from app.api.v1 import auth, chat, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab, vault, voice, notifications
+from app.api.v1 import auth, chat, ai_consent, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab, vault, voice, notifications
 
 from app.api.v1 import emergency
 from app.api.v1 import payments
@@ -87,8 +87,12 @@ from app.api.v1 import support
 from app.api.v1.auth import scrub_expired_accounts
 from app.services.watchdog_service import sweep_pending_transactions
 from app.core.scheduler import (
+    complete_expired_consultations,
     cleanup_expired_slots,
     cleanup_old_notifications,
+    mark_consultation_no_shows,
+    process_approved_general_queue_payouts,
+    process_approved_consultation_refunds,
     sweep_stale_appointments,
 )
 
@@ -147,6 +151,68 @@ def _apply_schema_patches():
         """
         ALTER TABLE doctors
         ADD COLUMN IF NOT EXISTS paystack_subaccount_code VARCHAR NULL;
+        """,
+        """
+        ALTER TABLE doctors
+        ADD COLUMN IF NOT EXISTS paystack_recipient_code VARCHAR NULL;
+        """,
+        # Doctor-set flat consultation pricing for specialist and VIP flows.
+        """
+        ALTER TABLE doctors
+        ADD COLUMN IF NOT EXISTS consultation_fee DOUBLE PRECISION NULL;
+        """,
+        """
+        ALTER TABLE doctors
+        ADD COLUMN IF NOT EXISTS consultation_duration_minutes INTEGER NULL;
+        """,
+        """
+        ALTER TABLE doctors
+        DROP CONSTRAINT IF EXISTS ck_doctors_consultation_minimum_fee;
+        """,
+        """
+        ALTER TABLE doctors
+        DROP CONSTRAINT IF EXISTS ck_doctors_consultation_minimum_fee_30;
+        """,
+        """
+        ALTER TABLE doctors
+        DROP CONSTRAINT IF EXISTS ck_doctors_consultation_duration;
+        """,
+        """
+        ALTER TABLE doctors
+        DROP CONSTRAINT IF EXISTS ck_doctors_consultation_duration_30;
+        """,
+        """
+        UPDATE doctors
+        SET consultation_duration_minutes = 30;
+        """,
+        """
+        UPDATE doctors
+        SET consultation_fee = GREATEST(
+            COALESCE(consultation_fee, hourly_rate, 0),
+            4000
+        );
+        """,
+        """
+        UPDATE doctors
+        SET hourly_rate = consultation_fee
+        WHERE hourly_rate IS DISTINCT FROM consultation_fee;
+        """,
+        """
+        ALTER TABLE doctors
+        ALTER COLUMN consultation_fee SET DEFAULT 4000,
+        ALTER COLUMN consultation_fee SET NOT NULL,
+        ALTER COLUMN consultation_duration_minutes SET DEFAULT 30,
+        ALTER COLUMN consultation_duration_minutes SET NOT NULL;
+        """,
+        """
+        ALTER TABLE doctors
+        ADD CONSTRAINT ck_doctors_consultation_duration
+        CHECK (consultation_duration_minutes = 30);
+        """,
+        """
+        ALTER TABLE doctors
+        ADD CONSTRAINT ck_doctors_consultation_minimum_fee
+        CHECK (consultation_fee >= 4000);
         """,
         # Dead Letter Queue — failed webhook events (added 2026-05-01)
         """
@@ -235,6 +301,56 @@ def _apply_schema_patches():
         """,
         # ── AI quota tracking columns (added 2026-05-11) ─────────────────────
         # last_chat_date — used by /api/v1/chat/analyze for inline daily resets
+        # Versioned, one-time AI consent (added 2026-06-19)
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS ai_consent_granted_at TIMESTAMPTZ NULL;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS ai_consent_version VARCHAR NULL;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS ai_consent_withdrawn_at TIMESTAMPTZ NULL;
+        """,
+        # AI Health Vault summary provenance and review state (added 2026-06-19)
+        """
+        ALTER TABLE ai_chat_summaries
+        ADD COLUMN IF NOT EXISTS source VARCHAR NOT NULL DEFAULT 'ai_generated';
+        """,
+        """
+        ALTER TABLE ai_chat_summaries
+        ADD COLUMN IF NOT EXISTS doctor_review_status VARCHAR NOT NULL DEFAULT 'not_reviewed';
+        """,
+        """
+        ALTER TABLE ai_chat_summaries
+        ADD COLUMN IF NOT EXISTS reviewed_by_doctor_id INTEGER NULL;
+        """,
+        """
+        ALTER TABLE ai_chat_summaries
+        ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ NULL;
+        """,
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'fk_ai_chat_summaries_reviewed_by_doctor'
+            ) THEN
+                ALTER TABLE ai_chat_summaries
+                ADD CONSTRAINT fk_ai_chat_summaries_reviewed_by_doctor
+                FOREIGN KEY (reviewed_by_doctor_id)
+                REFERENCES doctors(id)
+                ON DELETE SET NULL;
+            END IF;
+        END $$;
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_ai_chat_summaries_reviewed_by_doctor_id
+        ON ai_chat_summaries (reviewed_by_doctor_id);
+        """,
         """
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS last_chat_date DATE NULL;
@@ -319,10 +435,172 @@ def _apply_schema_patches():
         """,
         # ── Doctor earnings ledger (added 2026-05-28) ─────────────────────────
         # Accumulated from Paystack transfer.success webhook events.
-        # Stored in NGN (kobo ÷ 100).  Never decremented by the platform.
+        # Stored in NGN (kobo ÷ 100); reversed transfers remove the credit.
         """
         ALTER TABLE doctors
         ADD COLUMN IF NOT EXISTS total_earnings NUMERIC(14,2) NOT NULL DEFAULT 0.00;
+        """,
+        # Consultation attendance and no-show tracking (added 2026-06-20).
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS patient_joined_at TIMESTAMP NULL;
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS doctor_joined_at TIMESTAMP NULL;
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS consultation_started_at TIMESTAMP NULL;
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS no_show_marked_at TIMESTAMP NULL;
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS refund_status VARCHAR(32) NULL;
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS refund_reference VARCHAR NULL;
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS refund_id VARCHAR NULL;
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS refund_amount DOUBLE PRECISION NULL;
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS refund_approved_by_admin_id INTEGER NULL
+            REFERENCES users(id);
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS refund_approved_at TIMESTAMP NULL;
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS refund_rejected_by_admin_id INTEGER NULL
+            REFERENCES users(id);
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS refund_rejected_at TIMESTAMP NULL;
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS refund_processed_at TIMESTAMP NULL;
+        """,
+        """
+        ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS refund_last_error VARCHAR NULL;
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ix_appointments_refund_reference
+        ON appointments (refund_reference)
+        WHERE refund_reference IS NOT NULL;
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_appointments_refund_id
+        ON appointments (refund_id);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_appointments_refund_approved_admin
+        ON appointments (refund_approved_by_admin_id);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_appointments_refund_rejected_admin
+        ON appointments (refund_rejected_by_admin_id);
+        """,
+        """
+        UPDATE appointments
+        SET refund_status = 'awaiting_admin'
+        WHERE refund_status = 'pending'
+          AND refund_approved_at IS NULL;
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_appointments_consultation_started_at
+        ON appointments (consultation_started_at);
+        """,
+        # Idempotent general-queue doctor payout ledger (added 2026-06-20).
+        """
+        CREATE TABLE IF NOT EXISTS consultation_payouts (
+            id SERIAL PRIMARY KEY,
+            appointment_id INTEGER NOT NULL UNIQUE
+                REFERENCES appointments(id),
+            doctor_id INTEGER NOT NULL REFERENCES doctors(id),
+            amount NUMERIC(14,2) NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'awaiting_admin',
+            reference VARCHAR(64) NOT NULL UNIQUE,
+            recipient_code VARCHAR NULL,
+            transfer_code VARCHAR NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error VARCHAR NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            paid_at TIMESTAMP NULL,
+            approved_by_admin_id INTEGER NULL REFERENCES users(id),
+            approved_at TIMESTAMP NULL,
+            rejected_by_admin_id INTEGER NULL REFERENCES users(id),
+            rejected_at TIMESTAMP NULL,
+            rejection_reason VARCHAR NULL
+        );
+        """,
+        """
+        ALTER TABLE consultation_payouts
+        ADD COLUMN IF NOT EXISTS approved_by_admin_id INTEGER NULL
+            REFERENCES users(id);
+        """,
+        """
+        ALTER TABLE consultation_payouts
+        ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP NULL;
+        """,
+        """
+        ALTER TABLE consultation_payouts
+        ADD COLUMN IF NOT EXISTS rejected_by_admin_id INTEGER NULL
+            REFERENCES users(id);
+        """,
+        """
+        ALTER TABLE consultation_payouts
+        ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP NULL;
+        """,
+        """
+        ALTER TABLE consultation_payouts
+        ADD COLUMN IF NOT EXISTS rejection_reason VARCHAR NULL;
+        """,
+        """
+        ALTER TABLE consultation_payouts
+        ALTER COLUMN status SET DEFAULT 'awaiting_admin';
+        """,
+        """
+        UPDATE consultation_payouts
+        SET status = 'awaiting_admin'
+        WHERE status = 'pending'
+           OR (status = 'blocked' AND approved_at IS NULL);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_consultation_payouts_status
+        ON consultation_payouts (status);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_consultation_payouts_doctor_id
+        ON consultation_payouts (doctor_id);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_consultation_payouts_transfer_code
+        ON consultation_payouts (transfer_code);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_consultation_payouts_approved_admin
+        ON consultation_payouts (approved_by_admin_id);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_consultation_payouts_rejected_admin
+        ON consultation_payouts (rejected_by_admin_id);
         """,
     ]
     with engine.connect() as conn:
@@ -380,6 +658,19 @@ async def _run_scrubber_job_async():
         db.close()
 
 
+async def _run_ai_temp_cleanup_async():
+    """Run Cloudinary cleanup off the event loop."""
+    import asyncio
+
+    try:
+        await asyncio.to_thread(chat.cleanup_stale_temp_images)
+    except Exception as exc:
+        _sched_log.exception(
+            "[AI TEMP IMAGE] Scheduled cleanup failed: %s",
+            exc,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan: start AsyncIOScheduler on boot, stop on shutdown.
@@ -390,6 +681,7 @@ async def lifespan(app: FastAPI):
       • doctor_slot_cleanup     — daily 00:00 UTC  (delete expired free slots)
       • stale_appointment_sweep — hourly           (close/cancel stale bookings)
       • notification_cleanup    — daily 00:15 UTC  (90-day retention cleanup)
+      • ai_temp_image_cleanup   — hourly           (delete abandoned AI images)
     """
     scheduler = AsyncIOScheduler(timezone="UTC")
 
@@ -429,12 +721,57 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
-    # Job 5: Notification retention cleanup — nightly at 00:15 UTC
+    # Job 5: End consultations after the 10-minute message grace period.
+    scheduler.add_job(
+        complete_expired_consultations,
+        trigger=IntervalTrigger(minutes=1),
+        id="consultation_completion_sweep",
+        name="Consultation completion sweep after message grace",
+        replace_existing=True,
+    )
+
+    # Job 6: Mark absent participants after the attendance grace window.
+    scheduler.add_job(
+        mark_consultation_no_shows,
+        trigger=IntervalTrigger(minutes=1),
+        id="consultation_no_show_sweep",
+        name="Consultation attendance no-show sweep",
+        replace_existing=True,
+    )
+
+    # Job 7: Initiate admin-approved general-queue doctor payouts.
+    scheduler.add_job(
+        process_approved_general_queue_payouts,
+        trigger=IntervalTrigger(minutes=1),
+        id="general_queue_payout_processor",
+        name="General queue doctor payout processor",
+        replace_existing=True,
+    )
+
+    # Job 8: Initiate admin-approved no-show patient refunds.
+    scheduler.add_job(
+        process_approved_consultation_refunds,
+        trigger=IntervalTrigger(minutes=1),
+        id="consultation_refund_processor",
+        name="Admin-approved consultation refund processor",
+        replace_existing=True,
+    )
+
+    # Job 8: Notification retention cleanup — nightly at 00:15 UTC
     scheduler.add_job(
         cleanup_old_notifications,
         trigger=CronTrigger(hour=0, minute=15, timezone="UTC"),
         id="notification_retention_cleanup",
         name="Nightly 90-day notification retention cleanup",
+        replace_existing=True,
+    )
+
+    # Job 9: Temporary AI image cleanup — hourly
+    scheduler.add_job(
+        _run_ai_temp_cleanup_async,
+        trigger=IntervalTrigger(hours=1),
+        id="ai_temp_image_cleanup",
+        name="Hourly temporary AI image cleanup",
         replace_existing=True,
     )
 
@@ -444,7 +781,8 @@ async def lifespan(app: FastAPI):
         "NDPA scrubber @ 02:00 UTC daily | "
         "Payment watchdog every 5 min | "
         "Doctor-slot cleanup @ 00:00 UTC daily | "
-        "Stale-appointment sweep every 1 hour."
+        "Stale-appointment sweep every 1 hour | "
+        "AI temporary-image cleanup every 1 hour."
     )
 
     yield  # ← application runs here
@@ -533,6 +871,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["AI Health Assistant"])
+app.include_router(ai_consent.router, prefix="/api/v1/ai", tags=["AI Consent"])
 app.include_router(doctors.router, prefix="/api/v1/doctors", tags=["Doctors"])
 app.include_router(appointments.router, prefix="/api/v1/appointments", tags=["Appointments"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin Control"])

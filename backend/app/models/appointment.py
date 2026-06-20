@@ -55,6 +55,30 @@ class Appointment(Base):
     # reviewed rather than being assigned the wrong workflow.
     appointment_type = Column(String(32), nullable=True, index=True)
     start_time = Column(DateTime, default=datetime.utcnow, nullable=True, index=True)
+    patient_joined_at = Column(DateTime, nullable=True)
+    doctor_joined_at = Column(DateTime, nullable=True)
+    consultation_started_at = Column(DateTime, nullable=True, index=True)
+    no_show_marked_at = Column(DateTime, nullable=True)
+    refund_status = Column(String(32), nullable=True)
+    refund_reference = Column(String, nullable=True, unique=True, index=True)
+    refund_id = Column(String, nullable=True, index=True)
+    refund_amount = Column(Float, nullable=True)
+    refund_approved_by_admin_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True,
+    )
+    refund_approved_at = Column(DateTime, nullable=True)
+    refund_rejected_by_admin_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True,
+    )
+    refund_rejected_at = Column(DateTime, nullable=True)
+    refund_processed_at = Column(DateTime, nullable=True)
+    refund_last_error = Column(String, nullable=True)
     status = Column(String, default="pending", index=True)
     payment_status = Column(String, default="unpaid")
     is_acknowledged = Column(Boolean, default=False)
@@ -141,6 +165,29 @@ def appointment_start_utc(appointment: Appointment) -> datetime | None:
     return as_utc(getattr(appointment, "start_time", None))
 
 
+def consultation_started_utc(appointment: Appointment) -> datetime | None:
+    """Return the immutable time when both consultation participants joined."""
+    return as_utc(getattr(appointment, "consultation_started_at", None))
+
+
+def attendance_deadline_utc(appointment: Appointment) -> datetime | None:
+    """Return the latest time the second participant may join."""
+    from app.services.consultation_pricing import (
+        GENERAL_QUEUE_JOIN_GRACE_MINUTES,
+        SCHEDULED_JOIN_GRACE_MINUTES,
+    )
+
+    scheduled_start = appointment_start_utc(appointment)
+    if scheduled_start is None:
+        return None
+    grace_minutes = (
+        GENERAL_QUEUE_JOIN_GRACE_MINUTES
+        if resolve_appointment_type(appointment) == APPOINTMENT_TYPE_GENERAL_QUEUE
+        else SCHEDULED_JOIN_GRACE_MINUTES
+    )
+    return scheduled_start + timedelta(minutes=grace_minutes)
+
+
 def consultation_room_is_unlocked(
     appointment: Appointment,
     *,
@@ -152,13 +199,26 @@ def consultation_room_is_unlocked(
     claims them. Scheduled specialist and VIP consultations unlock ten minutes
     before their effective start time.
     """
-    if resolve_appointment_type(appointment) == APPOINTMENT_TYPE_GENERAL_QUEUE:
-        return True
-
     start = appointment_start_utc(appointment)
     if start is None:
         return False
 
     now_utc = as_utc(now) if now is not None else datetime.now(timezone.utc)
     assert now_utc is not None
-    return now_utc >= start - timedelta(minutes=10)
+    if consultation_started_utc(appointment) is not None:
+        return True
+
+    deadline = attendance_deadline_utc(appointment)
+    if deadline is not None and now_utc >= deadline:
+        return False
+
+    if resolve_appointment_type(appointment) == APPOINTMENT_TYPE_GENERAL_QUEUE:
+        return now_utc >= start
+
+    from app.services.consultation_pricing import (
+        CONSULTATION_ROOM_EARLY_ACCESS_MINUTES,
+    )
+
+    return now_utc >= start - timedelta(
+        minutes=CONSULTATION_ROOM_EARLY_ACCESS_MINUTES
+    )

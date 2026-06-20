@@ -50,8 +50,12 @@ class VaultHistoryResponse(BaseModel):
     details: Optional[str] = None
 
     # Structured clinical data — only populated for consultation records
+    source: Optional[str] = None
+    doctor_review_status: Optional[str] = None
+    reviewed_by_doctor_id: Optional[int] = None
+    reviewed_at: Optional[datetime] = None
+
     prescriptions: Optional[Any] = None
     referrals: Optional[Any] = None
 
     model_config = ConfigDict(from_attributes=True)
-

@@ -19,20 +19,15 @@ class AppointmentRepository {
   void _logAuthHandshake(String endpoint) {
     if (!kDebugMode) return;
     final session = Supabase.instance.client.auth.currentSession;
-    final user = Supabase.instance.client.auth.currentUser;
     debugPrint(
-      '🔐 [AUTH HANDSHAKE] → $endpoint\n'
-      '   supabase_uid : ${user?.id ?? "NULL — not logged in!"}\n'
-      '   email        : ${user?.email ?? "N/A"}\n'
-      '   token_present: ${session?.accessToken != null}\n'
-      '   token_expires: ${session?.expiresAt != null ? DateTime.fromMillisecondsSinceEpoch(session!.expiresAt! * 1000).toIso8601String() : "N/A"}',
+      '[APPOINTMENTS] $endpoint authenticated=${session?.accessToken != null}',
     );
   }
 
-  // ── Internal helper: log the raw JSON response ──
-  void _logResponse(String endpoint, dynamic data) {
+  // Response bodies can contain health data, so only the endpoint is logged.
+  void _logResponse(String endpoint, dynamic _) {
     if (!kDebugMode) return;
-    debugPrint('📬 [RAW RESPONSE] ← $endpoint\n   data: $data');
+    debugPrint('[APPOINTMENTS] $endpoint completed');
   }
 
   // --- PATIENT METHODS ---
@@ -58,7 +53,6 @@ class AppointmentRepository {
   }) async {
     const ep = 'POST /api/v1/appointments/book';
     _logAuthHandshake(ep);
-    debugPrint('📤 [PAYLOAD] → $ep  slot_id=$slotId notes="$notes"');
     try {
       final response = await _dio.post(
         '/api/v1/appointments/book',
@@ -216,7 +210,6 @@ class AppointmentRepository {
   Future<Appointment> bookGeneralConsultation(String notes) async {
     const ep = 'POST /api/v1/appointments/book-general';
     _logAuthHandshake(ep);
-    debugPrint('📤 [PAYLOAD] → $ep  notes="$notes"');
     try {
       final response = await _dio.post(
         '/api/v1/appointments/book-general',

@@ -281,6 +281,10 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
       statusBgColor = Colors.grey.shade200;
       statusTextColor = Colors.grey.shade700;
     }
+    if (appointment.isNoShow) {
+      statusBgColor = Colors.red.withOpacity(0.1);
+      statusTextColor = Colors.red.shade700;
+    }
     // VIP: doctor proposed a time, patient needs to pay
     if (appointment.status == 'awaiting_payment') {
       statusBgColor = const Color(0xFF7C3AED).withOpacity(0.1);
@@ -365,6 +369,23 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                               style: theme.textTheme.labelSmall,
                             ),
                           ),
+                          if (appointment.refundStatus == 'pending')
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                'REFUND PENDING REVIEW',
+                                style: TextStyle(
+                                  color: Colors.amber.shade900,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ]),

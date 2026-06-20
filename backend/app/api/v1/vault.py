@@ -71,6 +71,10 @@ def create_ai_summary(
         patient_id=current_user.id,
         topic=payload.topic,
         summary_text=payload.summary_text,
+        source="ai_generated",
+        doctor_review_status="not_reviewed",
+        reviewed_by_doctor_id=None,
+        reviewed_at=None,
         created_at=now,
     )
     db.add(record)
@@ -91,6 +95,10 @@ def create_ai_summary(
         doctor_name=None,
         topic_or_reason=record.topic,
         details=record.summary_text,
+        source=record.source,
+        doctor_review_status=record.doctor_review_status,
+        reviewed_by_doctor_id=record.reviewed_by_doctor_id,
+        reviewed_at=record.reviewed_at,
         prescriptions=None,
         referrals=None,
     )
@@ -140,6 +148,10 @@ def get_vault_history(
                 doctor_name=None,
                 topic_or_reason=s.topic,
                 details=s.summary_text,
+                source=s.source,
+                doctor_review_status=s.doctor_review_status,
+                reviewed_by_doctor_id=s.reviewed_by_doctor_id,
+                reviewed_at=s.reviewed_at,
                 prescriptions=None,
                 referrals=None,
             )
@@ -250,14 +262,15 @@ def export_vault_records(
         )
 
     # ── 3. Build a unified, time-sorted list of records ──────────────────────
-    # Each entry: (created_at, title, date_str, body)
+    # Each entry:
+    # (created_at, title, date_str, body, body_parts, is_ai_summary)
     entries: list[tuple] = []
 
     for s in ai_summaries:
-        title = f"AI Health Summary - {s.topic}"
+        title = "AI Summary"
         date_str = s.created_at.strftime("%d %b %Y, %H:%M UTC")
-        body = s.summary_text or ""
-        entries.append((s.created_at, title, date_str, body, []))
+        body = f"Topic: {s.topic}\n\n{s.summary_text or ''}"
+        entries.append((s.created_at, title, date_str, body, [], True))
 
     for c in consultations:
         title = "Consultation Record"
@@ -272,7 +285,7 @@ def export_vault_records(
         if c.referrals:
             body_parts.append(("clinical", f"Referrals:\n{c.referrals}"))
         body = "\n\n".join(text for _, text in body_parts) if body_parts else "No clinical details recorded."
-        entries.append((c.created_at, title, date_str, body, body_parts))
+        entries.append((c.created_at, title, date_str, body, body_parts, False))
 
     # Sort newest-first
     entries.sort(key=lambda e: e[0], reverse=True)
@@ -281,7 +294,7 @@ def export_vault_records(
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
 
-    for idx, (_, title, date_str, body, body_parts) in enumerate(entries):
+    for idx, (_, title, date_str, body, body_parts, is_ai_summary) in enumerate(entries):
         pdf.add_page()
 
         # ── Header bar ──────────────────────────────────────────────────────
@@ -350,6 +363,21 @@ def export_vault_records(
                     pdf.ln(4)
 
         # ── Footer ───────────────────────────────────────────────────────────
+        if is_ai_summary:
+            pdf.set_draw_color(220, 220, 230)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+            pdf.ln(4)
+            pdf.set_font("Helvetica", "I", 9)
+            pdf.set_text_color(100, 100, 120)
+            pdf.multi_cell(
+                0,
+                6,
+                (
+                    "Generated with AI assistance. Review important health "
+                    "decisions with a qualified healthcare professional."
+                ),
+            )
+
         pdf.set_y(-15)
         pdf.set_font("Helvetica", "I", 8)
         pdf.set_text_color(150, 150, 160)

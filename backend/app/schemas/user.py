@@ -80,6 +80,11 @@ class UserResponse(UserBase):
     paystack_subscription_code: Optional[str] = None  # needed for field access
     subscription_expiry: Optional[datetime] = None
 
+    # AI consent state
+    ai_consent_granted_at: Optional[datetime] = None
+    ai_consent_version: Optional[str] = None
+    ai_consent_withdrawn_at: Optional[datetime] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 class DependentUser(BaseModel):
