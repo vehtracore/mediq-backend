@@ -95,9 +95,11 @@ class Appointment(Base):
     # --- Doctor Prescription ---
     prescription = Column(Text, nullable=True)           # Free-text prescription / medication plan
 
-    patient = relationship("User")
+    patient = relationship("User", foreign_keys=[patient_id])
     doctor = relationship("Doctor")
     slot = relationship("DoctorSlot", backref="appointment", uselist=False)
+    refund_approved_by_admin = relationship("User", foreign_keys=[refund_approved_by_admin_id])
+    refund_rejected_by_admin = relationship("User", foreign_keys=[refund_rejected_by_admin_id])
     # NEW: Link to review
     review = relationship("Review", back_populates="appointment", uselist=False)
 

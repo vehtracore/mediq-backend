@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:mediq_app/src/core/api/app_exception.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 final videoRepositoryProvider = Provider(
   (ref) => VideoRepository(ref.watch(dioProvider)),
@@ -16,7 +18,10 @@ class VideoRepository {
       return response.data;
       // Returns: { "token": "...", "channel": "...", "app_id": "...", "uid": 123 }
     } catch (e) {
-      throw Exception("Failed to join call: $e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 }

@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/api/dio_client.dart';
+import '../../../core/api/app_exception.dart';
+import '../../../core/utils/ui_error_formatter.dart';
 
 // --- Data Model ---
 class HealthTip {
@@ -75,7 +77,10 @@ class ContentRepository {
       final List data = response.data;
       return data.map((json) => HealthTip.fromJson(json)).toList();
     } catch (e) {
-      throw Exception('Failed to load content');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -100,7 +105,10 @@ class ContentRepository {
         },
       );
     } catch (e) {
-      throw Exception('Failed to create tip');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -129,7 +137,10 @@ class ContentRepository {
         },
       );
     } catch (e) {
-      throw Exception('Failed to update tip');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -137,7 +148,10 @@ class ContentRepository {
     try {
       await _dio.delete('/api/v1/content/admin/tips/$id');
     } catch (e) {
-      throw Exception('Failed to delete tip');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 }

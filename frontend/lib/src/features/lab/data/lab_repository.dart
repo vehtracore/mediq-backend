@@ -2,6 +2,8 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:mediq_app/src/core/api/app_exception.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'lab_result_model.dart';
 import 'package:http_parser/http_parser.dart';
 
@@ -41,16 +43,9 @@ class LabRepository {
 
       return LabAnalysisResponse.fromJson(response.data);
     } catch (e) {
-      if (e is DioException && e.response != null) {
-        final detail = e.response?.data is Map
-            ? e.response?.data['detail']?.toString()
-            : null;
-        if (detail != null && detail.isNotEmpty) {
-          throw Exception(detail);
-        }
-      }
-      throw Exception(
-        'Image analysis is temporarily unavailable. Please try again.',
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
       );
     }
   }

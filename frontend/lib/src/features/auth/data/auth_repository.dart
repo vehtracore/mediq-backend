@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:http_parser/http_parser.dart';
 import 'package:mediq_app/src/core/api/app_exception.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_model.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as supabase;
@@ -63,9 +64,12 @@ class AuthRepository {
       );
       await _persistSession(response.session);
     } on supabase.AuthException catch (e) {
-      throw Exception(e.message);
+      throw AppException(e.message, originalException: e);
     } catch (e) {
-      throw Exception("Login failed: $e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -91,12 +95,12 @@ class AuthRepository {
         });
       }
     } on supabase.AuthException catch (e) {
-      throw Exception(e.message);
-    } on DioException catch (e) {
-      final msg = e.response?.data['detail'] ?? "Signup failed. Please try again.";
-      throw Exception(msg);
+      throw AppException(e.message, originalException: e);
     } catch (e) {
-      throw Exception("Signup failed: $e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -172,7 +176,10 @@ class AuthRepository {
 
       await _dio.put('/api/v1/auth/me', data: data);
     } catch (e) {
-      throw Exception("Update failed: $e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -193,7 +200,10 @@ class AuthRepository {
       final response = await _dio.get('/api/v1/auth/my-doctor-profile');
       return Doctor.fromJson(response.data);
     } catch (e) {
-      throw Exception("Failed to load doctor profile: $e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -212,11 +222,11 @@ class AuthRepository {
 
       final response = await _dio.post('/api/v1/doctors/me/reapply', data: data);
       return Doctor.fromJson(response.data);
-    } on DioException catch (e) {
-      final msg = e.response?.data['detail'] ?? "Reapply failed. Please try again.";
-      throw Exception(msg);
     } catch (e) {
-      throw Exception("Reapply failed: $e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -265,7 +275,10 @@ class AuthRepository {
       final formData = FormData.fromMap(mapData);
       await _dio.post('/api/v1/auth/doctor/register', data: formData);
     } catch (e) {
-      throw Exception("Doctor registration failed: $e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -275,7 +288,10 @@ class AuthRepository {
     try {
       await _dio.post('/api/v1/subscription/upgrade');
     } catch (e) {
-      throw Exception("Upgrade failed: $e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -337,11 +353,11 @@ class AuthRepository {
         'subject': subject,
         'message': message,
       });
-    } on DioException catch (e) {
-      final msg = e.response?.data['detail'] ?? "Failed to send support message.";
-      throw Exception(msg);
     } catch (e) {
-      throw Exception("Support message failed: $e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -351,11 +367,11 @@ class AuthRepository {
     try {
       final response = await _dio.get('/api/v1/family/invite-code');
       return response.data['invite_code'];
-    } on DioException catch (e) {
-      final msg = e.response?.data['detail'] ?? "Failed to generate invite.";
-      throw Exception(msg);
     } catch (e) {
-      throw Exception("Generate invite failed: \$e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -364,11 +380,11 @@ class AuthRepository {
       await _dio.post('/api/v1/family/join', data: {
         'invite_code': inviteCode,
       });
-    } on DioException catch (e) {
-      final msg = e.response?.data['detail'] ?? "Failed to join family plan.";
-      throw Exception(msg);
     } catch (e) {
-      throw Exception("Join family failed: \$e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 }

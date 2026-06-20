@@ -2,6 +2,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:mediq_app/src/core/api/app_exception.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 import 'vault_record.dart';
 
@@ -48,11 +50,11 @@ class VaultRepository {
       return raw
           .map((json) => VaultRecord.fromJson(json as Map<String, dynamic>))
           .toList();
-    } on DioException catch (e) {
-      final detail = e.response?.data?['detail'];
-      throw Exception(detail ?? 'Failed to load vault history');
     } catch (e) {
-      throw Exception('Unexpected error fetching vault history: $e');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 }

@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:mediq_app/src/core/api/app_exception.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 final chatRepositoryProvider = Provider<ChatRepository>((ref) {
   return ChatRepository(ref.watch(dioProvider));
@@ -19,16 +21,11 @@ class ChatRepository {
       );
       // Parse response based on backend schema: {"response": "AI text"}
       return response.data['response'];
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.data != null) {
-        final data = e.response?.data;
-        if (data is Map && data.containsKey('detail')) {
-          throw Exception(data['detail']);
-        }
-      }
-      throw Exception("Failed to connect to Health Assistant.");
     } catch (e) {
-      throw Exception("System error: $e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 

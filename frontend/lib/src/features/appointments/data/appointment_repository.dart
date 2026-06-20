@@ -2,6 +2,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:mediq_app/src/core/api/app_exception.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 import 'slot_model.dart';
 import 'appointment_model.dart';
@@ -43,7 +45,10 @@ class AppointmentRepository {
       final List<dynamic> data = response.data;
       return data.map((json) => DoctorSlot.fromJson(json)).toList();
     } catch (e) {
-      throw Exception('Failed to fetch slots: $e');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -60,16 +65,11 @@ class AppointmentRepository {
       );
       _logResponse(ep, response.data);
       return Appointment.fromJson(response.data);
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.data != null) {
-        final data = e.response?.data;
-        if (data is Map && data.containsKey('detail')) {
-          throw Exception(data['detail']);
-        }
-      }
-      throw Exception("Failed to book appointment");
     } catch (e) {
-      throw Exception("System error: $e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -82,7 +82,10 @@ class AppointmentRepository {
       final List<dynamic> data = response.data;
       return data.map((json) => Appointment.fromJson(json)).toList();
     } catch (e) {
-      throw Exception('Failed to fetch appointments: $e');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -91,8 +94,11 @@ class AppointmentRepository {
     _logAuthHandshake(ep);
     try {
       await _dio.put('/api/v1/appointments/$id/cancel');
-    } on DioException catch (e) {
-      throw Exception(_detailFrom(e, 'Failed to cancel appointment'));
+    } catch (e) {
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -107,7 +113,10 @@ class AppointmentRepository {
       final List<dynamic> data = response.data;
       return data.map((json) => Appointment.fromJson(json)).toList();
     } catch (e) {
-      throw Exception('Failed to fetch requests: $e');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -122,7 +131,10 @@ class AppointmentRepository {
       final List<dynamic> data = response.data;
       return data.map((json) => Appointment.fromJson(json)).toList();
     } catch (e) {
-      throw Exception('Failed to fetch schedule: $e');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -131,8 +143,11 @@ class AppointmentRepository {
         'PUT /api/v1/appointments/doctor/appointments/:id/accept');
     try {
       await _dio.put('/api/v1/appointments/doctor/appointments/$id/accept');
-    } on DioException catch (e) {
-      throw Exception(_detailFrom(e, 'Failed to accept appointment'));
+    } catch (e) {
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -141,8 +156,11 @@ class AppointmentRepository {
         'PUT /api/v1/appointments/doctor/appointments/:id/decline');
     try {
       await _dio.put('/api/v1/appointments/doctor/appointments/$id/decline');
-    } on DioException catch (e) {
-      throw Exception(_detailFrom(e, 'Failed to decline appointment'));
+    } catch (e) {
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -151,8 +169,11 @@ class AppointmentRepository {
         'PUT /api/v1/appointments/doctor/appointments/:id/cancel');
     try {
       await _dio.put('/api/v1/appointments/doctor/appointments/$id/cancel');
-    } on DioException catch (e) {
-      throw Exception(_detailFrom(e, 'Failed to cancel appointment'));
+    } catch (e) {
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -161,8 +182,11 @@ class AppointmentRepository {
         'PUT /api/v1/appointments/doctor/appointments/:id/complete');
     try {
       await _dio.put('/api/v1/appointments/doctor/appointments/$id/complete');
-    } on DioException catch (e) {
-      throw Exception(_detailFrom(e, 'Failed to complete appointment'));
+    } catch (e) {
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -178,11 +202,11 @@ class AppointmentRepository {
         '/api/v1/appointments/doctor/appointments/$id/refer',
         data: {'hospital_name': hospitalName, 'note': note},
       );
-    } on DioException catch (e) {
-      final detail = e.response?.data?['detail'];
-      throw Exception(detail ?? 'Failed to submit referral');
     } catch (e) {
-      throw Exception('Failed to submit referral: $e');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -197,11 +221,11 @@ class AppointmentRepository {
         '/api/v1/appointments/doctor/appointments/$id/prescribe',
         data: {'prescription': prescription},
       );
-    } on DioException catch (e) {
-      final detail = e.response?.data?['detail'];
-      throw Exception(detail ?? 'Failed to save prescription');
     } catch (e) {
-      throw Exception('Failed to save prescription: $e');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -218,7 +242,10 @@ class AppointmentRepository {
       _logResponse(ep, response.data);
       return Appointment.fromJson(response.data);
     } catch (e) {
-      throw Exception('Failed to join queue: $e');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -231,7 +258,10 @@ class AppointmentRepository {
       final List<dynamic> data = response.data;
       return data.map((json) => Appointment.fromJson(json)).toList();
     } catch (e) {
-      throw Exception('Failed to fetch queue: $e');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -239,8 +269,11 @@ class AppointmentRepository {
     _logAuthHandshake('PUT /api/v1/appointments/doctor/queue/:id/claim');
     try {
       await _dio.put('/api/v1/appointments/doctor/queue/$id/claim');
-    } on DioException catch (e) {
-      throw Exception(_detailFrom(e, 'Failed to claim appointment'));
+    } catch (e) {
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -251,8 +284,11 @@ class AppointmentRepository {
       final response =
           await _dio.patch('/api/v1/appointments/$appointmentId/acknowledge');
       _logResponse(ep, response.data);
-    } on DioException catch (e) {
-      throw Exception(_detailFrom(e, 'Failed to acknowledge appointment'));
+    } catch (e) {
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
@@ -266,9 +302,10 @@ class AppointmentRepository {
         data: {'proposed_time': proposedTime.toUtc().toIso8601String()},
       );
       _logResponse(ep, response.data);
-    } on DioException catch (e) {
-      throw Exception(
-        _detailFrom(e, 'Failed to propose appointment time'),
+    } catch (e) {
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
       );
     }
   }
@@ -290,16 +327,13 @@ class AppointmentRepository {
         },
       );
       _logResponse(ep, response.data);
-    } on DioException catch (e) {
-      throw Exception(_detailFrom(e, 'Failed to send VIP request'));
+    } catch (e) {
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
-  String _detailFrom(DioException error, String fallback) {
-    final data = error.response?.data;
-    if (data is Map && data['detail'] != null) {
-      return data['detail'].toString();
-    }
-    return fallback;
-  }
+
 }

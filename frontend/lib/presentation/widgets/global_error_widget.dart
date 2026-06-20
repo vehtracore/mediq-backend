@@ -18,8 +18,9 @@ class GlobalErrorWidget extends StatelessWidget {
   );
 
   String _cleanErrorMessage(dynamic err) {
+    // Always log the raw error for developers.
     if (kDebugMode) {
-      return err.toString();
+      debugPrint('[GlobalErrorWidget] Raw error: $err');
     }
 
     final message = UIErrorFormatter.getMessage(err).trim();

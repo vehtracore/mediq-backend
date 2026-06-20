@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart'; // Change input type to XFile
 import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:mediq_app/src/core/api/app_exception.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 final mediaRepositoryProvider = Provider<MediaRepository>((ref) {
   return MediaRepository(ref.watch(dioProvider));
@@ -52,7 +54,10 @@ class MediaRepository {
 
       return response.data['url'];
     } catch (e) {
-      throw Exception("Upload failed: $e");
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 }

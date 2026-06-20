@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:mediq_app/src/core/api/app_exception.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'doctor_model.dart';
 
 final doctorRepositoryProvider = Provider<DoctorRepository>(
@@ -53,24 +55,22 @@ class DoctorRepository {
           "start_time": startTime.toUtc().toIso8601String(),
         },
       );
-    } on DioException catch (e) {
-      final detail = e.response?.data is Map
-          ? e.response?.data['detail'] ?? e.message
-          : e.message;
-      throw Exception(detail ?? 'Failed to create slot');
+    } catch (e) {
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
   Future<void> deleteSlot(int slotId) async {
     try {
       await _dio.delete('/api/v1/appointments/slots/$slotId');
-    } on DioException catch (e) {
-      final detail = e.response?.data is Map
-          ? e.response?.data['detail'] ?? e.message
-          : e.message;
-      throw Exception(detail ?? 'Failed to delete slot');
     } catch (e) {
-      throw Exception('Failed to delete slot: $e');
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
     }
   }
 
