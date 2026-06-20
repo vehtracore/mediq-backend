@@ -32,6 +32,7 @@ import httpx
 
 from app.core.database import SessionLocal
 from app.models.appointment import Appointment
+from app.services.paystack_amounts import paystack_requested_amount_kobo
 
 logger = logging.getLogger(__name__)
 
@@ -137,10 +138,22 @@ async def _verify_and_update(
         )
         try:
             # Import here to avoid circular dependency at module load time.
-            from app.api.v1.payments import _parse_reference, _apply_db_update
+            from app.api.v1.payments import (
+                _apply_db_update,
+                _parse_reference,
+                _validate_consultation_payment,
+            )
 
             transaction_type, ref_appointment_id, ref_user_id = _parse_reference(
                 reference
+            )
+            _validate_consultation_payment(
+                transaction_type=transaction_type,
+                ref_appointment_id=ref_appointment_id,
+                ref_user_id=ref_user_id,
+                reference=reference,
+                amount_kobo=paystack_requested_amount_kobo(tx_data),
+                db=db,
             )
             _apply_db_update(
                 transaction_type=transaction_type,
@@ -151,6 +164,7 @@ async def _verify_and_update(
                 # No BackgroundTasks context available in a scheduler job.
                 # Emails are handled by the webhook / verify endpoint.
                 background_tasks=None,
+                paystack_data=tx_data,
             )
         except Exception as exc:
             logger.error(

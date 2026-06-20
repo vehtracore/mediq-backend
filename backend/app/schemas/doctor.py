@@ -1,5 +1,5 @@
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 from typing import Literal, Optional
 
 class DoctorBase(BaseModel):
@@ -38,6 +38,20 @@ class DoctorRegister(BaseModel):
     full_name: str
     specialty: str
     license_number: str
+
+
+class DoctorRegistrationPreflight(BaseModel):
+    email: EmailStr
+    license_number: str
+
+    @field_validator("license_number")
+    @classmethod
+    def validate_license_number(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("License number is required.")
+        return normalized
+
 
 class DoctorUpdate(BaseModel):
     bio: Optional[str] = None

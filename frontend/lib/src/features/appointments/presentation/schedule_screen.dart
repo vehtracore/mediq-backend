@@ -35,6 +35,13 @@ final myAppointmentsProvider =
   // 3. For 'completed' or 'cancelled', ONLY keep if less than 30 days old.
 
   final filtered = allAppointments.where((appt) {
+    // General and specialist bookings are paid during their initial booking
+    // flow. An abandoned unpaid checkout must not become a schedule item with
+    // a second "Pay Now" action. VIP intentionally pays after doctor proposal.
+    if (!appt.isVipRequest && appt.paymentStatus != 'paid') {
+      return false;
+    }
+
     // Is it in the future? Keep it.
     if (appt.startTime != null && appt.startTime!.isAfter(now)) return true;
 

@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
-import 'package:mediq_app/src/features/media/data/media_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -49,9 +49,11 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
   void initState() {
     super.initState();
     _loadSavedData();
-    _fullNameCtrl.addListener(() => _saveData('doc_reg_name', _fullNameCtrl.text));
+    _fullNameCtrl
+        .addListener(() => _saveData('doc_reg_name', _fullNameCtrl.text));
     _emailCtrl.addListener(() => _saveData('doc_reg_email', _emailCtrl.text));
-    _licenseNumberCtrl.addListener(() => _saveData('doc_reg_license', _licenseNumberCtrl.text));
+    _licenseNumberCtrl.addListener(
+        () => _saveData('doc_reg_license', _licenseNumberCtrl.text));
   }
 
   Future<void> _loadSavedData() async {
@@ -98,7 +100,7 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
 
     if (pickedFile != null) {
       setState(() {
-        _licenseImage = pickedFile; 
+        _licenseImage = pickedFile;
       });
     }
   }
@@ -114,7 +116,7 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
 
     if (pickedFile != null) {
       setState(() {
-        _indemnityImage = pickedFile; 
+        _indemnityImage = pickedFile;
       });
     }
   }
@@ -157,14 +159,14 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
     try {
       // 1. Register Doctor
       await ref.read(authRepositoryProvider).registerDoctor(
-        fullName: _fullNameCtrl.text.trim(),
-        email: _emailCtrl.text.trim(),
-        password: _passwordCtrl.text.trim(),
-        specialty: _selectedSpecialty!,
-        licenseNumber: _licenseNumberCtrl.text.trim(),
-        mdcnLicense: _licenseImage!,
-        indemnityCertificate: _indemnityImage!,
-      );
+            fullName: _fullNameCtrl.text.trim(),
+            email: _emailCtrl.text.trim(),
+            password: _passwordCtrl.text.trim(),
+            specialty: _selectedSpecialty!,
+            licenseNumber: _licenseNumberCtrl.text.trim(),
+            mdcnLicense: _licenseImage!,
+            indemnityCertificate: _indemnityImage!,
+          );
 
       await _clearSavedData();
 
@@ -177,8 +179,9 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
         builder: (ctx) => AlertDialog(
           title: const Text("Application Submitted"),
           content: const Text(
-            "Your license has been uploaded and profile created. "
-            "Waiting for Admin verification.",
+            "Check your email and verify your address. Your medical documents "
+            "have also been submitted for separate admin approval. You can "
+            "sign in after both steps are complete.",
           ),
           actions: [
             TextButton(
@@ -194,7 +197,10 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+        SnackBar(
+          content: Text(UIErrorFormatter.getMessage(e)),
+          backgroundColor: Colors.red,
+        ),
       );
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -270,7 +276,6 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-
               const Text(
                 "Medical License",
                 style: TextStyle(fontWeight: FontWeight.bold),
@@ -282,9 +287,14 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
                   height: 150,
                   width: double.infinity,
                   decoration: BoxDecoration(
-                    color: theme.brightness == Brightness.dark ? Colors.white.withOpacity(0.05) : Colors.grey[100],
+                    color: theme.brightness == Brightness.dark
+                        ? Colors.white.withOpacity(0.05)
+                        : Colors.grey[100],
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: theme.brightness == Brightness.dark ? Colors.white.withOpacity(0.1) : Colors.grey[300]!),
+                    border: Border.all(
+                        color: theme.brightness == Brightness.dark
+                            ? Colors.white.withOpacity(0.1)
+                            : Colors.grey[300]!),
                     image: licenseProvider != null
                         ? DecorationImage(
                             image: licenseProvider,
@@ -304,7 +314,8 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
                             const SizedBox(height: 8),
                             Text(
                               "Tap to upload License Image",
-                              style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                              style: TextStyle(
+                                  color: theme.colorScheme.onSurfaceVariant),
                             ),
                           ],
                         )
@@ -323,9 +334,14 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
                   height: 150,
                   width: double.infinity,
                   decoration: BoxDecoration(
-                    color: theme.brightness == Brightness.dark ? Colors.white.withOpacity(0.05) : Colors.grey[100],
+                    color: theme.brightness == Brightness.dark
+                        ? Colors.white.withOpacity(0.05)
+                        : Colors.grey[100],
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: theme.brightness == Brightness.dark ? Colors.white.withOpacity(0.1) : Colors.grey[300]!),
+                    border: Border.all(
+                        color: theme.brightness == Brightness.dark
+                            ? Colors.white.withOpacity(0.1)
+                            : Colors.grey[300]!),
                     image: indemnityProvider != null
                         ? DecorationImage(
                             image: indemnityProvider,
@@ -345,7 +361,8 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
                             const SizedBox(height: 8),
                             Text(
                               "Tap to upload Indemnity Certificate",
-                              style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                              style: TextStyle(
+                                  color: theme.colorScheme.onSurfaceVariant),
                             ),
                           ],
                         )
@@ -358,17 +375,18 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
                 linkText: "Privacy Policy",
                 value: _agreedToPrivacy,
                 onChanged: (v) => setState(() => _agreedToPrivacy = v!),
-                onTapLink: () => _launchURL("https://mdqplus.com/legal.html#privacy"),
+                onTapLink: () =>
+                    _launchURL("https://mdqplus.com/legal.html#privacy"),
               ),
               _buildLegalCheckbox(
                 title: "I agree to the ",
                 linkText: "Terms & Conditions",
                 value: _agreedToTC,
                 onChanged: (v) => setState(() => _agreedToTC = v!),
-                onTapLink: () => _launchURL("https://mdqplus.com/legal.html#terms"),
+                onTapLink: () =>
+                    _launchURL("https://mdqplus.com/legal.html#terms"),
               ),
               const SizedBox(height: 32),
-
               SizedBox(
                 height: 50,
                 child: ElevatedButton(
@@ -421,14 +439,16 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
       validator: (v) {
         if (label == "Email") {
           if (v == null || v.isEmpty) return 'Please enter your email';
-          final bool emailValid = RegExp(r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+").hasMatch(v ?? '');
+          final bool emailValid = RegExp(
+                  r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+")
+              .hasMatch(v);
           if (!emailValid) return 'Please enter a valid email address';
         } else if (v == null || v.isEmpty) {
           return "Required";
         }
-        
+
         if (isPassword && v.length < 6) return "Min 6 chars";
-        
+
         return null;
       },
     );
@@ -458,7 +478,8 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
               onTap: onTapLink,
               child: RichText(
                 text: TextSpan(
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurface),
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurface),
                   children: [
                     TextSpan(text: title),
                     TextSpan(
@@ -488,7 +509,9 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open link: $e'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('Could not open link: $e'),
+              backgroundColor: Colors.red),
         );
       }
     }

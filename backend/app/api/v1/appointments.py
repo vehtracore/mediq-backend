@@ -662,10 +662,21 @@ def request_vip_appointment(
     The appointment starts as pending/unpaid with no start_time, waiting
     for the doctor to propose a time via PATCH /propose.
     """
+    require_patient_role(current_user)
+
     # Verify the target doctor exists
     doctor = db.query(Doctor).filter(Doctor.id == req.doctor_id).first()
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
+    if (
+        doctor.status != "active"
+        or doctor.user is None
+        or not doctor.user.is_active
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This doctor is not currently accepting appointment requests.",
+        )
 
     # Guardrail: refuse VIP requests for doctors who haven't configured their rate.
     # This prevents ₦0 appointments and confusing zero-value Paystack checkouts.
@@ -677,11 +688,29 @@ def request_vip_appointment(
         )
 
     # ── PENDING-LOCK: Rule 2 — Global cap (max 3 pending requests platform-wide) ──
+    existing_request = (
+        db.query(Appointment)
+        .options(
+            joinedload(Appointment.doctor),
+            joinedload(Appointment.review),
+        )
+        .filter(
+            Appointment.patient_id == current_user.id,
+            Appointment.doctor_id == req.doctor_id,
+            Appointment.appointment_type == APPOINTMENT_TYPE_VIP_REQUEST,
+            Appointment.status.in_(("pending", "awaiting_payment")),
+        )
+        .first()
+    )
+    if existing_request is not None:
+        return map_appt(existing_request)
+
     global_pending_count = (
         db.query(Appointment)
         .filter(
             Appointment.patient_id == current_user.id,
-            Appointment.status == "pending",
+            Appointment.appointment_type == APPOINTMENT_TYPE_VIP_REQUEST,
+            Appointment.status.in_(("pending", "awaiting_payment")),
         )
         .count()
     )
@@ -693,21 +722,6 @@ def request_vip_appointment(
         )
 
     # ── PENDING-LOCK: Rule 1 — Per-doctor cap (max 1 pending per specialist) ──
-    per_doctor_pending_count = (
-        db.query(Appointment)
-        .filter(
-            Appointment.patient_id == current_user.id,
-            Appointment.doctor_id == req.doctor_id,
-            Appointment.status == "pending",
-        )
-        .count()
-    )
-    if per_doctor_pending_count >= 1:
-        raise HTTPException(
-            status_code=400,
-            detail="You already have a pending request with this specialist.",
-        )
-
     # Pricing: derive from the doctor's actual rate using the central split rule.
     patient_price: float = consultation_fee
     commission, doctor_payout = calculate_consultation_split(patient_price)
@@ -898,6 +912,7 @@ def get_doctor_requests(db: Session = Depends(get_db), current_user: User = Depe
         .options(joinedload(Appointment.patient), joinedload(Appointment.slot))
         .filter(
             Appointment.doctor_id == doctor.id,
+            Appointment.appointment_type == APPOINTMENT_TYPE_VIP_REQUEST,
             Appointment.slot_id == None,  # noqa: E711
             Appointment.status == "pending",
         )

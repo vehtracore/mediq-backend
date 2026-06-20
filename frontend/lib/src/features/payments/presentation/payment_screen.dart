@@ -1,11 +1,16 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:mediq_app/src/core/api/api_constants.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/core/constants/api_keys.dart';
 import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
+import 'package:mediq_app/src/features/appointments/presentation/schedule_screen.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:mediq_app/src/features/patient_dashboard/patient_home_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Payment screen — secure server-side checkout flow.
@@ -63,6 +68,9 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
   bool _hasOpenedCheckout = false;
   bool _hasAutoVerifiedForCurrentCheckout = false;
   String? _verificationMessage;
+  String? _authorizationUrl;
+  Timer? _verificationPollTimer;
+  int _verificationPollAttempts = 0;
 
   /// The reference used for this checkout session (either pre-supplied by the
   /// backend or generated locally).
@@ -93,6 +101,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
 
   @override
   void dispose() {
+    _verificationPollTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -179,6 +188,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
       );
 
       final authorizationUrl = response.data['authorization_url'] as String?;
+      final responseReference = response.data['reference']?.toString();
 
       if (authorizationUrl == null || authorizationUrl.isEmpty) {
         _showSnack(
@@ -189,6 +199,10 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
       }
 
       // ── Step 2: Launch the checkout URL in the device browser ──────────────
+      _reference = responseReference?.isNotEmpty == true
+          ? responseReference!
+          : dynamicReference;
+      _authorizationUrl = authorizationUrl;
       final uri = Uri.parse(authorizationUrl);
       if (!await canLaunchUrl(uri)) {
         _showSnack(
@@ -212,7 +226,27 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
       }
 
       await launchUrl(uri, mode: LaunchMode.externalApplication);
+      _startVerificationPolling();
     } on DioException catch (e) {
+      final detail = e.response?.data is Map
+          ? (e.response?.data as Map)['detail']?.toString() ?? ''
+          : '';
+      if (detail.toLowerCase().contains('already been paid')) {
+        await _completePayment();
+        return;
+      }
+      if (detail.toLowerCase().contains('duplicate transaction reference')) {
+        if (mounted) {
+          setState(() {
+            _awaitingWebhook = true;
+            _verificationMessage =
+                'This checkout already exists. Checking its payment status...';
+          });
+          _startVerificationPolling();
+          await _verifyPayment();
+        }
+        return;
+      }
       _showSnack(UIErrorFormatter.getMessage(e), isError: true);
       debugPrint('[PAYMENTS] DioException during initialize: $e');
     } catch (e) {
@@ -223,12 +257,78 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
     }
   }
 
-  Future<void> _verifyPayment() async {
-    if (_isVerifying) return;
+  Future<void> _reopenPaymentPage() async {
+    final authorizationUrl = _authorizationUrl;
+    if (authorizationUrl == null || authorizationUrl.isEmpty) {
+      _showSnack(
+        'The payment page is no longer available. Please try again.',
+        isError: true,
+      );
+      return;
+    }
+
+    final uri = Uri.parse(authorizationUrl);
+    if (!await canLaunchUrl(uri) ||
+        !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      _showSnack(
+        'Cannot open the payment page. Please check your browser settings.',
+        isError: true,
+      );
+      return;
+    }
+    _startVerificationPolling();
+  }
+
+  void _startVerificationPolling() {
+    _verificationPollTimer?.cancel();
+    _verificationPollAttempts = 0;
+    _verificationPollTimer =
+        Timer.periodic(const Duration(seconds: 3), (timer) async {
+      if (!mounted || !_awaitingWebhook) {
+        timer.cancel();
+        return;
+      }
+      if (_verificationPollAttempts >= 40) {
+        timer.cancel();
+        if (mounted) {
+          setState(() {
+            _verificationMessage =
+                'Payment is not confirmed yet. Use "Check payment status" after completing checkout.';
+          });
+        }
+        return;
+      }
+      if (_isVerifying) return;
+      _verificationPollAttempts += 1;
+      await _verifyPayment(silent: true);
+    });
+  }
+
+  Future<void> _completePayment() async {
+    _verificationPollTimer?.cancel();
+    ref.invalidate(userProvider);
+    if (_isAppointmentTransaction) {
+      ref.invalidate(myAppointmentsProvider);
+      ref.read(homeTabIndexProvider.notifier).state = 1;
+    }
+    if (!mounted) return;
+
+    _showSnack('Payment confirmed successfully.');
+    if (_isAppointmentTransaction) {
+      context.go('/patient_home');
+    } else {
+      Navigator.of(context).pop(_reference);
+    }
+  }
+
+  Future<void> _verifyPayment({bool silent = false}) async {
+    if (_isVerifying || !mounted) return;
 
     setState(() {
       _isVerifying = true;
-      _verificationMessage = 'Verifying your payment...';
+      if (!silent) {
+        _verificationMessage = 'Verifying your payment...';
+      }
     });
 
     try {
@@ -244,28 +344,24 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
       final verified = data is Map && data['verified'] == true;
 
       if (verified) {
-        ref.invalidate(userProvider);
-        if (mounted) {
-          _showSnack('Payment confirmed successfully.');
-          Navigator.of(context).pop(_reference);
-        }
+        await _completePayment();
         return;
       }
 
-      if (mounted) {
+      if (mounted && !silent) {
         setState(() {
           _verificationMessage =
               'Payment is not confirmed yet. If you completed payment, this should update shortly.';
         });
       }
     } on DioException catch (e) {
-      if (mounted) {
+      if (mounted && !silent) {
         setState(() {
           _verificationMessage = UIErrorFormatter.getMessage(e);
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && !silent) {
         setState(() {
           _verificationMessage = UIErrorFormatter.getMessage(e);
         });
@@ -608,7 +704,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
 
           // ── Re-open browser link ──────────────────────────────────────────────
           TextButton(
-            onPressed: _isLoading || _isVerifying ? null : _handlePayment,
+            onPressed: _isLoading || _isVerifying ? null : _reopenPaymentPage,
             child: Text(
               'Re-open payment page',
               style: TextStyle(color: cs.primary),

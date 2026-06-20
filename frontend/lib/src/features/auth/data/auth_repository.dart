@@ -58,7 +58,8 @@ class AuthRepository {
 
   Future<void> login(String email, String password) async {
     try {
-      final response = await supabase.Supabase.instance.client.auth.signInWithPassword(
+      final response =
+          await supabase.Supabase.instance.client.auth.signInWithPassword(
         email: email,
         password: password,
       );
@@ -73,7 +74,8 @@ class AuthRepository {
     }
   }
 
-  Future<void> signup(String email, String password, String firstName, String lastName, DateTime dob) async {
+  Future<void> signup(String email, String password, String firstName,
+      String lastName, DateTime dob) async {
     try {
       // 1. Authenticate / create user in Supabase
       final response = await supabase.Supabase.instance.client.auth.signUp(
@@ -81,7 +83,7 @@ class AuthRepository {
         password: password,
       );
       await _persistSession(response.session);
-      
+
       // 2. Provision the backend DB row
       if (response.user != null) {
         // At this point, Dio interceptor will pick up the Supabase session token
@@ -162,17 +164,21 @@ class AuthRepository {
 
       if (bloodType != null) data['blood_type'] = bloodType;
       if (allergies != null) data['allergies'] = allergies;
-      if (chronicConditions != null) data['chronic_conditions'] = chronicConditions;
+      if (chronicConditions != null)
+        data['chronic_conditions'] = chronicConditions;
       if (medications != null) data['medications'] = medications;
       if (pastSurgeries != null) data['past_surgeries'] = pastSurgeries;
 
       if (settingsTheme != null) data['settings_theme'] = settingsTheme;
-      if (settingsNotifications != null) data['settings_notifications'] = settingsNotifications;
-      if (settingsEmailUpdates != null) data['settings_email_updates'] = settingsEmailUpdates;
+      if (settingsNotifications != null)
+        data['settings_notifications'] = settingsNotifications;
+      if (settingsEmailUpdates != null)
+        data['settings_email_updates'] = settingsEmailUpdates;
 
       // Emergency / NOK fields
       if (kinPhone != null) data['kin_phone'] = kinPhone;
-      if (emergencySmsEnabled != null) data['emergency_sms_enabled'] = emergencySmsEnabled;
+      if (emergencySmsEnabled != null)
+        data['emergency_sms_enabled'] = emergencySmsEnabled;
 
       await _dio.put('/api/v1/auth/me', data: data);
     } catch (e) {
@@ -218,9 +224,11 @@ class AuthRepository {
       final Map<String, dynamic> data = {};
       if (licenseNumber != null) data['license_number'] = licenseNumber;
       if (mdcnLicenseUrl != null) data['mdcn_license_url'] = mdcnLicenseUrl;
-      if (indemnityCertUrl != null) data['indemnity_cert_url'] = indemnityCertUrl;
+      if (indemnityCertUrl != null)
+        data['indemnity_cert_url'] = indemnityCertUrl;
 
-      final response = await _dio.post('/api/v1/doctors/me/reapply', data: data);
+      final response =
+          await _dio.post('/api/v1/doctors/me/reapply', data: data);
       return Doctor.fromJson(response.data);
     } catch (e) {
       throw AppException(
@@ -239,13 +247,45 @@ class AuthRepository {
     required XFile mdcnLicense,
     required XFile indemnityCertificate,
   }) async {
+    var supabaseIdentityCreated = false;
     try {
+      final normalizedEmail = email.trim().toLowerCase();
+
+      // Fail fast on local duplicates before creating a Supabase identity.
+      final preflightResponse =
+          await _dio.post('/api/v1/auth/doctor/preflight', data: {
+        'email': normalizedEmail,
+        'license_number': licenseNumber.trim(),
+      });
+      final isExistingApplication = preflightResponse.data is Map &&
+          preflightResponse.data['existing_application'] == true;
+
+      // Supabase owns the password and sends the verification email when
+      // Confirm Email is enabled for the project.
+      final authResponse = await supabase.Supabase.instance.client.auth.signUp(
+        email: normalizedEmail,
+        password: password,
+        data: {
+          'role': 'doctor',
+          'full_name': fullName.trim(),
+        },
+      );
+      if (authResponse.user == null) {
+        throw AppException(
+          'Could not create your secure sign-in account. Please try again.',
+        );
+      }
+      supabaseIdentityCreated = true;
+
+      if (isExistingApplication) {
+        return;
+      }
+
       final Map<String, dynamic> mapData = {
-        'full_name': fullName,
-        'email': email,
-        'password': password,
-        'specialty': specialty,
-        'license_number': licenseNumber,
+        'full_name': fullName.trim(),
+        'email': normalizedEmail,
+        'specialty': specialty.trim(),
+        'license_number': licenseNumber.trim(),
       };
 
       if (kIsWeb) {
@@ -256,7 +296,9 @@ class AuthRepository {
         );
         mapData['indemnity_certificate'] = MultipartFile.fromBytes(
           await indemnityCertificate.readAsBytes(),
-          filename: indemnityCertificate.name.isEmpty ? 'indemnity.jpg' : indemnityCertificate.name,
+          filename: indemnityCertificate.name.isEmpty
+              ? 'indemnity.jpg'
+              : indemnityCertificate.name,
           contentType: MediaType('image', 'jpeg'),
         );
       } else {
@@ -267,18 +309,32 @@ class AuthRepository {
         );
         mapData['indemnity_certificate'] = await MultipartFile.fromFile(
           indemnityCertificate.path,
-          filename: indemnityCertificate.name.isEmpty ? 'indemnity.jpg' : indemnityCertificate.name,
+          filename: indemnityCertificate.name.isEmpty
+              ? 'indemnity.jpg'
+              : indemnityCertificate.name,
           contentType: MediaType('image', 'jpeg'),
         );
       }
 
       final formData = FormData.fromMap(mapData);
       await _dio.post('/api/v1/auth/doctor/register', data: formData);
+    } on supabase.AuthException catch (e) {
+      throw AppException(e.message, originalException: e);
     } catch (e) {
       throw AppException(
         UIErrorFormatter.getMessage(e),
         originalException: e,
       );
+    } finally {
+      if (supabaseIdentityCreated) {
+        try {
+          await supabase.Supabase.instance.client.auth.signOut();
+        } catch (_) {
+          // The registration is still valid; local credential cleanup below
+          // prevents an unapproved doctor session from remaining in the app.
+        }
+        await _clearStoredSession();
+      }
     }
   }
 
@@ -297,7 +353,8 @@ class AuthRepository {
 
   Future<void> cancelSubscription() async {
     try {
-      final response = await _dio.post('/api/v1/subscription/cancel-subscription');
+      final response =
+          await _dio.post('/api/v1/subscription/cancel-subscription');
       if (response.statusCode != null && response.statusCode! >= 400) {
         throw AppException("Failed to cancel subscription.");
       }
@@ -305,9 +362,7 @@ class AuthRepository {
       rethrow;
     } on DioException catch (e) {
       final data = e.response?.data;
-      final msg = data is Map
-          ? data['detail']?.toString()
-          : null;
+      final msg = data is Map ? data['detail']?.toString() : null;
       throw AppException(
         msg ?? "Cancel subscription failed. Please try again.",
         originalException: e,
@@ -330,9 +385,7 @@ class AuthRepository {
       rethrow;
     } on DioException catch (e) {
       final data = e.response?.data;
-      final msg = data is Map
-          ? data['detail']?.toString()
-          : null;
+      final msg = data is Map ? data['detail']?.toString() : null;
       throw AppException(
         msg ?? "Restore subscription failed. Please try again.",
         originalException: e,
@@ -347,7 +400,8 @@ class AuthRepository {
 
   // --- SUPPORT ---
 
-  Future<void> sendSupportMessage({required String subject, required String message}) async {
+  Future<void> sendSupportMessage(
+      {required String subject, required String message}) async {
     try {
       await _dio.post('/api/v1/support/contact', data: {
         'subject': subject,

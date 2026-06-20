@@ -5,7 +5,9 @@ import 'package:intl/intl.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_model.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_repository.dart';
 import 'package:mediq_app/src/features/appointments/data/slot_model.dart';
+import 'package:mediq_app/src/features/appointments/presentation/schedule_screen.dart';
 import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
+import 'package:mediq_app/src/features/patient_dashboard/patient_home_screen.dart';
 import 'package:mediq_app/src/shared/presentation/widgets/doctor_avatar.dart';
 
 /// Purpose: Drives the calendar and time selection grid on the Book Appointment screen,
@@ -452,12 +454,14 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                                 );
                             if (ctx.mounted) {
                               Navigator.pop(ctx);
+                              ref.invalidate(myAppointmentsProvider);
+                              ref.read(homeTabIndexProvider.notifier).state = 1;
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
                                     content: Text(
                                         "Request sent! Your doctor will propose a time shortly.")),
                               );
-                              context.go('/');
+                              context.go('/patient_home');
                             }
                           } catch (e) {
                             if (ctx.mounted) {
@@ -469,8 +473,9 @@ class _BookAppointmentScreenState extends ConsumerState<BookAppointmentScreen> {
                               );
                             }
                           } finally {
-                            if (ctx.mounted)
+                            if (ctx.mounted) {
                               setModalState(() => isSubmitting = false);
+                            }
                           }
                         },
                   child: isSubmitting

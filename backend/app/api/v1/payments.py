@@ -60,6 +60,7 @@ from app.models.doctor import Doctor
 from app.models.consultation_payout import ConsultationPayout
 from app.services.consultation_pricing import naira_to_kobo
 from app.services.email_service import send_transactional_email
+from app.services.paystack_amounts import paystack_requested_amount_kobo
 from app.services.paystack_service import paystack_service  # noqa: F401 (used in future endpoints)
 from app.core.notifications import dispatch_push
 
@@ -1457,7 +1458,7 @@ async def paystack_webhook(
                 ref_appointment_id=ref_appointment_id,
                 ref_user_id=ref_user_id,
                 reference=reference,
-                amount_kobo=int(data.get("amount") or 0),
+                amount_kobo=paystack_requested_amount_kobo(data),
                 db=db,
             )
             result = _apply_db_update(
@@ -1619,7 +1620,7 @@ async def verify_transaction(
             ref_appointment_id=ref_appointment_id,
             ref_user_id=ref_user_id,
             reference=reference,
-            amount_kobo=int(tx_data.get("amount") or 0),
+            amount_kobo=paystack_requested_amount_kobo(tx_data),
             db=db,
             current_user=current_user,
         )

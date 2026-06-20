@@ -154,7 +154,11 @@ def verify_doctor(doctor_id: int, background_tasks: BackgroundTasks, db: Session
         send_email,
         user.email,
         "MDQ+: Your Application is Approved!",
-        f"Congratulations {doctor.full_name}!\n\nYour MDQ+ doctor account is now active. You can log in and start accepting patients."
+        f"Congratulations {doctor.full_name}!\n\n"
+        "Your MDQ+ doctor application has been approved. "
+        "Please verify your email address using the Supabase verification "
+        "email before signing in. After email verification, you can log in "
+        "and start accepting patients."
     )
     
     return {"message": "Doctor verified and account activated."}

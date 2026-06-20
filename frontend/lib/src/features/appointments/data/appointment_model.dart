@@ -156,13 +156,7 @@ class Appointment {
 
   bool get canPatientPay {
     if (paymentStatus != 'unpaid') return false;
-    if (isGeneralQueue || isSpecialistScheduled) {
-      return status == 'pending';
-    }
-    if (isVipRequest) {
-      return status == 'awaiting_payment';
-    }
-    return false;
+    return isVipRequest && status == 'awaiting_payment';
   }
 
   String? get paymentTransactionType {

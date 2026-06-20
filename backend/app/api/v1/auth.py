@@ -2,13 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, 
 from fastapi.responses import HTMLResponse
 import uuid
 from pydantic import EmailStr
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from datetime import date, datetime, timezone
 from app.core.database import get_db
 from app.models.user import User
 from app.models.doctor import Doctor
 from app.schemas.user import UserCreate, UserResponse, UserUpdate, DeviceTokenUpdate
-from app.schemas.doctor import DoctorResponse
+from app.schemas.doctor import DoctorRegistrationPreflight, DoctorResponse
 from app.api import deps
 
 from app.services.media_service import upload_image
@@ -174,6 +175,56 @@ def create_user(request: Request, user: UserCreate, background_tasks: Background
 
     return new_user
 
+@router.post("/doctor/preflight")
+@limiter.limit("10/minute")
+def doctor_registration_preflight(
+    request: Request,
+    payload: DoctorRegistrationPreflight,
+    db: Session = Depends(get_db),
+):
+    """Validate local doctor uniqueness before Supabase creates the identity."""
+    normalized_email = str(payload.email).strip().lower()
+    normalized_license = payload.license_number.strip()
+
+    existing_user = (
+        db.query(User)
+        .filter(func.lower(User.email) == normalized_email)
+        .first()
+    )
+    if existing_user is not None:
+        existing_doctor = (
+            db.query(Doctor)
+            .filter(Doctor.user_id == existing_user.id)
+            .first()
+        )
+        if (
+            existing_user.role != "doctor"
+            or existing_doctor is None
+            or (existing_doctor.license_number or "").lower()
+            != normalized_license.lower()
+        ):
+            raise HTTPException(400, detail="Email already registered")
+
+        # Recovery for doctor applications created before Supabase sign-up was
+        # wired into the Flutter flow. Email ownership is still proven by the
+        # Supabase confirmation link; no local approval state is changed here.
+        return {
+            "available": True,
+            "existing_application": True,
+            "application_status": existing_doctor.status,
+        }
+
+    existing_license = (
+        db.query(Doctor)
+        .filter(func.lower(Doctor.license_number) == normalized_license.lower())
+        .first()
+    )
+    if existing_license is not None:
+        raise HTTPException(400, detail="License already registered")
+
+    return {"available": True, "existing_application": False}
+
+
 @router.post("/doctor/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register_doctor(
     background_tasks: BackgroundTasks,
@@ -185,10 +236,16 @@ async def register_doctor(
     indemnity_certificate: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    if db.query(User).filter(User.email == email).first():
-        raise HTTPException(400, detail="Email registered")
-    if db.query(Doctor).filter(Doctor.license_number == license_number).first():
-        raise HTTPException(400, detail="License registered")
+    email = email.strip().lower()
+    license_number = license_number.strip()
+    if db.query(User).filter(func.lower(User.email) == email).first():
+        raise HTTPException(400, detail="Email already registered")
+    if (
+        db.query(Doctor)
+        .filter(func.lower(Doctor.license_number) == license_number.lower())
+        .first()
+    ):
+        raise HTTPException(400, detail="License already registered")
 
     # Upload both documents to Cloudinary
     mdcn_license_url = await upload_image(mdcn_license, folder="mdq_plus/doctor_licenses")
@@ -237,6 +294,8 @@ async def register_doctor(
         "mdqplus: Application Received",
         f"Hello {full_name},<br><br>"
         f"Thank you for applying to join mdqplus!<br><br>"
+        f"Supabase has sent a separate email verification link to this address. "
+        f"Please complete that verification.<br><br>"
         f"Your application is currently pending admin review based on your submitted documents. "
         f"You will receive another email once your account is approved.<br><br>"
         f"- The mdqplus Team"
@@ -387,7 +446,8 @@ def approve_doctor(
         send_email,
         user.email,
         "Application Approved!",
-        "Your doctor account is now active. You can log in."
+        "Your doctor application is approved. Verify your email address using "
+        "the Supabase verification email before signing in."
     )
     
     return {"message": f"Doctor {doctor.full_name} approved"}
