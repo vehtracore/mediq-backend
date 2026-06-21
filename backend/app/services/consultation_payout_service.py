@@ -24,7 +24,7 @@ PAYOUT_STATUS_AWAITING_ADMIN = "awaiting_admin"
 PAYOUT_STATUS_APPROVED = "approved"
 TRANSFERABLE_PAYOUT_STATUSES = frozenset({PAYOUT_STATUS_APPROVED})
 APPROVAL_IDEMPOTENT_STATUSES = frozenset(
-    {"approved", "processing", "otp_required", "paid"}
+    {"approved", "processing", "otp_required", "paid", "verification_required"}
 )
 
 
@@ -259,7 +259,7 @@ async def process_approved_general_queue_payouts() -> None:
                 if payout is None:
                     continue
                 payout.status = (
-                    PAYOUT_STATUS_APPROVED
+                    "verification_required"
                     if exc.status_code >= 500
                     else "failed"
                 )
@@ -270,7 +270,7 @@ async def process_approved_general_queue_payouts() -> None:
                 payout = db.get(ConsultationPayout, payout_id)
                 if payout is None:
                     continue
-                payout.status = PAYOUT_STATUS_APPROVED
+                payout.status = "verification_required"
                 payout.last_error = str(exc)[:1000]
                 db.commit()
                 logger.exception(

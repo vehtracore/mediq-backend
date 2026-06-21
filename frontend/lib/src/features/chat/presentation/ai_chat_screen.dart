@@ -505,34 +505,28 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
       child: Scaffold(
         backgroundColor: theme.colorScheme.surface,
         appBar: AppBar(
-          title: Row(
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.auto_awesome, color: Colors.blue),
-              const SizedBox(width: 10),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text("MDQ+ AI Assistant",
-                      style: TextStyle(
-                          color: theme.colorScheme.onSurface,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600)),
-                  userAsync.when(
-                    data: (user) => Text(
-                      user?.isPremium == true ? "Premium Mode ⚡" : "Free Mode",
-                      style: const TextStyle(
-                          fontSize: 10,
-                          color: Colors.greenAccent,
-                          fontWeight: FontWeight.w500,
-                          letterSpacing: 0.5),
-                    ),
-                    loading: () => Text("Connecting...",
-                        style: TextStyle(
-                            fontSize: 10,
-                            color: theme.colorScheme.onSurfaceVariant)),
-                    error: (_, __) => const SizedBox.shrink(),
-                  ),
-                ],
+              Text("MDQ+",
+                  style: TextStyle(
+                      color: theme.colorScheme.onSurface,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600)),
+              userAsync.when(
+                data: (user) => Text(
+                  user?.isPremium == true ? "Premium Mode ⚡" : "Free Mode",
+                  style: const TextStyle(
+                      fontSize: 10,
+                      color: Colors.greenAccent,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.5),
+                ),
+                loading: () => Text("Connecting...",
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: theme.colorScheme.onSurfaceVariant)),
+                error: (_, __) => const SizedBox.shrink(),
               ),
             ],
           ),

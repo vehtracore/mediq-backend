@@ -742,7 +742,7 @@ async def lifespan(app: FastAPI):
     # Job 7: Initiate admin-approved general-queue doctor payouts.
     scheduler.add_job(
         process_approved_general_queue_payouts,
-        trigger=IntervalTrigger(minutes=1),
+        trigger=CronTrigger(minute="*/10", hour="3", timezone="UTC"),
         id="general_queue_payout_processor",
         name="General queue doctor payout processor",
         replace_existing=True,
@@ -751,7 +751,7 @@ async def lifespan(app: FastAPI):
     # Job 8: Initiate admin-approved no-show patient refunds.
     scheduler.add_job(
         process_approved_consultation_refunds,
-        trigger=IntervalTrigger(minutes=1),
+        trigger=CronTrigger(minute="*/10", hour="2", timezone="UTC"),
         id="consultation_refund_processor",
         name="Admin-approved consultation refund processor",
         replace_existing=True,

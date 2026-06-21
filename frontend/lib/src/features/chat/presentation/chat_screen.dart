@@ -855,12 +855,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           horizontal: 16,
                           vertical: 8,
                         ),
-                        color: Colors.amber.shade100,
+                        color: const Color(0xFFF0F7FF),
                         child: const Text(
                           "Video has ended. Messaging remains open briefly to wrap up.",
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: Colors.black87,
+                            color: Color(0xFF1D4ED8),
                             fontWeight: FontWeight.w600,
                           ),
                         ),

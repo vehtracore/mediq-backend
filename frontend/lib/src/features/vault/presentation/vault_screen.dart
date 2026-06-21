@@ -1030,11 +1030,24 @@ class _ErrorState extends StatelessWidget {
 
   const _ErrorState({required this.message, required this.onRetry});
 
+  /// Converts a potentially verbose exception string into a short,
+  /// user-friendly message that won't cause RenderFlex overflows.
+  String _friendlyMessage(String raw) {
+    if (raw.isEmpty) return 'Please check your connection and try again.';
+    // Strip noisy HTTP error descriptions — show only the first sentence / line
+    final firstLine = raw.split('\n').first.trim();
+    // If the message is still very long (e.g. full stack dump), truncate it
+    if (firstLine.length > 120) {
+      return 'Something went wrong. Please try again.';
+    }
+    return firstLine;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1048,7 +1061,7 @@ class _ErrorState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              message,
+              _friendlyMessage(message),
               textAlign: TextAlign.center,
               style: GoogleFonts.lato(fontSize: 13, color: Colors.grey),
             ),

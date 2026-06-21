@@ -100,24 +100,31 @@ def get_doctor_stats(db: Session = Depends(get_db), current_user: User = Depends
     doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
     if not doctor: raise HTTPException(404, "Profile not found")
     
-    # 1. Calculate Earnings (Sum of payout for completed/paid appts)
-    earnings = 0.0
-    paid_appts = db.query(Appointment).filter(
-        Appointment.doctor_id == doctor.id,
-        Appointment.payment_status == "paid",
-        Appointment.status.in_(("completed", "patient_no_show")),
-    ).all()
-    for a in paid_appts:
-        earnings += a.payout
+    # 1. Total Paid — webhook-confirmed funds (transfer.success credited)
+    total_paid = float(doctor.total_earnings or 0)
 
-    # 2. Calculate Unique Patients
+    # 2. Pending Settlement — earned but not yet sent via Paystack
+    pending_rows = (
+        db.query(ConsultationPayout.amount)
+        .filter(
+            ConsultationPayout.doctor_id == doctor.id,
+            ConsultationPayout.status.in_(
+                ("awaiting_admin", "approved", "processing")
+            ),
+        )
+        .all()
+    )
+    pending_settlement = float(sum(row[0] for row in pending_rows))
+
+    # 3. Calculate Unique Patients
     patient_ids = set()
     all_appts = db.query(Appointment).filter(Appointment.doctor_id == doctor.id).all()
     for a in all_appts:
         patient_ids.add(a.patient_id)
     
     return {
-        "earnings": earnings,
+        "total_paid": total_paid,
+        "pending_settlement": pending_settlement,
         "total_patients": len(patient_ids),
         "rating": doctor.rating,
         "reviews": doctor.review_count,

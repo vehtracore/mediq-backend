@@ -134,15 +134,20 @@ class _DoctorDashboardTab extends ConsumerWidget {
         ]),
         const SizedBox(height: 16),
         statsAsync.when(
-          data: (stats) => Row(children: [
-            Expanded(
-                child: _buildStatCard(context, "Earnings",
-                    "₦${stats['earnings']}", Icons.payments, Colors.green)),
-            const SizedBox(width: 16),
-            Expanded(
-                child: _buildStatCard(context, "Rating", "${stats['rating']}",
-                    Icons.star, Colors.purple)),
-          ]),
+          data: (stats) {
+            final totalPaid = (stats['total_paid'] as num?)?.toDouble() ?? 0.0;
+            final pendingSettlement =
+                (stats['pending_settlement'] as num?)?.toDouble() ?? 0.0;
+            return Row(children: [
+              Expanded(
+                  child: _buildEarningsCard(
+                      context, totalPaid, pendingSettlement)),
+              const SizedBox(width: 16),
+              Expanded(
+                  child: _buildStatCard(context, "Rating",
+                      "${stats['rating']}", Icons.star, Colors.purple)),
+            ]);
+          },
           loading: () => const LinearProgressIndicator(),
           error: (e, s) => GlobalErrorWidget(
             error: e,
@@ -151,6 +156,53 @@ class _DoctorDashboardTab extends ConsumerWidget {
         ),
       ]),
     );
+  }
+
+  String _formatNaira(double amount) {
+    if (amount >= 1000) {
+      // Drop decimals for clean display when whole numbers
+      return amount == amount.truncateToDouble()
+          ? "₦${amount.toInt().toString().replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},')}"
+          : "₦${amount.toStringAsFixed(2).replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+\.)'), (m) => '${m[1]},')}";
+    }
+    return "₦${amount.toStringAsFixed(2)}";
+  }
+
+  Widget _buildEarningsCard(
+      BuildContext context, double totalPaid, double pendingSettlement) {
+    final theme = Theme.of(context);
+
+    return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+            color: theme.cardTheme.color,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: theme.brightness == Brightness.dark
+                ? []
+                : [
+                    BoxShadow(
+                        color: Colors.grey.withValues(alpha: 0.1),
+                        blurRadius: 10)
+                  ]),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Icon(Icons.payments, color: Colors.green, size: 24),
+          const SizedBox(height: 12),
+          Text(_formatNaira(totalPaid),
+              style: theme.textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.bold)),
+          const Text("Total Paid", style: TextStyle(fontSize: 12)),
+          if (pendingSettlement > 0) ...[
+            const SizedBox(height: 6),
+            Text(
+              "Pending: ${_formatNaira(pendingSettlement)}",
+              style: TextStyle(
+                fontSize: 11,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ]));
   }
 
   Widget _buildStatCard(BuildContext context, String title, String value,
