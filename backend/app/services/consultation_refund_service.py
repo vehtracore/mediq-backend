@@ -13,7 +13,7 @@ from app.services.paystack_service import paystack_service
 logger = logging.getLogger("uvicorn.error")
 
 REFUND_ELIGIBLE_APPOINTMENT_STATUSES = frozenset(
-    {"doctor_no_show", "both_no_show"}
+    {"doctor_no_show", "both_no_show", "queue_expired", "queue_patient_unavailable"}
 )
 REFUND_STATUS_AWAITING_ADMIN = "awaiting_admin"
 REFUND_STATUS_APPROVED = "approved"
@@ -23,8 +23,15 @@ TRANSFERABLE_REFUND_STATUSES = frozenset({REFUND_STATUS_APPROVED})
 def eligible_consultation_refund_amount(
     appointment: Appointment,
 ) -> Decimal | None:
-    """Return the full paid amount when a no-show refund is eligible."""
-    if appointment.status not in REFUND_ELIGIBLE_APPOINTMENT_STATUSES:
+    """Return the full paid amount when a consultation refund is eligible."""
+    patient_complaint_or_dispute = (
+        appointment.status == "completed"
+        and appointment.refund_status == REFUND_STATUS_AWAITING_ADMIN
+    )
+    if (
+        appointment.status not in REFUND_ELIGIBLE_APPOINTMENT_STATUSES
+        and not patient_complaint_or_dispute
+    ):
         return None
     if appointment.payment_status != "paid":
         return None

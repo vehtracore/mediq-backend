@@ -108,20 +108,16 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
 
   void _scheduleUnlockRefresh() {
     _unlockTimer?.cancel();
-    final appointment = widget.appointment;
-    final start = appointment.startTime;
-    if (start == null ||
-        appointment.isGeneralQueue ||
-        appointment.isConsultationUnlocked) {
-      return;
-    }
+    final nextBoundary = widget.appointment.nextConsultationBoundary;
+    if (nextBoundary == null) return;
 
     final now = DateTime.now();
-    final unlockAt = start.subtract(const Duration(minutes: 10));
     _unlockTimer = Timer(
-      unlockAt.difference(now) + const Duration(milliseconds: 100),
+      nextBoundary.difference(now) + const Duration(milliseconds: 100),
       () {
-        if (mounted) setState(() {});
+        if (!mounted) return;
+        setState(() {});
+        _scheduleUnlockRefresh();
       },
     );
   }
@@ -603,15 +599,22 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
       statusTextColor = Colors.red.shade700;
     }
 
-    final bool isUnlocked = widget.appointment.isConsultationUnlocked;
+    final bool isOpen = widget.appointment.isConsultationOpen;
+    final bool isClosed = widget.appointment.isConsultationClosed;
+    final bool isLocked = widget.appointment.isConsultationLocked;
+    final bool canWrapUp = widget.appointment.canDoctorWrapUp;
+    final bool canCancel = widget.appointment.canDoctorCancel;
 
     return GestureDetector(
       onTap: () {
-        if (!isUnlocked) {
+        if (!isOpen) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
+            SnackBar(
               content: Text(
-                  "Consultation room will unlock 10 minutes before appointment time."),
+                isClosed
+                    ? "Consultation is closed. Use the menu to complete notes, prescription, referral, or mark complete."
+                    : "Consultation room will unlock 10 minutes before appointment time.",
+              ),
             ),
           );
         }
@@ -733,7 +736,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                         Text('View Notes', style: theme.textTheme.bodyMedium)
                       ]),
                     ),
-                    if (isUnlocked)
+                    if (canWrapUp)
                       PopupMenuItem<String>(
                         value: 'prescribe',
                         child: Row(children: [
@@ -752,7 +755,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                           ),
                         ]),
                       ),
-                    if (isUnlocked)
+                    if (canWrapUp)
                       PopupMenuItem<String>(
                         value: 'refer',
                         child: Row(children: [
@@ -766,7 +769,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                               ))
                         ]),
                       ),
-                    if (isUnlocked)
+                    if (canWrapUp)
                       const PopupMenuItem<String>(
                         value: 'complete',
                         child: Row(children: [
@@ -776,15 +779,17 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                               style: TextStyle(color: Colors.green))
                         ]),
                       ),
-                    const PopupMenuDivider(),
-                    const PopupMenuItem<String>(
-                      value: 'cancel',
-                      child: Row(children: [
-                        Icon(Icons.cancel_outlined, color: Colors.red),
-                        SizedBox(width: 8),
-                        Text('Cancel', style: TextStyle(color: Colors.red))
-                      ]),
-                    ),
+                    if (canCancel) ...[
+                      const PopupMenuDivider(),
+                      const PopupMenuItem<String>(
+                        value: 'cancel',
+                        child: Row(children: [
+                          Icon(Icons.cancel_outlined, color: Colors.red),
+                          SizedBox(width: 8),
+                          Text('Cancel', style: TextStyle(color: Colors.red))
+                        ]),
+                      ),
+                    ],
                   ],
                   icon: Icon(Icons.more_vert, color: theme.iconTheme.color),
                 ),
@@ -807,7 +812,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
                             FilledButton.icon(
-                                onPressed: isUnlocked
+                                onPressed: isOpen
                                     ? () => context.push('/chat', extra: {
                                           'title':
                                               widget.appointment.patientName,
@@ -820,33 +825,45 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                                         })
                                     : null,
                                 icon: Icon(
-                                  isUnlocked
+                                  isOpen
                                       ? Icons.meeting_room
-                                      : Icons.lock_outline,
+                                      : isClosed
+                                          ? Icons.event_busy_outlined
+                                          : Icons.lock_outline,
                                   size: 18,
                                 ),
-                                label: const Text("Join Consultation Room"),
+                                label: Text(isClosed
+                                    ? "Consultation Closed"
+                                    : "Join Consultation Room"),
                                 style: FilledButton.styleFrom(
-                                  backgroundColor: isUnlocked
+                                  backgroundColor: isOpen
                                       ? theme.colorScheme.primary
                                       : Colors.grey.withOpacity(0.12),
-                                  foregroundColor: isUnlocked
+                                  foregroundColor: isOpen
                                       ? theme.colorScheme.onPrimary
                                       : Colors.grey,
                                   elevation: 0,
                                 )),
                           ],
                         ),
-                        if (!isUnlocked) ...[
+                        if (!isOpen) ...[
                           const SizedBox(height: 4),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.end,
                             children: [
-                              Icon(Icons.schedule,
-                                  size: 12, color: Colors.grey.shade500),
+                              Icon(
+                                  isClosed
+                                      ? Icons.event_busy_outlined
+                                      : Icons.schedule,
+                                  size: 12,
+                                  color: Colors.grey.shade500),
                               const SizedBox(width: 4),
                               Text(
-                                'Unlocks 10 min before start',
+                                isClosed
+                                    ? 'Consultation closed'
+                                    : isLocked
+                                        ? 'Unlocks 10 min before start'
+                                        : 'Waiting for consultation window',
                                 style: TextStyle(
                                     fontSize: 11, color: Colors.grey.shade500),
                               ),

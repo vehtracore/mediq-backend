@@ -1,5 +1,6 @@
-
+﻿
 import logging
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -16,6 +17,10 @@ from app.services.consultation_pricing import (
     minimum_consultation_fee,
 )
 from app.services.paystack_service import paystack_service
+from app.services.consultation_payout_service import (
+    PAYOUT_AMOUNT_SYNC_STATUSES,
+    expected_consultation_payout_amount,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -100,12 +105,14 @@ def get_doctor_stats(db: Session = Depends(get_db), current_user: User = Depends
     doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
     if not doctor: raise HTTPException(404, "Profile not found")
     
-    # 1. Total Paid — webhook-confirmed funds (transfer.success credited)
+    # 1. Total Paid â€” webhook-confirmed funds (transfer.success credited)
     total_paid = float(doctor.total_earnings or 0)
 
-    # 2. Pending Settlement — earned but not yet sent via Paystack
-    pending_rows = (
-        db.query(ConsultationPayout.amount)
+    # 2. Pending Settlement — earned but not yet sent via Paystack.
+    # Normalize stale unprocessed ledger rows to the current 63% doctor share
+    # before returning the money-card value.
+    pending_payouts = (
+        db.query(ConsultationPayout)
         .filter(
             ConsultationPayout.doctor_id == doctor.id,
             ConsultationPayout.status.in_(
@@ -114,7 +121,27 @@ def get_doctor_stats(db: Session = Depends(get_db), current_user: User = Depends
         )
         .all()
     )
-    pending_settlement = float(sum(row[0] for row in pending_rows))
+    pending_total = Decimal("0.00")
+    payout_amount_changed = False
+    for payout in pending_payouts:
+        amount = Decimal(str(payout.amount or 0)).quantize(Decimal("0.01"))
+        if payout.status in PAYOUT_AMOUNT_SYNC_STATUSES:
+            appointment = (
+                db.query(Appointment)
+                .filter(Appointment.id == payout.appointment_id)
+                .first()
+            )
+            if appointment is not None:
+                expected_amount = expected_consultation_payout_amount(appointment)
+                if expected_amount > 0 and expected_amount != amount:
+                    payout.amount = expected_amount
+                    payout.last_error = None
+                    amount = expected_amount
+                    payout_amount_changed = True
+        pending_total += amount
+    if payout_amount_changed:
+        db.commit()
+    pending_settlement = float(pending_total)
 
     # 3. Calculate Unique Patients
     patient_ids = set()
@@ -154,7 +181,7 @@ def update_doctor_me(data: DoctorUpdate, db: Session = Depends(get_db), current_
             status_code=400,
             detail=(
                 f"Minimum consultation fee for {duration} minutes "
-                f"is ₦{minimum_fee:,.0f}."
+                f"is â‚¦{minimum_fee:,.0f}."
             ),
         )
 
@@ -183,18 +210,17 @@ async def update_payout_settings(
     """
     PUT /api/v1/doctors/me/payout-settings
 
-    Links a verified Nigerian bank account to the authenticated doctor's profile
-    by creating a Paystack split-payment subaccount using the configured platform
-    commission; the remainder is routed directly to the doctor's bank.
+    Links a verified Nigerian bank account to the authenticated doctor's profile.
 
-    On success the subaccount_code, bank_code, and account_number are persisted
-    against the Doctor record and returned in the response.
+    Consultation payments are collected by MDQ+ first. Doctor transfers are
+    created later after the 24-hour complaint hold and admin approval, so this
+    endpoint only verifies and stores bank details.
 
     Raises:
-        403  — caller is not a doctor
-        404  — doctor profile row not found
-        400  — Paystack rejected the bank details (message forwarded verbatim)
-        503  — Paystack could not be reached (network error)
+        403  â€” caller is not a doctor
+        404  â€” doctor profile row not found
+        400  â€” Paystack rejected the bank details (message forwarded verbatim)
+        503  â€” Paystack could not be reached (network error)
     """
     if current_user.role != "doctor":
         raise HTTPException(status_code=403, detail="Only doctors can configure payout settings.")
@@ -204,13 +230,13 @@ async def update_payout_settings(
         raise HTTPException(status_code=404, detail="Doctor profile not found.")
 
     logger.info(
-        "[PAYOUT] Creating subaccount for doctor_id=%s | bank=%s | account=%s",
+        "[PAYOUT] Saving payout bank for doctor_id=%s | bank=%s | account=%s",
         doctor.id,
         payload.bank_code,
         payload.account_number,
     )
 
-    # ── Step 1: Resolve account name and verify it matches the doctor ─────────
+    # â”€â”€ Step 1: Resolve account name and verify it matches the doctor â”€â”€â”€â”€â”€â”€â”€â”€â”€
     resolved_name: str = await paystack_service.resolve_account(
         bank_code=payload.bank_code,
         account_number=payload.account_number,
@@ -218,16 +244,16 @@ async def update_payout_settings(
 
     # Forgiving name comparison: split both names into lowercase tokens and
     # require at least ONE token to match. This tolerates:
-    #   • Name-ordering differences ("OKAFOR JAMES" vs "James Okafor")
-    #   • Middle-name omissions ("AMAKA C. OBI" vs "Amaka Obi")
-    #   • All-caps vs title-case differences from the bank
+    #   â€¢ Name-ordering differences ("OKAFOR JAMES" vs "James Okafor")
+    #   â€¢ Middle-name omissions ("AMAKA C. OBI" vs "Amaka Obi")
+    #   â€¢ All-caps vs title-case differences from the bank
     doctor_tokens = set(doctor.full_name.lower().split())
     bank_tokens   = set(resolved_name.lower().split())
     has_match     = bool(doctor_tokens & bank_tokens)  # set intersection
 
     if not has_match:
         logger.warning(
-            "[PAYOUT] ❌ Name mismatch — doctor='%s' | bank_account='%s'",
+            "[PAYOUT] âŒ Name mismatch â€” doctor='%s' | bank_account='%s'",
             doctor.full_name,
             resolved_name,
         )
@@ -240,23 +266,16 @@ async def update_payout_settings(
         )
 
     logger.info(
-        "[PAYOUT] ✅ Name verified — doctor='%s' | bank_account='%s'",
+        "[PAYOUT] âœ… Name verified â€” doctor='%s' | bank_account='%s'",
         doctor.full_name,
         resolved_name,
     )
 
-    # ── Step 2: Create the Paystack subaccount ────────────────────────────────
-    # This call raises HTTPException(400) or (503) on failure — let it propagate.
-    subaccount_code: str = await paystack_service.create_doctor_subaccount(
-
-        business_name=doctor.full_name,
-        bank_code=payload.bank_code,
-        account_number=payload.account_number,
-    )
-
+    # Step 2: Store verified bank details. The transfer recipient is created
+    # lazily by the admin-approved payout worker when a transfer is due.
     doctor.bank_code = payload.bank_code
     doctor.account_number = payload.account_number
-    doctor.paystack_subaccount_code = subaccount_code
+    doctor.paystack_subaccount_code = None
     doctor.paystack_recipient_code = None
     db.query(ConsultationPayout).filter(
         ConsultationPayout.doctor_id == doctor.id,
@@ -278,13 +297,12 @@ async def update_payout_settings(
         logger.error("[PAYOUT] DB commit failed after subaccount creation: %s", exc)
         raise HTTPException(
             status_code=500,
-            detail="Subaccount was created on Paystack but could not be saved. Contact support.",
+            detail="Payout settings could not be saved. Please try again.",
         ) from exc
 
     logger.info(
-        "[PAYOUT] ✅ Subaccount saved — doctor_id=%s | code=%s",
+        "[PAYOUT] Payout bank saved for doctor_id=%s",
         doctor.id,
-        subaccount_code,
     )
     return doctor
 

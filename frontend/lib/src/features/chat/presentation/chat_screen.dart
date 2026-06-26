@@ -12,6 +12,7 @@ import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_repository.dart';
 import 'package:go_router/go_router.dart';
+import 'consultation_countdown_badge.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   final int appointmentId;
@@ -50,6 +51,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _isConsultationClosed = false;
   bool _isMessageGracePeriod = false;
   bool _consultationHasStarted = false;
+  DateTime? _videoEndsAt;
+  DateTime? _messagesEndAt;
   Timer? _videoEndTimer;
   Timer? _messageEndTimer;
 
@@ -207,15 +210,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         final newMessage = jsonDecode(data);
 
         if (newMessage['type'] == 'consultation_timing') {
+          final videoEndsAt =
+              DateTime.parse(newMessage['video_ends_at'] as String).toLocal();
+          final messagesEndAt =
+              DateTime.parse(newMessage['messages_end_at'] as String).toLocal();
           if (mounted) {
-            setState(() => _consultationHasStarted = true);
+            setState(() {
+              _consultationHasStarted = true;
+              _videoEndsAt = videoEndsAt;
+              _messagesEndAt = messagesEndAt;
+            });
           }
           _scheduleConsultationTiming(
-            videoEndsAt:
-                DateTime.parse(newMessage['video_ends_at'] as String).toLocal(),
-            messagesEndAt:
-                DateTime.parse(newMessage['messages_end_at'] as String)
-                    .toLocal(),
+            videoEndsAt: videoEndsAt,
+            messagesEndAt: messagesEndAt,
           );
           return;
         }
@@ -502,8 +510,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               margin: const EdgeInsets.all(12),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
               decoration: BoxDecoration(
-                color:
-                    isDark ? Colors.white.withOpacity(0.05) : Colors.grey[200],
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.05)
+                    : Colors.grey[200],
                 borderRadius: BorderRadius.circular(30),
               ),
               child: Row(
@@ -512,51 +521,64 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     icon: const Icon(Icons.arrow_back),
                     onPressed: () => context.pop(),
                   ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(widget.title,
-                          style: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.bold)),
-                      if (_mdcnNumber != null && _mdcnNumber!.isNotEmpty)
-                        Text("MDCN: $_mdcnNumber",
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(widget.title,
                             style: const TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.bold)),
+                        if (_mdcnNumber != null && _mdcnNumber!.isNotEmpty)
+                          Text("MDCN: $_mdcnNumber",
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.blue,
+                                  fontWeight: FontWeight.bold)),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: _isPeerOnline
+                                    ? Colors.greenAccent
+                                    : Colors.grey,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              _isPeerOnline ? 'Online' : 'Offline',
+                              style: TextStyle(
                                 fontSize: 12,
-                                color: Colors.blue,
-                                fontWeight: FontWeight.bold)),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: _isPeerOnline
-                                  ? Colors.greenAccent
-                                  : Colors.grey,
-                              shape: BoxShape.circle,
+                                color: _isPeerOnline
+                                    ? Colors.greenAccent
+                                    : Colors.grey,
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            _isPeerOnline ? 'Online' : 'Offline',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: _isPeerOnline
-                                  ? Colors.greenAccent
-                                  : Colors.grey,
-                            ),
+                          ],
+                        ),
+                        if (_consultationHasStarted ||
+                            _isMessageGracePeriod ||
+                            _isConsultationClosed) ...[
+                          const SizedBox(height: 5),
+                          ConsultationCountdownBadge(
+                            videoEndsAt: _videoEndsAt,
+                            messagesEndAt: _messagesEndAt,
+                            consultationStarted: _consultationHasStarted,
+                            isClosed: _isConsultationClosed,
+                            compact: true,
                           ),
                         ],
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                  const Spacer(),
                   Container(
                     margin: const EdgeInsets.symmetric(horizontal: 4),
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.primary.withOpacity(0.1),
+                      color: theme.colorScheme.primary.withValues(alpha: 0.1),
                       shape: BoxShape.circle,
                     ),
                     child: Stack(
@@ -612,7 +634,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   Container(
                     margin: const EdgeInsets.only(left: 4, right: 8),
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.primary.withOpacity(0.1),
+                      color: theme.colorScheme.primary.withValues(alpha: 0.1),
                       shape: BoxShape.circle,
                     ),
                     child: Stack(
@@ -674,7 +696,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ? const Center(child: CircularProgressIndicator())
                 : ListView.builder(
                     controller: _scrollController,
-                    reverse: true, // ✅ Native chat layout (index 0 is bottom)
+                    reverse:
+                        true, // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Native chat layout (index 0 is bottom)
                     padding: const EdgeInsets.all(16),
                     itemCount: _messages.length + (_isLoadingMore ? 1 : 0),
                     itemBuilder: (context, index) {
@@ -721,8 +744,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           child: isImage
                               ? GestureDetector(
                                   onTap: () {
-                                    if (content.toString().startsWith('FILE:'))
+                                    if (content
+                                        .toString()
+                                        .startsWith('FILE:')) {
                                       return;
+                                    }
                                     final fullUrl = content.startsWith('http')
                                         ? content
                                         : "$cleanBaseUrl$content";
@@ -872,7 +898,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           horizontal: 16,
                           vertical: 8,
                         ),
-                        color: theme.colorScheme.primary.withOpacity(0.08),
+                        color:
+                            theme.colorScheme.primary.withValues(alpha: 0.08),
                         child: const Text(
                           "Waiting for the other participant. Calls unlock when both participants have joined.",
                           textAlign: TextAlign.center,
@@ -889,12 +916,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               horizontal: 6, vertical: 6),
                           decoration: BoxDecoration(
                             color: isDark
-                                ? Colors.white.withOpacity(0.05)
+                                ? Colors.white.withValues(alpha: 0.05)
                                 : Colors.grey[200],
                             borderRadius: BorderRadius.circular(30),
                             border: Border.all(
                                 color: isDark
-                                    ? Colors.white.withOpacity(0.05)
+                                    ? Colors.white.withValues(alpha: 0.05)
                                     : Colors.transparent),
                           ),
                           child: Row(
@@ -919,7 +946,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                     hintStyle: TextStyle(
                                         color: theme
                                             .colorScheme.onSurfaceVariant
-                                            .withOpacity(0.6)),
+                                            .withValues(alpha: 0.6)),
                                     border: InputBorder.none,
                                     contentPadding: const EdgeInsets.symmetric(
                                         horizontal: 8, vertical: 12),

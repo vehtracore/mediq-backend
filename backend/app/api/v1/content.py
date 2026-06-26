@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+from urllib.parse import urlparse
 
 from app.core.database import get_db
 from app.models.content import HealthTip
@@ -11,13 +12,65 @@ from app.api.v1.admin import get_current_admin # Reuse admin dependency
 router = APIRouter()
 
 
+RANDOM_PLACEHOLDER_IMAGE_HOSTS = {
+    "source.unsplash.com",
+    "images.unsplash.com",
+    "unsplash.com",
+    "picsum.photos",
+    "loremflickr.com",
+    "placehold.co",
+    "placeholder.com",
+    "via.placeholder.com",
+    "dummyimage.com",
+    "placekitten.com",
+    "placebear.com",
+    "fakeimg.pl",
+}
+
+
+def _normalize_optional_url(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return value
+
+
+def _normalize_health_tip_image_url(value: object) -> str | None:
+    value = _normalize_optional_url(value)
+    if value is None:
+        return None
+
+    parsed = urlparse(value)
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if (
+        host in RANDOM_PLACEHOLDER_IMAGE_HOSTS
+        or "placeholder" in host
+        or "picsum" in host
+        or "loremflickr" in host
+    ):
+        return None
+    return value
+
+
 def _normalize_url_fields(data: dict) -> dict:
-    for url_field in ("image_url", "external_url"):
-        value = data.get(url_field)
-        if isinstance(value, str):
-            value = value.strip()
-            data[url_field] = value or None
+    if "image_url" in data:
+        data["image_url"] = _normalize_health_tip_image_url(data.get("image_url"))
+    if "external_url" in data:
+        data["external_url"] = _normalize_optional_url(data.get("external_url"))
     return data
+
+
+def _strip_placeholder_images(tips: list[HealthTip]) -> list[HealthTip]:
+    for tip in tips:
+        tip.image_url = _normalize_health_tip_image_url(tip.image_url)
+    return tips
 
 # --- PUBLIC ENDPOINTS ---
 
@@ -30,7 +83,14 @@ def get_health_tips(
     """
     Public endpoint to fetch health tips.
     """
-    return db.query(HealthTip).order_by(HealthTip.created_at.desc()).offset(skip).limit(limit).all()
+    tips = (
+        db.query(HealthTip)
+        .order_by(HealthTip.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return _strip_placeholder_images(tips)
 
 # --- ADMIN ENDPOINTS ---
 

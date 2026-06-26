@@ -7,13 +7,17 @@ from pydantic import BaseModel
 from app.core.database import get_db
 from app.models.user import User
 from app.models.doctor import Doctor
-from app.models.appointment import Appointment
+from app.models.appointment import Appointment, resolve_appointment_type
 from app.models.audit import AuditLog
 from app.models.consultation_payout import ConsultationPayout
 from app.schemas.user import UserResponse
 from app.schemas.doctor import DoctorResponse
 from app.api import deps
 from app.services.consultation_payout_service import (
+    appointment_has_blocking_refund_or_dispute,
+    consultation_payout_hold_until,
+    payout_hold_has_elapsed,
+    sync_consultation_payout_amount,
     validate_admin_payout_decision,
 )
 from app.services.consultation_refund_service import (
@@ -319,6 +323,8 @@ def _serialize_payout(payout: ConsultationPayout, db: Session) -> dict:
         if appointment is not None
         else None
     )
+    if appointment is not None:
+        sync_consultation_payout_amount(payout, appointment)
     return {
         "id": payout.id,
         "appointment_id": payout.appointment_id,
@@ -336,7 +342,16 @@ def _serialize_payout(payout: ConsultationPayout, db: Session) -> dict:
             doctor and doctor.bank_code and doctor.account_number
         ),
         "appointment_status": appointment.status if appointment else None,
+        "appointment_type": resolve_appointment_type(appointment) if appointment else None,
         "payment_status": appointment.payment_status if appointment else None,
+        "refund_status": appointment.refund_status if appointment else None,
+        "payout_hold_until": consultation_payout_hold_until(appointment) if appointment else None,
+        "payout_hold_elapsed": payout_hold_has_elapsed(appointment) if appointment else False,
+        "payout_blocked_by_refund_or_dispute": (
+            appointment_has_blocking_refund_or_dispute(appointment)
+            if appointment
+            else False
+        ),
         "patient_joined_at": appointment.patient_joined_at if appointment else None,
         "doctor_joined_at": appointment.doctor_joined_at if appointment else None,
         "consultation_started_at": (
@@ -358,7 +373,7 @@ def list_consultation_payouts(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
-    """List general-queue payout obligations for administrative review."""
+    """List consultation payout obligations for administrative review."""
     allowed_statuses = {
         "awaiting_admin",
         "approved",

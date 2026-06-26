@@ -75,7 +75,7 @@ class ScheduleScreen extends ConsumerWidget {
     final theme = Theme.of(context);
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor, // ✅ Dynamic
+      backgroundColor: theme.scaffoldBackgroundColor, // âœ… Dynamic
       appBar: AppBar(
         title: Text("My Schedule", style: theme.textTheme.titleLarge),
         backgroundColor: theme.appBarTheme.backgroundColor,
@@ -147,17 +147,10 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
 
   void _scheduleTimeGateRefresh() {
     _timeGateTimer?.cancel();
-    final appointment = widget.appointment;
-    final start = appointment.startTime;
-    if (start == null || appointment.isGeneralQueue) return;
-
-    final now = DateTime.now();
-    final unlockAt = start.subtract(const Duration(minutes: 10));
-    final nextBoundary = now.isBefore(unlockAt)
-        ? unlockAt
-        : (now.isBefore(start) ? start : null);
+    final nextBoundary = widget.appointment.nextConsultationBoundary;
     if (nextBoundary == null) return;
 
+    final now = DateTime.now();
     _timeGateTimer = Timer(
       nextBoundary.difference(now) + const Duration(milliseconds: 100),
       () {
@@ -256,6 +249,74 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
     );
   }
 
+  Future<void> _showComplaintDialog() async {
+    final reasonController = TextEditingController();
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text("Report consultation issue"),
+        content: TextField(
+          controller: reasonController,
+          maxLength: 1000,
+          maxLines: 4,
+          decoration: const InputDecoration(
+            hintText: "Briefly explain what went wrong",
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text("Submit"),
+          ),
+        ],
+      ),
+    );
+
+    final reason = reasonController.text.trim();
+    reasonController.dispose();
+    if (submitted != true) return;
+
+    if (reason.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please describe the issue briefly.")),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      await ref.read(appointmentRepositoryProvider).raiseAppointmentComplaint(
+            id: widget.appointment.id,
+            reason: reason,
+          );
+      ref.invalidate(myAppointmentsProvider);
+      ref.invalidate(nextAppointmentProvider);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Issue submitted for admin review."),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(UIErrorFormatter.getMessage(error)),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final appointment = widget.appointment;
@@ -301,7 +362,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: theme.cardTheme.color, // ✅ Dynamic Card
+        color: theme.cardTheme.color, // âœ… Dynamic Card
         borderRadius: BorderRadius.circular(16),
         boxShadow: isDark
             ? []
@@ -376,7 +437,8 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                               style: theme.textTheme.labelSmall,
                             ),
                           ),
-                          if (appointment.refundStatus == 'pending')
+                          if (appointment.refundStatus == 'pending' ||
+                              appointment.refundStatus == 'awaiting_admin')
                             Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 8, vertical: 4),
@@ -461,8 +523,14 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                   if (isConfirmed) ...[
                     const SizedBox(width: 8),
                     Builder(builder: (context) {
-                      final bool isUnlocked =
-                          appointment.isConsultationUnlocked;
+                      final bool isOpen = appointment.isConsultationOpen;
+                      final bool isClosed = appointment.isConsultationClosed;
+                      final bool isLocked = appointment.isConsultationLocked;
+                      final helperText = isClosed
+                          ? 'Consultation closed'
+                          : isLocked
+                              ? 'Unlocks 10 min before start'
+                              : 'Waiting for consultation window';
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
@@ -470,7 +538,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               FilledButton.icon(
-                                  onPressed: isUnlocked
+                                  onPressed: isOpen
                                       ? () => context.push('/chat', extra: {
                                             'title': appointment.doctorName,
                                             'isAi': false,
@@ -481,33 +549,41 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                                           })
                                       : null,
                                   icon: Icon(
-                                    isUnlocked
+                                    isOpen
                                         ? Icons.meeting_room
-                                        : Icons.lock_outline,
+                                        : isClosed
+                                            ? Icons.event_busy_outlined
+                                            : Icons.lock_outline,
                                     size: 18,
                                   ),
-                                  label: const Text("Join Consultation Room"),
+                                  label: Text(isClosed
+                                      ? "Consultation Closed"
+                                      : "Join Consultation Room"),
                                   style: FilledButton.styleFrom(
-                                    backgroundColor: isUnlocked
+                                    backgroundColor: isOpen
                                         ? theme.colorScheme.primary
                                         : Colors.grey.withOpacity(0.12),
-                                    foregroundColor: isUnlocked
+                                    foregroundColor: isOpen
                                         ? theme.colorScheme.onPrimary
                                         : Colors.grey,
                                     elevation: 0,
                                   )),
                             ],
                           ),
-                          if (!isUnlocked) ...[
+                          if (!isOpen) ...[
                             const SizedBox(height: 4),
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.schedule,
-                                    size: 12, color: Colors.grey.shade500),
+                                Icon(
+                                    isClosed
+                                        ? Icons.event_busy_outlined
+                                        : Icons.schedule,
+                                    size: 12,
+                                    color: Colors.grey.shade500),
                                 const SizedBox(width: 4),
                                 Text(
-                                  'Unlocks 10 min before start',
+                                  helperText,
                                   style: TextStyle(
                                       fontSize: 11,
                                       color: Colors.grey.shade500),
@@ -519,10 +595,10 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                       );
                     }),
                   ],
-                  // ── VIP: Doctor has proposed a time → patient must pay ──────
+                  // â”€â”€ VIP: Doctor has proposed a time â†’ patient must pay â”€â”€â”€â”€â”€â”€
                   if (appointment.status == 'awaiting_payment') ...[
                     const SizedBox(width: 8),
-                    // Cancel Request — patient rejects the proposed time
+                    // Cancel Request â€” patient rejects the proposed time
                     OutlinedButton(
                         onPressed: () async {
                           final confirm = await showDialog<bool>(
@@ -602,7 +678,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                             foregroundColor: Colors.white),
                         child: const Text("Pay Now")),
                   ],
-                  // ── VIP pending: doctor hasn't proposed a time yet ──────────
+                  // â”€â”€ VIP pending: doctor hasn't proposed a time yet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                   if (isVipRequest &&
                       appointment.status == 'pending' &&
                       isUnpaid) ...[
@@ -616,6 +692,18 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                       backgroundColor: Colors.grey.withOpacity(0.12),
                       labelStyle: TextStyle(color: Colors.grey.shade600),
                       side: BorderSide.none,
+                    ),
+                  ],
+                  if (appointment.canPatientReportIssue) ...[
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: _isLoading ? null : _showComplaintDialog,
+                      icon: const Icon(Icons.report_problem_outlined, size: 16),
+                      label: const Text("Report Issue"),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: theme.colorScheme.error,
+                        side: BorderSide(color: theme.colorScheme.error),
+                      ),
                     ),
                   ],
                   if (isCompleted && !appointment.hasReview) ...[

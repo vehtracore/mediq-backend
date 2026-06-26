@@ -83,7 +83,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
   Future<void> _verifyDoctor(int id) async {
     try {
       await ref.read(dioProvider).put('/api/v1/admin/doctors/$id/verify');
-      // ✅ FIX: Use invalidate() — consistent with _rejectDoctor
+      // Ã¢Å“â€¦ FIX: Use invalidate() Ã¢â‚¬â€ consistent with _rejectDoctor
       ref.invalidate(unverifiedDoctorsProvider);
       ref.invalidate(adminStatsProvider);
       if (mounted) {
@@ -104,7 +104,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
         '/api/v1/admin/doctors/$id/reject',
         data: {'rejection_reason': reason},
       );
-      // ✅ FIX: Use invalidate() — the correct method for autoDispose providers.
+      // Ã¢Å“â€¦ FIX: Use invalidate() Ã¢â‚¬â€ the correct method for autoDispose providers.
       // ref.refresh() on an autoDispose provider can silently no-op if the
       // provider was already disposed. invalidate() guarantees a cache bust
       // and forces a fresh network fetch on the next ref.watch() cycle.
@@ -126,7 +126,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
   Future<void> _suspendUser(String id) async {
     try {
       await ref.read(dioProvider).put('/api/v1/admin/users/$id/suspend');
-      ref.refresh(allUsersProvider);
+      ref.invalidate(allUsersProvider);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text("User Status Updated"),
@@ -288,13 +288,14 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
     return DefaultTabController(
       length: 6,
       child: Scaffold(
-        backgroundColor: theme.scaffoldBackgroundColor, // ✅ Dynamic Background
+        backgroundColor:
+            theme.scaffoldBackgroundColor, // Ã¢Å“â€¦ Dynamic Background
         appBar: AppBar(
           title: const Text("Admin Console",
               style: TextStyle(fontWeight: FontWeight.bold)),
           backgroundColor: isDark
               ? const Color(0xFF1E1E1E)
-              : Colors.blueGrey[900], // ✅ Darker header in dark mode
+              : Colors.blueGrey[900], // Ã¢Å“â€¦ Darker header in dark mode
           foregroundColor: Colors.white,
           bottom: const TabBar(
             isScrollable: true,
@@ -506,7 +507,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                   final theme = Theme.of(ctx);
 
                   return Card(
-                    color: theme.cardTheme.color, // ✅ Dynamic Card
+                    color: theme.cardTheme.color, // Ã¢Å“â€¦ Dynamic Card
                     child: Column(
                       children: [
                         ListTile(
@@ -694,6 +695,11 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                     final bankReady = payout['bank_ready'] == true;
                     final awaitingApproval =
                         payout['status'] == "awaiting_admin";
+                    final holdElapsed = payout['payout_hold_elapsed'] == true;
+                    final blockedByReview =
+                        payout['payout_blocked_by_refund_or_dispute'] == true;
+                    final canApprove =
+                        bankReady && holdElapsed && !blockedByReview;
 
                     return Card(
                       color: theme.cardTheme.color,
@@ -721,13 +727,13 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                                       ),
                                       Text(
                                         "Patient: ${payout['patient_name'] ?? 'Unknown'}"
-                                        " • Appointment #${payout['appointment_id']}",
+                                        " Ã¢â‚¬Â¢ Appointment #${payout['appointment_id']}",
                                       ),
                                     ],
                                   ),
                                 ),
                                 Text(
-                                  "₦${amount.toStringAsFixed(2)}",
+                                  "Ã¢â€šÂ¦${amount.toStringAsFixed(2)}",
                                   style: theme.textTheme.titleMedium?.copyWith(
                                     fontWeight: FontWeight.bold,
                                     color: Colors.green,
@@ -738,7 +744,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                             const Divider(height: 24),
                             Text(
                               "Outcome: ${payout['appointment_status'] ?? 'Unknown'}"
-                              " • Payment: ${payout['payment_status'] ?? 'Unknown'}",
+                              " Ã¢â‚¬Â¢ Payment: ${payout['payment_status'] ?? 'Unknown'}",
                             ),
                             const SizedBox(height: 6),
                             Text(
@@ -746,6 +752,32 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                               style:
                                   const TextStyle(fontWeight: FontWeight.w600),
                             ),
+                            const SizedBox(height: 6),
+                            Text(
+                              "Type: ${payout['appointment_type'] ?? 'Unknown'}"
+                              " - Refund/dispute: ${payout['refund_status'] ?? 'none'}",
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              holdElapsed
+                                  ? "24-hour complaint hold elapsed"
+                                  : "Held until: ${_formatTimestamp(payout['payout_hold_until'])}",
+                              style: TextStyle(
+                                color:
+                                    holdElapsed ? Colors.green : Colors.orange,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (blockedByReview) ...[
+                              const SizedBox(height: 6),
+                              const Text(
+                                "Blocked by refund/dispute review",
+                                style: TextStyle(
+                                  color: Colors.red,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 6),
                             Text(
                               bankReady
@@ -823,7 +855,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                                   ElevatedButton.icon(
                                     icon: const Icon(Icons.check),
                                     label: const Text("Approve"),
-                                    onPressed: bankReady
+                                    onPressed: canApprove
                                         ? () => _approvePayout(payoutId)
                                         : null,
                                   ),
@@ -959,7 +991,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                                       ),
                                       Text(
                                         "Doctor: ${refund['doctor_name']}"
-                                        " • Appointment #$appointmentId",
+                                        " Ã¢â‚¬Â¢ Appointment #$appointmentId",
                                       ),
                                     ],
                                   ),
@@ -976,7 +1008,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                             const Divider(height: 24),
                             Text(
                               "Outcome: ${refund['appointment_status']}"
-                              " • Refund: ${refund['refund_status']}",
+                              " Ã¢â‚¬Â¢ Refund: ${refund['refund_status']}",
                             ),
                             Text(
                               "Patient joined: "
@@ -1079,10 +1111,10 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
       children: [
         Container(
           padding: const EdgeInsets.all(16),
-          color: theme.cardTheme.color, // ✅ Dynamic Search Bar Background
+          color: theme.cardTheme.color, // Ã¢Å“â€¦ Dynamic Search Bar Background
           child: TextField(
             controller: _searchCtrl,
-            style: theme.textTheme.bodyLarge, // ✅ Text color
+            style: theme.textTheme.bodyLarge, // Ã¢Å“â€¦ Text color
             decoration: InputDecoration(
               hintText: "Search...",
               hintStyle: TextStyle(color: Colors.grey[400]),
@@ -1153,14 +1185,14 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                   itemBuilder: (ctx, i) {
                     final user = filtered[i];
                     final fullName = "${user.firstName} ${user.lastName}";
-                    final isBanned = user.isBanned; // ✅ Dynamic status
+                    final isBanned = user.isBanned; // Ã¢Å“â€¦ Dynamic status
 
                     if (user.role == 'admin') {
                       return ListTile(
                           title: Text(fullName), subtitle: const Text("ADMIN"));
                     }
 
-                    // ✅ Dynamic Card Logic for Banned/Normal users
+                    // Ã¢Å“â€¦ Dynamic Card Logic for Banned/Normal users
                     final cardColor = isBanned
                         ? (theme.brightness == Brightness.dark
                             ? Colors.red.withOpacity(0.2)
@@ -1178,7 +1210,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                         ),
                         title: Text(fullName, style: theme.textTheme.bodyLarge),
                         subtitle: Text(
-                            "${user.email} • ${user.role.toUpperCase()}",
+                            "${user.email} Ã¢â‚¬Â¢ ${user.role.toUpperCase()}",
                             style: theme.textTheme.bodyMedium),
                         trailing: IconButton.filledTonal(
                           onPressed: () => _suspendUser(user.id),
@@ -1244,7 +1276,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
           itemCount: tips.length,
           padding: const EdgeInsets.all(16),
           itemBuilder: (ctx, i) => Card(
-            color: theme.cardTheme.color, // ✅ Dynamic Card
+            color: theme.cardTheme.color, // Ã¢Å“â€¦ Dynamic Card
             margin: const EdgeInsets.only(bottom: 12),
             child: ListTile(
               title: Text(tips[i].title, style: theme.textTheme.bodyLarge),
@@ -1266,7 +1298,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                           MaterialPageRoute(
                               builder: (_) => AdminContentEditorScreen(
                                   healthTip: tips[i])));
-                      if (result == true) ref.refresh(adminContentProvider);
+                      if (result == true) ref.invalidate(adminContentProvider);
                     },
                   ),
                   const SizedBox(width: 8),
@@ -1283,7 +1315,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                       await ref
                           .read(contentRepositoryProvider)
                           .deleteHealthTip(tips[i].id);
-                      ref.refresh(adminContentProvider);
+                      ref.invalidate(adminContentProvider);
                     },
                   ),
                 ],
@@ -1315,7 +1347,7 @@ class _StatCard extends StatelessWidget {
       width: width,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: theme.cardTheme.color, // ✅ Dynamic Card Background
+        color: theme.cardTheme.color, // Ã¢Å“â€¦ Dynamic Card Background
         borderRadius: BorderRadius.circular(12),
         border: Border(left: BorderSide(color: color, width: 4)),
         boxShadow: theme.brightness == Brightness.dark

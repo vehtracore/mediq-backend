@@ -4,6 +4,11 @@ class Appointment {
   static const generalQueueType = 'general_queue';
   static const specialistScheduledType = 'specialist_scheduled';
   static const vipRequestType = 'vip_request';
+  static const consultationDuration = Duration(minutes: 30);
+  static const consultationMessageGrace = Duration(minutes: 10);
+  static const scheduledRoomEarlyAccess = Duration(minutes: 10);
+  static const scheduledJoinGrace = Duration(minutes: 15);
+  static const generalQueueJoinGrace = Duration(minutes: 5);
 
   final int id;
   // These are the backend's integer relational PKs.
@@ -54,10 +59,10 @@ class Appointment {
   });
 
   factory Appointment.fromJson(Map<String, dynamic> json) {
-    // ── Debug handshake: log the raw payload so UUID/int mismatches are visible ──
+    // â”€â”€ Debug handshake: log the raw payload so UUID/int mismatches are visible â”€â”€
     if (kDebugMode) {
       debugPrint(
-        '📦 [Appointment.fromJson] id=${json["id"]} '
+        'ðŸ“¦ [Appointment.fromJson] id=${json["id"]} '
         'doctor_id=${json["doctor_id"]} (${json["doctor_id"].runtimeType}) '
         'patient_id=${json["patient_id"]} (${json["patient_id"].runtimeType}) '
         'status=${json["status"]} payment=${json["payment_status"]}',
@@ -115,6 +120,94 @@ class Appointment {
         'both_no_show',
       }.contains(status);
 
+  DateTime? get consultationMessagesEndAt {
+    final actualStart = consultationStartedAt;
+    if (actualStart == null) return null;
+    return actualStart.add(consultationDuration + consultationMessageGrace);
+  }
+
+  DateTime? get roomUnlockAt {
+    final scheduledStart = startTime;
+    if (scheduledStart == null) return null;
+    if (isGeneralQueue || appointmentType == null) return scheduledStart;
+    return scheduledStart.subtract(scheduledRoomEarlyAccess);
+  }
+
+  DateTime? get attendanceDeadlineAt {
+    final scheduledStart = startTime;
+    if (scheduledStart == null) return null;
+    if (isGeneralQueue || appointmentType == null) {
+      return scheduledStart.add(generalQueueJoinGrace);
+    }
+    return scheduledStart.add(scheduledJoinGrace);
+  }
+
+  bool get hasConsultationStarted => consultationStartedAt != null;
+
+  bool get hasConsultationOpened {
+    if (status != 'confirmed') return false;
+    if (hasConsultationStarted) return true;
+    final unlockAt = roomUnlockAt;
+    if (unlockAt == null) return false;
+    return !DateTime.now().isBefore(unlockAt);
+  }
+
+  bool get isConsultationClosed {
+    if (status != 'confirmed') return false;
+    final actualEnd = consultationMessagesEndAt;
+    if (actualEnd != null) {
+      return !DateTime.now().isBefore(actualEnd);
+    }
+    final deadline = attendanceDeadlineAt;
+    if (deadline == null) return false;
+    return !DateTime.now().isBefore(deadline);
+  }
+
+  bool get isConsultationOpen {
+    if (status != 'confirmed' || paymentStatus != 'paid') return false;
+    if (isConsultationClosed) return false;
+
+    if (hasConsultationStarted) return true;
+
+    final unlockAt = roomUnlockAt;
+    final deadline = attendanceDeadlineAt;
+    if (unlockAt == null || deadline == null) return false;
+    final now = DateTime.now();
+    return !now.isBefore(unlockAt) && now.isBefore(deadline);
+  }
+
+  bool get isConsultationLocked {
+    if (status != 'confirmed' || isConsultationClosed) return false;
+    final unlockAt = roomUnlockAt;
+    if (unlockAt == null) return false;
+    return DateTime.now().isBefore(unlockAt);
+  }
+
+  bool get canDoctorWrapUp =>
+      status == 'confirmed' &&
+      paymentStatus == 'paid' &&
+      hasConsultationStarted;
+
+  bool get canDoctorCancel {
+    if (status == 'awaiting_payment') return true;
+    if (status != 'confirmed') return false;
+    if (isGeneralQueue || appointmentType == null) return false;
+    return !hasConsultationOpened;
+  }
+
+  DateTime? get nextConsultationBoundary {
+    final now = DateTime.now();
+    final candidates = <DateTime?>[
+      roomUnlockAt,
+      startTime,
+      attendanceDeadlineAt,
+      consultationMessagesEndAt,
+    ].whereType<DateTime>().where((value) => value.isAfter(now)).toList()
+      ..sort();
+    if (candidates.isEmpty) return null;
+    return candidates.first;
+  }
+
   bool get canPatientCancel {
     final cancellableStatus = status == 'pending' ||
         status == 'awaiting_payment' ||
@@ -125,38 +218,33 @@ class Appointment {
       return false;
     }
 
-    if (isSpecialistScheduled || isVipRequest) {
-      final scheduledStart = startTime;
-      if (scheduledStart != null && !DateTime.now().isBefore(scheduledStart)) {
-        return false;
-      }
+    if ((isSpecialistScheduled || isVipRequest) &&
+        status == 'confirmed' &&
+        hasConsultationOpened) {
+      return false;
     }
     return true;
   }
 
-  bool get isConsultationUnlocked {
-    if (status != 'confirmed') return false;
-    final actualStart = consultationStartedAt;
-    if (actualStart != null) {
-      return DateTime.now().isBefore(
-        actualStart.add(const Duration(minutes: 40)),
-      );
-    }
-    final scheduledStart = startTime;
-    if (scheduledStart == null) return false;
-    final now = DateTime.now();
-    if (isGeneralQueue) {
-      return !now.isBefore(scheduledStart) &&
-          now.isBefore(scheduledStart.add(const Duration(minutes: 5)));
-    }
-    final unlockTime = scheduledStart.subtract(const Duration(minutes: 10));
-    final joinDeadline = scheduledStart.add(const Duration(minutes: 15));
-    return !now.isBefore(unlockTime) && now.isBefore(joinDeadline);
-  }
+  bool get isConsultationUnlocked => isConsultationOpen;
 
   bool get canPatientPay {
     if (paymentStatus != 'unpaid') return false;
     return isVipRequest && status == 'awaiting_payment';
+  }
+
+  DateTime? get complaintWindowEndsAt {
+    final messagesEndAt = consultationMessagesEndAt;
+    if (messagesEndAt == null) return null;
+    return messagesEndAt.add(const Duration(hours: 24));
+  }
+
+  bool get canPatientReportIssue {
+    if (status != 'completed' || paymentStatus != 'paid') return false;
+    if (refundStatus != null && refundStatus != 'rejected') return false;
+    final windowEndsAt = complaintWindowEndsAt;
+    if (windowEndsAt == null) return false;
+    return DateTime.now().isBefore(windowEndsAt);
   }
 
   String? get paymentTransactionType {

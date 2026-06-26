@@ -1,3 +1,4 @@
+﻿from datetime import datetime, timedelta
 from types import SimpleNamespace
 import unittest
 
@@ -12,7 +13,9 @@ from app.services.consultation_payout_service import (
     PAYOUT_STATUS_AWAITING_ADMIN,
     PAYOUT_STATUS_APPROVED,
     TRANSFERABLE_PAYOUT_STATUSES,
+    eligible_consultation_payout_amount,
     eligible_general_queue_payout_amount,
+    sync_consultation_payout_amount,
     validate_admin_payout_decision,
 )
 
@@ -25,7 +28,11 @@ def _appointment(**overrides):
         "status": "completed",
         "payment_status": "paid",
         "doctor_id": 7,
+        "amount": 4000.0,
         "payout": 2520.0,
+        "refund_status": None,
+        "consultation_started_at": datetime.utcnow() - timedelta(days=2),
+        "no_show_marked_at": datetime.utcnow() - timedelta(days=2),
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -64,14 +71,23 @@ class ConsultationPayoutTests(unittest.TestCase):
         self.assertNotIn("awaiting_admin", TRANSFERABLE_PAYOUT_STATUSES)
         self.assertNotIn("rejected", TRANSFERABLE_PAYOUT_STATUSES)
 
-    def test_completed_and_patient_no_show_general_queue_sessions_are_payable(self):
+    def test_completed_general_queue_sessions_are_payable_after_hold(self):
         self.assertEqual(
             eligible_general_queue_payout_amount(_appointment()),
             2520,
         )
-        self.assertEqual(
+
+    def test_general_queue_patient_no_show_is_not_payable(self):
+        self.assertIsNone(
             eligible_general_queue_payout_amount(
                 _appointment(status="patient_no_show")
+            )
+        )
+
+    def test_specialist_completed_session_is_payable_after_hold(self):
+        self.assertEqual(
+            eligible_consultation_payout_amount(
+                _appointment(appointment_type=APPOINTMENT_TYPE_SPECIALIST_SCHEDULED)
             ),
             2520,
         )
@@ -81,9 +97,11 @@ class ConsultationPayoutTests(unittest.TestCase):
             {"status": "pending"},
             {"status": "doctor_no_show"},
             {"status": "both_no_show"},
+            {"status": "queue_patient_unavailable"},
+            {"refund_status": "awaiting_admin"},
             {"payment_status": "unpaid"},
             {"doctor_id": None},
-            {"payout": 0},
+            {"amount": 0},
             {"appointment_type": APPOINTMENT_TYPE_SPECIALIST_SCHEDULED},
         )
 
@@ -105,12 +123,25 @@ class ConsultationPayoutTests(unittest.TestCase):
             )
         )
 
+    def test_stale_70_percent_payout_row_is_normalized(self):
+        payout = _payout(amount=2800)
+        amount = sync_consultation_payout_amount(payout, _appointment())
+        self.assertEqual(float(amount), 2520.0)
+        self.assertEqual(float(payout.amount), 2520.0)
+
+
+    def test_admin_cannot_approve_before_complaint_hold_elapsed(self):
+        with self.assertRaises(HTTPException) as raised:
+            validate_admin_payout_decision(
+                _payout(),
+                action="approve",
+                appointment=_appointment(consultation_started_at=datetime.utcnow()),
+                doctor=_doctor(),
+            )
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_admin_approval_rejects_invalid_cases(self):
         invalid_cases = (
-            {
-                "payout": _payout(amount=2500),
-                "appointment": _appointment(),
-                "doctor": _doctor(),
-            },
             {
                 "payout": _payout(),
                 "appointment": _appointment(status="doctor_no_show"),

@@ -1,4 +1,4 @@
-from types import SimpleNamespace
+﻿from types import SimpleNamespace
 import unittest
 
 from fastapi import HTTPException
@@ -24,7 +24,7 @@ def _appointment(**overrides):
 
 
 class ConsultationRefundTests(unittest.TestCase):
-    def test_only_doctor_or_both_no_show_are_refundable(self):
+    def test_no_show_and_queue_failure_outcomes_are_refundable(self):
         self.assertEqual(eligible_consultation_refund_amount(_appointment()), 4000)
         self.assertEqual(
             eligible_consultation_refund_amount(
@@ -33,13 +33,39 @@ class ConsultationRefundTests(unittest.TestCase):
             4000,
         )
 
-        for status in ("patient_no_show", "completed", "cancelled"):
+        self.assertEqual(
+            eligible_consultation_refund_amount(
+                _appointment(status="queue_expired")
+            ),
+            4000,
+        )
+        self.assertEqual(
+            eligible_consultation_refund_amount(
+                _appointment(status="queue_patient_unavailable")
+            ),
+            4000,
+        )
+
+        for status in ("patient_no_show", "cancelled"):
             with self.subTest(status=status):
                 self.assertIsNone(
                     eligible_consultation_refund_amount(
                         _appointment(status=status)
                     )
                 )
+
+    def test_completed_session_is_refundable_only_after_complaint_or_dispute(self):
+        self.assertIsNone(
+            eligible_consultation_refund_amount(
+                _appointment(status="completed", refund_status=None)
+            )
+        )
+        self.assertEqual(
+            eligible_consultation_refund_amount(
+                _appointment(status="completed", refund_status=REFUND_STATUS_AWAITING_ADMIN)
+            ),
+            4000,
+        )
 
     def test_refund_requires_paid_transaction_reference_and_amount(self):
         cases = (

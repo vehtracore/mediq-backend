@@ -13,7 +13,7 @@ from app.core.database import Base
 
 
 class ConsultationPayout(Base):
-    """Idempotent doctor payout obligation for a general-queue appointment."""
+    """Idempotent doctor payout obligation for an admin-reviewed consultation."""
 
     __tablename__ = "consultation_payouts"
 

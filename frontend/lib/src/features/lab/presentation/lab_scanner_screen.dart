@@ -1,3 +1,7 @@
+﻿import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,7 +29,7 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Camera is NOT initialized here — user chooses source first
+    // Camera is not initialized here; user chooses source first
   }
 
   @override
@@ -101,10 +105,7 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen>
 
       final image = await _controller!.takePicture();
 
-      // Trigger logic
-      await ref.read(labControllerProvider.notifier).analyzeImage(image);
-
-      _checkResult();
+      await _analyzeImageWithPreflight(image);
     } catch (e) {
       debugPrint('[LabScanner] capture error: $e');
       if (!mounted) return;
@@ -261,6 +262,106 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen>
     );
   }
 
+  Future<void> _analyzeImageWithPreflight(XFile image) async {
+    final issue = await _localImageQualityIssue(image);
+    if (issue != null) {
+      if (!mounted) return;
+      _showErrorDialog(issue);
+      return;
+    }
+
+    await ref.read(labControllerProvider.notifier).analyzeImage(image);
+    _checkResult();
+  }
+
+  Future<String?> _localImageQualityIssue(XFile imageFile) async {
+    try {
+      final bytes = await imageFile.readAsBytes();
+      if (bytes.isEmpty) {
+        return 'The selected image is empty. Please retake the strip photo.';
+      }
+
+      final codec = await ui.instantiateImageCodec(bytes, targetWidth: 160);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      final width = image.width;
+      final height = image.height;
+      final byteData =
+          await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      image.dispose();
+      codec.dispose();
+
+      if (byteData == null || width < 3 || height < 3) {
+        return null;
+      }
+
+      final rgba = byteData.buffer.asUint8List();
+      final luminance = Uint8List(width * height);
+      var sum = 0.0;
+      var sumSquares = 0.0;
+
+      for (var i = 0, pixel = 0; i < rgba.length; i += 4, pixel++) {
+        final value =
+            (0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2])
+                .round()
+                .clamp(0, 255)
+                .toInt();
+        luminance[pixel] = value;
+        sum += value;
+        sumSquares += value * value;
+      }
+
+      final count = luminance.length;
+      if (count == 0) return null;
+
+      final brightness = sum / count;
+      final variance = (sumSquares / count) - (brightness * brightness);
+      final contrast = math.sqrt(math.max(0, variance));
+      final focusScore = _laplacianVariance(luminance, width, height);
+
+      if (brightness < 35) {
+        return 'The image looks too dark. Retake it in brighter, even lighting.';
+      }
+      if (brightness > 245) {
+        return 'The image looks overexposed. Retake it without glare or direct flash.';
+      }
+      if (contrast < 10) {
+        return 'The image has low contrast. Place the strip on a plain white background and retake.';
+      }
+      if (focusScore < 18 && contrast < 25) {
+        return 'The image looks blurry. Hold the camera steady and retake a sharper photo.';
+      }
+    } catch (_) {
+      return null;
+    }
+
+    return null;
+  }
+
+  double _laplacianVariance(Uint8List luminance, int width, int height) {
+    var sum = 0.0;
+    var sumSquares = 0.0;
+    var count = 0;
+
+    for (var y = 1; y < height - 1; y++) {
+      for (var x = 1; x < width - 1; x++) {
+        final index = y * width + x;
+        final value = (4 * luminance[index]) -
+            luminance[index - 1] -
+            luminance[index + 1] -
+            luminance[index - width] -
+            luminance[index + width];
+        sum += value;
+        sumSquares += value * value;
+        count++;
+      }
+    }
+
+    if (count == 0) return 0;
+    final mean = sum / count;
+    return (sumSquares / count) - (mean * mean);
+  }
+
   Future<void> _pickAndAnalyzeImage(ImageSource source) async {
     final picker = ImagePicker();
     final pickedFile = await picker.pickImage(
@@ -270,19 +371,18 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen>
       maxHeight: 1920,
     );
     if (pickedFile != null) {
-      await ref.read(labControllerProvider.notifier).analyzeImage(pickedFile);
-      _checkResult();
+      await _analyzeImageWithPreflight(pickedFile);
     }
   }
 
-  // ──────────────────────────────────────────────
-  //  BUILD
-  // ──────────────────────────────────────────────
+  // ---------------------------------------------------------------------------
+  // BUILD
+  // ---------------------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
     final labState = ref.watch(labControllerProvider);
 
-    // ── Source-choice screen (default) ──
+    // Source-choice screen
     if (!_isCameraMode) {
       return Scaffold(
         backgroundColor: const Color(0xFF0A1628),
@@ -317,7 +417,7 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen>
                 ),
                 const SizedBox(height: 40),
 
-                // ── Gallery button ──
+                // Gallery button
                 SizedBox(
                   width: double.infinity,
                   height: 56,
@@ -338,7 +438,7 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen>
                 ),
                 const SizedBox(height: 16),
 
-                // ── Camera button ──
+                // Camera button
                 SizedBox(
                   width: double.infinity,
                   height: 56,
@@ -376,7 +476,7 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen>
       );
     }
 
-    // ── Camera loading spinner ──
+    // Camera loading spinner
     if (!_isCameraInitialized) {
       return const Scaffold(
         backgroundColor: Colors.black,
@@ -384,7 +484,7 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen>
       );
     }
 
-    // ── Camera mode (existing scanner UI) ──
+    // Camera mode
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -496,7 +596,7 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen>
                       color: Colors.white, size: 32),
                 ),
 
-                // Shutter Button — captures with existing camera
+                // Shutter button captures with existing camera
                 GestureDetector(
                   onTap: labState.isLoading ? null : _takePicture,
                   child: Container(

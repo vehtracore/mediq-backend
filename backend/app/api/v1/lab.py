@@ -21,6 +21,13 @@ from app.api.v1.ai_consent import require_active_ai_consent
 from app.models.user import User
 from app.models.lab_result import LabResult
 from app.services.ai_service import AIInputLimitError, analyze_lab_strip
+from app.services.lab_image_quality import assess_lab_image_quality
+from app.services.lab_scan_guard import (
+    add_scan_failure_guidance,
+    enforce_lab_scan_guard,
+    record_lab_scan_failure,
+    record_lab_scan_success,
+)
 from app.services.ai_usage import (
     PAID_MONTHLY_HEAVY_AI_LIMIT,
     monthly_heavy_ai_usage,
@@ -121,6 +128,8 @@ async def analyze_lab_image(
             ),
         )
 
+    enforce_lab_scan_guard(db, current_user)
+
     # ── 3. Validate file type ────────────────────────────────────────────────
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
@@ -135,6 +144,19 @@ async def analyze_lab_image(
         if len(image_bytes) == 0:
             raise HTTPException(status_code=400, detail="Empty file uploaded")
 
+        quality_result = assess_lab_image_quality(image_bytes)
+        if not quality_result.passed:
+            failure_action = record_lab_scan_failure(db, current_user)
+            request_lease.completed = True
+            return {
+                "status": "REJECTED",
+                "reason": add_scan_failure_guidance(
+                    quality_result.reason,
+                    failure_action,
+                ),
+                "lighting_score": quality_result.lighting_score,
+            }
+
         # ── 5. Analyze with Gemini Vision ────────────────────────────────────
         try:
             analysis_result = await analyze_lab_strip(image_bytes)
@@ -145,6 +167,8 @@ async def analyze_lab_image(
         status = analysis_result.get("status", "ERROR")
 
         if status == "SUCCESS":
+            record_lab_scan_success(current_user)
+
             # Upload image to Cloudinary for storage
             await file.seek(0)  # Reset file pointer
             upload_result = cloudinary.uploader.upload(
@@ -164,9 +188,8 @@ async def analyze_lab_image(
             db.add(lab_result)
 
             # ── 7. Increment quota counter ───────────────────────────────────
-            # Quota is only charged on a confirmed SUCCESS response from Gemini.
-            # A blurry or unrecognised image that Gemini rejects (status != SUCCESS)
-            # does NOT count against the user's monthly allowance.
+            # Successful scans always consume one monthly photo/lab unit.
+            # Repeated unreadable scans are handled separately by lab_scan_guard.
             current_user.monthly_lab_count += 1
             db.add(current_user)
 
@@ -175,6 +198,13 @@ async def analyze_lab_image(
 
             # Add record ID to response
             analysis_result["record_id"] = lab_result.id
+
+        elif status == "REJECTED":
+            failure_action = record_lab_scan_failure(db, current_user)
+            analysis_result["reason"] = add_scan_failure_guidance(
+                analysis_result.get("reason"),
+                failure_action,
+            )
 
         request_lease.completed = True
         return analysis_result

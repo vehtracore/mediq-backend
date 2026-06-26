@@ -6,19 +6,22 @@ from sqlalchemy.orm import joinedload
 
 from app.core.database import SessionLocal
 from app.models.appointment import (
+    APPOINTMENT_TYPE_GENERAL_QUEUE,
     Appointment,
     DoctorSlot,
     attendance_deadline_utc,
     consultation_started_utc,
+    resolve_appointment_type,
 )
 from app.models.notification import Notification
 from app.services.consultation_pricing import (
     DEFAULT_CONSULTATION_DURATION_MINUTES,
     CONSULTATION_MESSAGE_GRACE_MINUTES,
 )
+from app.services.consultation_completion import complete_consultation
 from app.services.consultation_payout_service import (
-    ensure_general_queue_payout,
-    process_approved_general_queue_payouts,
+    ensure_consultation_payout,
+    process_approved_consultation_payouts,
 )
 from app.services.consultation_refund_service import (
     REFUND_STATUS_AWAITING_ADMIN,
@@ -62,37 +65,32 @@ async def cleanup_expired_slots() -> None:
 
 
 async def sweep_stale_appointments() -> None:
+    """Cancel stale pending appointments that never moved into a paid/active flow.
+
+    Confirmed consultations are intentionally not completed here. Started
+    consultations are closed by access-control timing first, then completed by
+    the nightly consultation completion sweep if the doctor forgets to mark
+    complete.
     """
-    Hourly cron job — resolves two categories of stale appointments.
-
-    Sweep 1 (Liability — auto-close):
-        Appointments with status == 'active' or 'confirmed' whose start_time is
-        older than 24 hours are marked 'completed'. This prevents consultations
-        from hanging open indefinitely when a doctor forgets to close them.
-
-    Sweep 2 (Limbo — unclaimed cancellation):
-        Appointments with status == 'pending' whose start_time is older than
-        24 hours are marked 'cancelled'.  These are bookings that were never
-        accepted by a doctor and have now expired.
-
-    Both queries operate on naive UTC timestamps to match the column storage
-    convention used throughout the project (datetime.utcnow, no tzinfo).
-    """
-    # DB columns are stored as naive UTC — strip tzinfo before comparing.
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    cutoff = now_naive - timedelta(hours=24)
 
     db = SessionLocal()
     try:
-        # -- Sweep 1: active → completed (24-hour auto-close) -----------------
-        stmt_active = (
+        stmt_paid_queue = (
             update(Appointment)
-            .where(Appointment.status.in_(("active", "confirmed")))
+            .where(Appointment.appointment_type == APPOINTMENT_TYPE_GENERAL_QUEUE)
+            .where(Appointment.status == "pending")
+            .where(Appointment.payment_status == "paid")
             .where(Appointment.start_time < cutoff)
-            .values(status="completed")
+            .values(
+                status="queue_expired",
+                refund_status=REFUND_STATUS_AWAITING_ADMIN,
+                no_show_marked_at=now_naive,
+            )
         )
-        result_active = db.execute(stmt_active)
+        result_paid_queue = db.execute(stmt_paid_queue)
 
-        # -- Sweep 2: pending → cancelled (unclaimed / expired) ---------------
         stmt_pending = (
             update(Appointment)
             .where(Appointment.status == "pending")
@@ -103,15 +101,14 @@ async def sweep_stale_appointments() -> None:
 
         db.commit()
 
-        closed = result_active.rowcount
+        queue_expired = result_paid_queue.rowcount
         cancelled = result_pending.rowcount
-        logger.info(
-            "[APPT SWEEP] Cron Sweep complete — "
-            "Closed %d active appointment(s) | "
-            "Cancelled %d pending appointment(s).",
-            closed,
-            cancelled,
-        )
+        if queue_expired or cancelled:
+            logger.info(
+                "[APPT SWEEP] Queue refund review=%d | Cancelled stale pending=%d.",
+                queue_expired,
+                cancelled,
+            )
     except Exception as exc:
         db.rollback()
         logger.exception("[APPT SWEEP] Error during stale-appointment sweep: %s", exc)
@@ -120,7 +117,13 @@ async def sweep_stale_appointments() -> None:
 
 
 async def complete_expired_consultations() -> None:
-    """Auto-complete sessions after video time plus the message grace period."""
+    """Nightly cleanup for started consultations whose grace period has ended.
+
+    The consultation room closes immediately through access-control timing, but
+    status remains confirmed so the doctor can still write prescription, referral,
+    notes, and manually mark complete. This job completes forgotten wrap-ups at
+    end of day using the same vault/payout side effects as manual completion.
+    """
     now = datetime.now(timezone.utc)
     close_after = timedelta(
         minutes=(
@@ -141,14 +144,13 @@ async def complete_expired_consultations() -> None:
         for appointment in appointments:
             start = consultation_started_utc(appointment)
             if start is not None and now >= start + close_after:
-                appointment.status = "completed"
-                ensure_general_queue_payout(db, appointment)
+                complete_consultation(db, appointment)
                 completed += 1
 
         db.commit()
         if completed:
             logger.info(
-                "[APPT SWEEP] Auto-completed %d consultation(s) after grace period.",
+                "[APPT SWEEP] Auto-completed %d consultation(s) in nightly wrap-up.",
                 completed,
             )
     except Exception as exc:
@@ -182,6 +184,8 @@ async def mark_consultation_no_shows() -> None:
             "patient_no_show": 0,
             "doctor_no_show": 0,
             "both_no_show": 0,
+            "queue_patient_unavailable": 0,
+            "returned_to_queue": 0,
         }
         for appointment in appointments:
             deadline = attendance_deadline_utc(appointment)
@@ -190,8 +194,36 @@ async def mark_consultation_no_shows() -> None:
 
             patient_joined = appointment.patient_joined_at is not None
             doctor_joined = appointment.doctor_joined_at is not None
+            appointment_type = resolve_appointment_type(appointment)
+
+            if (
+                appointment_type == APPOINTMENT_TYPE_GENERAL_QUEUE
+                and patient_joined
+                and not doctor_joined
+            ):
+                missed_doctor_id = appointment.doctor_id
+                appointment.doctor_id = None
+                appointment.status = "pending"
+                appointment.start_time = now_naive
+                appointment.patient_joined_at = None
+                appointment.doctor_joined_at = None
+                appointment.consultation_started_at = None
+                appointment.no_show_marked_at = None
+                appointment.refund_status = None
+                counts["returned_to_queue"] += 1
+                logger.warning(
+                    "[GENERAL QUEUE] Returned appt_id=%s to paid queue after doctor_no_show doctor_id=%s.",
+                    appointment.id,
+                    missed_doctor_id,
+                )
+                continue
+
             if doctor_joined and not patient_joined:
-                appointment.status = "patient_no_show"
+                if appointment_type == APPOINTMENT_TYPE_GENERAL_QUEUE:
+                    appointment.status = "queue_patient_unavailable"
+                    appointment.refund_status = REFUND_STATUS_AWAITING_ADMIN
+                else:
+                    appointment.status = "patient_no_show"
             elif patient_joined and not doctor_joined:
                 appointment.status = "doctor_no_show"
                 appointment.refund_status = REFUND_STATUS_AWAITING_ADMIN
@@ -200,16 +232,18 @@ async def mark_consultation_no_shows() -> None:
                 appointment.refund_status = REFUND_STATUS_AWAITING_ADMIN
 
             appointment.no_show_marked_at = now_naive
-            ensure_general_queue_payout(db, appointment)
+            ensure_consultation_payout(db, appointment)
             counts[appointment.status] += 1
 
         db.commit()
         if any(counts.values()):
             logger.info(
-                "[NO SHOW] patient=%d doctor=%d both=%d",
+                "[NO SHOW] patient=%d doctor=%d both=%d queue_patient_unavailable=%d returned_queue=%d",
                 counts["patient_no_show"],
                 counts["doctor_no_show"],
                 counts["both_no_show"],
+                counts["queue_patient_unavailable"],
+                counts["returned_to_queue"],
             )
     except Exception as exc:
         db.rollback()

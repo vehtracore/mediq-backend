@@ -23,10 +23,13 @@ from app.models.user import User
 from app.models.review import Review
 from app.models.vault import ConsultationRecord
 from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, AppointmentUpdate, GeneralBookRequest, ReferralRequest, ReferralResponse, AppointmentProposeRequest, VIPBookRequest, ReferralCreate
-from app.services.consultation_pricing import calculate_consultation_split
-from app.services.consultation_payout_service import (
-    ensure_general_queue_payout,
+from app.services.consultation_pricing import (
+    CONSULTATION_ROOM_EARLY_ACCESS_MINUTES,
+    calculate_consultation_split,
 )
+from app.services.consultation_completion import complete_consultation
+from app.services.consultation_payout_service import consultation_payout_hold_until
+from app.services.consultation_refund_service import REFUND_STATUS_AWAITING_ADMIN
 from app.api import deps
 from app.core.notifications import dispatch_push
 
@@ -35,9 +38,36 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class AppointmentComplaintRequest(BaseModel):
+    reason: str
+
+
 # ---------------------------------------------------------------------------
 # Appointment authorization helpers
 # ---------------------------------------------------------------------------
+
+def consultation_has_opened(appointment: Appointment) -> bool:
+    """Return true once cancellation must give way to attendance/no-show logic."""
+    if getattr(appointment, "consultation_started_at", None) is not None:
+        return True
+
+    scheduled_start = appointment_start_utc(appointment)
+    if scheduled_start is None:
+        return False
+
+    appointment_type = resolve_appointment_type(appointment)
+    if appointment_type in {
+        APPOINTMENT_TYPE_SPECIALIST_SCHEDULED,
+        APPOINTMENT_TYPE_VIP_REQUEST,
+    }:
+        opens_at = scheduled_start - timedelta(
+            minutes=CONSULTATION_ROOM_EARLY_ACCESS_MINUTES
+        )
+    else:
+        opens_at = scheduled_start
+
+    return datetime.now(timezone.utc) >= opens_at
+
 
 def require_patient_role(current_user: User) -> User:
     """Require an active patient account."""
@@ -867,22 +897,19 @@ def cancel_my_appointment(appt_id: int, db: Session = Depends(get_db), current_u
             ),
         )
 
-    if appointment_type in {
-        APPOINTMENT_TYPE_SPECIALIST_SCHEDULED,
-        APPOINTMENT_TYPE_VIP_REQUEST,
-    }:
-        scheduled_start = appointment_start_utc(appt)
-        if (
-            scheduled_start is not None
-            and datetime.now(timezone.utc) >= scheduled_start
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "This appointment has already started and can no longer "
-                    "be cancelled."
-                ),
-            )
+    if (
+        appt.status == "confirmed"
+        and appointment_type
+        in {APPOINTMENT_TYPE_SPECIALIST_SCHEDULED, APPOINTMENT_TYPE_VIP_REQUEST}
+        and consultation_has_opened(appt)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This consultation has already opened and can no longer "
+                "be cancelled."
+            ),
+        )
 
     appt.status = "cancelled"
     if appt.slot and appt.slot_id == appt.slot.id:
@@ -1177,6 +1204,18 @@ def cancel_appointment_by_doctor(appt_id: int, db: Session = Depends(get_db), cu
             status_code=status.HTTP_409_CONFLICT,
             detail="Only proposed or confirmed appointments can be cancelled by a doctor.",
         )
+    appointment_type = resolve_appointment_type(appt)
+    if appt.status == "confirmed" and (
+        appointment_type in {APPOINTMENT_TYPE_GENERAL_QUEUE, None}
+        or consultation_has_opened(appt)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This consultation has already opened and can no longer "
+                "be cancelled. Use the no-show or completion workflow."
+            ),
+        )
 
     appt.status = "cancelled"
     if appt.slot:
@@ -1219,51 +1258,7 @@ def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_us
             detail="The consultation cannot be completed before both participants join.",
         )
 
-    appt.status = "completed"
-
-    # ── Compile referral data if the doctor issued a hospital referral ───
-    referrals = (
-        f"Referred to: {appt.referred_hospital}\nNote: {appt.referral_note}"
-        if appt.referred_hospital
-        else None
-    )
-
-    # ── Auto-create a ConsultationRecord in the Health Vault ─────────────
-    # patient_id is sourced from the appointment row (NOT current_user,
-    # which is the doctor) to guarantee correct ownership attribution.
-    existing = (
-        db.query(ConsultationRecord)
-        .filter(ConsultationRecord.appointment_id == appt.id)
-        .first()
-    )
-    if existing is None:
-        vault_record = ConsultationRecord(
-            appointment_id=appt.id,
-            patient_id=appt.patient_id,
-            doctor_id=doctor.id,
-            clinical_notes=appt.notes,
-            prescriptions=appt.prescription,
-            referrals=referrals,
-            created_at=datetime.now(timezone.utc),
-        )
-        db.add(vault_record)
-        logger.info(
-            "[Vault] ConsultationRecord created — appt_id=%s patient_id=%s doctor_id=%s prescription=%s referral=%s",
-            appt.id, appt.patient_id, doctor.id,
-            bool(appt.prescription), bool(referrals),
-        )
-    else:
-        # Sync prescription and referral data into the existing vault record
-        if appt.prescription:
-            existing.prescriptions = appt.prescription
-        if referrals:
-            existing.referrals = referrals
-        logger.info(
-            "[Vault] ConsultationRecord updated — appt_id=%s prescription=%s referral=%s",
-            appt.id, bool(appt.prescription), bool(referrals),
-        )
-
-    ensure_general_queue_payout(db, appt)
+    complete_consultation(db, appt)
     db.commit()
     db.refresh(appt)
     _notify_patient(
@@ -1528,6 +1523,65 @@ def propose_appointment_time(
         amount=getattr(appt, 'amount', 0.0),
         paystack_reference=getattr(appt, 'paystack_reference', None)
     )
+
+
+@router.post("/{appt_id}/complaint")
+def raise_appointment_complaint(
+    appt_id: int,
+    payload: AppointmentComplaintRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """Allow a patient to raise a refund/dispute review within the 24h hold."""
+    appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
+    if not appt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Appointment not found.",
+        )
+    require_patient_owner(appt, current_user)
+
+    if appt.status != "completed" or appt.payment_status != "paid":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only completed paid consultations can be reviewed for complaint refund.",
+        )
+
+    hold_until = consultation_payout_hold_until(appt)
+    if hold_until is None or datetime.utcnow() > hold_until:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The 24-hour complaint window for this consultation has closed.",
+        )
+
+    reason = payload.reason.strip()
+    if not reason:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Complaint reason is required.",
+        )
+    if len(reason) > 1000:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Complaint reason is too long.",
+        )
+
+    if appt.refund_status and appt.refund_status != "rejected":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This consultation is already under refund or dispute review.",
+        )
+
+    appt.refund_status = REFUND_STATUS_AWAITING_ADMIN
+    appt.refund_amount = appt.amount
+    appt.refund_last_error = f"Patient complaint: {reason}"
+    db.commit()
+    return {
+        "status": "submitted",
+        "appointment_id": appt.id,
+        "refund_status": appt.refund_status,
+        "message": "Your complaint has been sent for admin review.",
+    }
 
 
 # ---------------------------------------------------------------------------

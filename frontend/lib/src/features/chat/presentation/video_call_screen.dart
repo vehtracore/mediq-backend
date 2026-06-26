@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter/foundation.dart';
 import '../data/video_repository.dart';
+import 'consultation_countdown_badge.dart';
 
 class VideoCallScreen extends ConsumerStatefulWidget {
   final int appointmentId;
@@ -31,6 +32,8 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
   late bool _cameraOff;
   Timer? _warningTimer;
   Timer? _endTimer;
+  DateTime? _videoEndsAt;
+  DateTime? _messagesEndAt;
   bool _timeLimitHandled = false;
 
   @override
@@ -58,6 +61,14 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
       final warningAt = DateTime.parse(data['warning_at'] as String).toLocal();
       final videoEndsAt =
           DateTime.parse(data['video_ends_at'] as String).toLocal();
+      final messagesEndAt =
+          DateTime.parse(data['messages_end_at'] as String).toLocal();
+      if (mounted) {
+        setState(() {
+          _videoEndsAt = videoEndsAt;
+          _messagesEndAt = messagesEndAt;
+        });
+      }
 
       _engine = createAgoraRtcEngine();
       await _engine!.initialize(
@@ -244,6 +255,20 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
                     label:
                         _isLoading ? "Connecting..." : "Waiting for other...",
                   ),
+          ),
+
+          Positioned(
+            top: 48,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: ConsultationCountdownBadge(
+                videoEndsAt: _videoEndsAt,
+                messagesEndAt: _messagesEndAt,
+                consultationStarted: _videoEndsAt != null,
+                isClosed: _timeLimitHandled,
+              ),
+            ),
           ),
 
           // 2. LOCAL USER VIEW (Picture-in-Picture)

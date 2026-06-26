@@ -69,6 +69,10 @@ class User(Base):
     # endpoint zeroes monthly_lab_count before checking the cap.
     monthly_lab_count = Column(Integer, default=0, nullable=False)
     last_lab_reset = Column(Date, nullable=True)
+    lab_failed_attempt_count = Column(Integer, default=0, nullable=False)
+    lab_failed_attempt_started_at = Column(DateTime(timezone=True), nullable=True)
+    lab_last_failed_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    lab_cooldown_until = Column(DateTime(timezone=True), nullable=True)
 
     # --- AI CONSENT ---
     # Consent is granted once and remains valid unless explicitly withdrawn.

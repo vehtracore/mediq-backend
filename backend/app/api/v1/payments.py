@@ -1,17 +1,17 @@
-"""
+﻿"""
 Payments Router
 ================
 Owns all Paystack-facing HTTP surface area for the MDQ+ platform.
 
 Exposes:
-  POST /api/v1/payments/initialize     — Server-side Paystack transaction init.
+  POST /api/v1/payments/initialize     â€” Server-side Paystack transaction init.
                                          Accepts (email, amount_kobo, reference)
                                          and returns an authorization_url so the
                                          Secret Key never touches the client.
-  POST /api/v1/payments/webhook        — HMAC-verified Paystack webhook with
+  POST /api/v1/payments/webhook        â€” HMAC-verified Paystack webhook with
                                          reference-based routing and a Dead
                                          Letter Queue (DLQ) fallback.
-  GET  /api/v1/payments/verify/{ref}   — Manual transaction verification for
+  GET  /api/v1/payments/verify/{ref}   â€” Manual transaction verification for
                                          when the app loses connection before
                                          the webhook fires.
 
@@ -59,6 +59,7 @@ from app.models.user import User
 from app.models.doctor import Doctor
 from app.models.consultation_payout import ConsultationPayout
 from app.services.consultation_pricing import naira_to_kobo
+from app.services.consultation_refund_service import REFUND_STATUS_AWAITING_ADMIN
 from app.services.email_service import send_transactional_email
 from app.services.paystack_amounts import paystack_requested_amount_kobo
 from app.services.paystack_service import paystack_service  # noqa: F401 (used in future endpoints)
@@ -91,11 +92,11 @@ def _display_name(user: User | None) -> str:
         return "A patient"
     return f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email or "A patient"
 
-# ── Paystack credentials ───────────────────────────────────────────────────────
+# â”€â”€ Paystack credentials â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 PAYSTACK_SECRET_KEY: str = os.environ.get("PAYSTACK_SECRET_KEY", "")
 if not PAYSTACK_SECRET_KEY:
     logger.warning(
-        "[PAYMENTS] ⚠️  PAYSTACK_SECRET_KEY is not set. "
+        "[PAYMENTS] âš ï¸  PAYSTACK_SECRET_KEY is not set. "
         "The /webhook endpoint will reject every incoming request."
     )
 
@@ -107,7 +108,7 @@ FAMILY_SUBSCRIPTION_AMOUNT_KOBO = 1_000_000
 router = APIRouter()
 
 
-# ─── Schemas ──────────────────────────────────────────────────────────────────
+# â”€â”€â”€ Schemas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class PaymentInitializeRequest(BaseModel):
     """
@@ -116,7 +117,7 @@ class PaymentInitializeRequest(BaseModel):
     Fields
     ------
     email      : The customer's email address forwarded to Paystack.
-    amount     : Transaction amount in **Kobo** (Naira × 100). Must be > 0.
+    amount     : Transaction amount in **Kobo** (Naira Ã— 100). Must be > 0.
                  Required by Paystack even when a plan code is supplied.
     reference  : The pre-generated MDQ reference string. The backend stores this
                  on the Appointment row before calling /initialize so the watchdog
@@ -128,7 +129,7 @@ class PaymentInitializeRequest(BaseModel):
     """
 
     email: EmailStr
-    amount: int = Field(..., gt=0, description="Amount in Kobo (Naira × 100)")
+    amount: int = Field(..., gt=0, description="Amount in Kobo (Naira Ã— 100)")
     reference: str = Field(..., min_length=8, description="MDQ-prefixed transaction reference")
     plan: Optional[str] = Field(
         default=None,
@@ -137,7 +138,7 @@ class PaymentInitializeRequest(BaseModel):
     )
 
 
-# ─── Initialize Endpoint ──────────────────────────────────────────────────────
+# â”€â”€â”€ Initialize Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.post("/initialize", status_code=200)
 async def initialize_transaction(
@@ -165,22 +166,22 @@ async def initialize_transaction(
 
     Error responses
     ---------------
-    503  Payment service unavailable — PAYSTACK_SECRET_KEY not configured.
-    502  Bad Gateway              — Could not reach Paystack.
-    400  Bad Request              — Paystack rejected the initialization request.
+    503  Payment service unavailable â€” PAYSTACK_SECRET_KEY not configured.
+    502  Bad Gateway              â€” Could not reach Paystack.
+    400  Bad Request              â€” Paystack rejected the initialization request.
     """
 
     if not PAYSTACK_SECRET_KEY:
         raise HTTPException(
             status_code=503,
-            detail="Payment service unavailable — secret key not configured.",
+            detail="Payment service unavailable â€” secret key not configured.",
         )
 
     headers = {
         "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
         "Content-Type": "application/json",
     }
-    # Base payload — amount is always required by Paystack even for plan-based
+    # Base payload â€” amount is always required by Paystack even for plan-based
     # recurring charges, so we never omit it regardless of whether plan is set.
     if not current_user.email:
         raise HTTPException(
@@ -229,20 +230,9 @@ async def initialize_transaction(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if appointment is not None and appointment.doctor_id is not None:
-        doctor = appointment.doctor
-        if doctor is None or not doctor.paystack_subaccount_code:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "This doctor's payout setup is incomplete. "
-                    "Please choose another doctor or try again later."
-                ),
-            )
-        body["subaccount"] = doctor.paystack_subaccount_code
-        body["transaction_charge"] = naira_to_kobo(
-            appointment.commission or 0.0
-        )
+    # Consultation funds are collected by MDQ+ first. Doctor payout is handled
+    # later through ConsultationPayout after the 24-hour complaint hold and
+    # explicit admin approval. Do not attach a Paystack subaccount split here.
 
     metadata: dict = {
         "reference": payload.reference,
@@ -286,7 +276,7 @@ async def initialize_transaction(
     if not resp.is_success or not resp_data.get("status"):
         error_msg: str = resp_data.get("message", "Unknown error from Paystack")
         logger.error(
-            "[PAYMENTS] ❌ Paystack initialization failed | HTTP %s | message='%s' | reference='%s'",
+            "[PAYMENTS] âŒ Paystack initialization failed | HTTP %s | message='%s' | reference='%s'",
             resp.status_code,
             error_msg,
             payload.reference,
@@ -301,7 +291,7 @@ async def initialize_transaction(
     access_code: str = tx.get("access_code", "")
 
     logger.info(
-        "[PAYMENTS] ✅ Transaction initialized | reference='%s' | access_code='%s'",
+        "[PAYMENTS] âœ… Transaction initialized | reference='%s' | access_code='%s'",
         payload.reference,
         access_code,
     )
@@ -313,7 +303,7 @@ async def initialize_transaction(
     }
 
 
-# ─── Shared helpers ───────────────────────────────────────────────────────────
+# â”€â”€â”€ Shared helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _parse_reference(reference: str) -> tuple[str, str | None, str | None]:
     """
@@ -548,10 +538,10 @@ def _apply_db_update(
     response and the verify endpoint response).
 
     Raises ValueError with a descriptive message if the required IDs are
-    missing or the target record is not found — callers must handle this.
+    missing or the target record is not found â€” callers must handle this.
     """
-    # ── Flow A: Individual subscription upgrade ───────────────────────────────
-    # ── Flow A2: Family Plan upgrade (payer + all dependents) ─────────────────
+    # â”€â”€ Flow A: Individual subscription upgrade â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â”€â”€ Flow A2: Family Plan upgrade (payer + all dependents) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if transaction_type in ("subscription", "family_subscription"):
         if not ref_user_id:
             raise ValueError(
@@ -564,7 +554,7 @@ def _apply_db_update(
                 f"{transaction_type}: user id={ref_user_id} not found"
             )
 
-        # ── Upgrade the primary payer ──────────────────────────────────────────
+        # â”€â”€ Upgrade the primary payer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         expiry = _next_subscription_expiry(
             user.subscription_expiry,
             _payment_timestamp(paystack_data),
@@ -577,7 +567,7 @@ def _apply_db_update(
         db.refresh(user)
 
         logger.info(
-            "[PAYMENTS] ✅ Subscription upgraded — user_id=%s (%s) | type=%s | expiry=%s",
+            "[PAYMENTS] âœ… Subscription upgraded â€” user_id=%s (%s) | type=%s | expiry=%s",
             user.id,
             user.email,
             transaction_type,
@@ -585,11 +575,11 @@ def _apply_db_update(
         )
         if identifiers_saved:
             logger.info(
-                "[PAYMENTS] ✅ Stored Paystack subscription identifiers for user_id=%s",
+                "[PAYMENTS] âœ… Stored Paystack subscription identifiers for user_id=%s",
                 user.id,
             )
 
-        # ── Flow A2 only: Bulk-upgrade all linked dependents ───────────────────
+        # â”€â”€ Flow A2 only: Bulk-upgrade all linked dependents â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         upgraded_dependents: list[int] = []
         if transaction_type == "family_subscription":
             dependents: list[User] = (
@@ -605,20 +595,20 @@ def _apply_db_update(
                 db.commit()
                 upgraded_dependents = [d.id for d in dependents]
                 logger.info(
-                    "[PAYMENTS] ✅ Family Plan — upgraded %d dependent(s) | ids=%s | expiry=%s",
+                    "[PAYMENTS] âœ… Family Plan â€” upgraded %d dependent(s) | ids=%s | expiry=%s",
                     len(dependents),
                     upgraded_dependents,
                     expiry,
                 )
             else:
                 logger.info(
-                    "[PAYMENTS] ℹ️  Family Plan — primary user_id=%s has no linked dependents.",
+                    "[PAYMENTS] â„¹ï¸  Family Plan â€” primary user_id=%s has no linked dependents.",
                     user.id,
                 )
 
         plan_label = "MDQ+ Family Plan" if transaction_type == "family_subscription" else "MDQ+ Premium"
 
-        # ── Queue confirmation email ───────────────────────────────────────────
+        # â”€â”€ Queue confirmation email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if background_tasks and user.email:
             expiry_str = user.subscription_expiry.strftime('%d %B %Y')
             family_note = (
@@ -629,7 +619,7 @@ def _apply_db_update(
             )
             html_body = f"""
             <div style="font-family:sans-serif;max-width:520px;margin:auto;">
-              <h2 style="color:#4A90E2;">{plan_label} Activated 🎉</h2>
+              <h2 style="color:#4A90E2;">{plan_label} Activated ðŸŽ‰</h2>
               <p>Hi {user.first_name or 'there'},</p>
               <p>Your <strong>{plan_label}</strong> subscription is now active!</p>
               <p>Your plan has been upgraded and will remain active until
@@ -642,13 +632,13 @@ def _apply_db_update(
                 <li>Urinalysis AI &amp; advanced analytics</li>
                 <li>Consultation summaries</li>
               </ul>
-              <p style="color:#888;font-size:13px;">— The MDQ+ Team</p>
+              <p style="color:#888;font-size:13px;">â€” The MDQ+ Team</p>
             </div>
             """
             background_tasks.add_task(
                 send_transactional_email,
                 to_email=user.email,
-                subject=f"{plan_label} Activated 🎉",
+                subject=f"{plan_label} Activated ðŸŽ‰",
                 html_body=html_body,
             )
 
@@ -669,10 +659,10 @@ def _apply_db_update(
             "dependents_upgraded": upgraded_dependents,
         }
 
-    # ── Flow B: Appointment payment confirmation ───────────────────────────────
+    # â”€â”€ Flow B: Appointment payment confirmation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Covers: gp_consult, specialist_consult, and vip_request (propose-and-pay).
     elif transaction_type in ("gp_consult", "specialist_consult", "vip_request"):
-        from app.models.appointment import Appointment  # local import → no circular dep
+        from app.models.appointment import Appointment  # local import â†’ no circular dep
 
         if not ref_appointment_id:
             raise ValueError(
@@ -699,10 +689,10 @@ def _apply_db_update(
         appt.payment_status = "paid"
 
         # Dual-pipeline confirmation:
-        # ┌─ doctor_id IS set: direct booking OR VIP (propose-and-pay) → confirm immediately.
+        # â”Œâ”€ doctor_id IS set: direct booking OR VIP (propose-and-pay) â†’ confirm immediately.
         #    This covers both 'pending' (specialist direct) and 'awaiting_payment' (VIP after
         #    doctor proposed a time), so no status guard is needed here.
-        # └─ doctor_id IS NULL: General Queue → stays 'pending' for manual doctor claiming.
+        # â””â”€ doctor_id IS NULL: General Queue â†’ stays 'pending' for manual doctor claiming.
         if appt.doctor_id is not None:
             appt.status = "confirmed"
         else:
@@ -712,7 +702,7 @@ def _apply_db_update(
         db.refresh(appt)
 
         logger.info(
-            "[PAYMENTS] ✅ Appointment confirmed — appt_id=%s | type=%s | patient_id=%s",
+            "[PAYMENTS] âœ… Appointment confirmed â€” appt_id=%s | type=%s | patient_id=%s",
             appt.id,
             transaction_type,
             appt.patient_id,
@@ -724,7 +714,7 @@ def _apply_db_update(
             else None
         )
 
-        # ── Queue appointment confirmation email ───────────────────────────
+        # â”€â”€ Queue appointment confirmation email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Look up the patient's email from the User table using patient_id.
         if background_tasks and patient:
             if patient and patient.email:
@@ -735,7 +725,7 @@ def _apply_db_update(
                 )
                 html_body = f"""
                 <div style="font-family:sans-serif;max-width:520px;margin:auto;">
-                  <h2 style="color:#4A90E2;">Appointment Confirmed ✅</h2>
+                  <h2 style="color:#4A90E2;">Appointment Confirmed âœ…</h2>
                   <p>Hi {patient.first_name or 'there'},</p>
                   <p>Your <strong>{type_label}</strong> payment has been
                   confirmed and your appointment is now booked.</p>
@@ -758,13 +748,13 @@ def _apply_db_update(
                   scheduled time.</p>
                   <p>Questions? Reply to this email or contact support in
                   the app.</p>
-                  <p style="color:#888;font-size:13px;">— The MDQ+ Team</p>
+                  <p style="color:#888;font-size:13px;">â€” The MDQ+ Team</p>
                 </div>
                 """
                 background_tasks.add_task(
                     send_transactional_email,
                     to_email=patient.email,
-                    subject="MDQ+ Appointment Confirmed ✅",
+                    subject="MDQ+ Appointment Confirmed âœ…",
                     html_body=html_body,
                 )
 
@@ -797,10 +787,10 @@ def _apply_db_update(
             "transaction_type": transaction_type,
         }
 
-    # ── Unrecognised type ──────────────────────────────────────────────────────
+    # â”€â”€ Unrecognised type â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     else:
         logger.warning(
-            "[PAYMENTS] Unrecognised transactionType='%s' — no action taken.",
+            "[PAYMENTS] Unrecognised transactionType='%s' â€” no action taken.",
             transaction_type,
         )
         return {"action": "ignored", "reason": f"unrecognised type '{transaction_type}'"}
@@ -824,20 +814,20 @@ def _write_dlq(
         db.add(dlq_entry)
         db.commit()
         logger.error(
-            "[PAYMENTS] ⚠️  Event routed to DLQ — reference='%s' | error='%s'",
+            "[PAYMENTS] âš ï¸  Event routed to DLQ â€” reference='%s' | error='%s'",
             reference,
             error_message,
         )
     except Exception as dlq_exc:
-        # DLQ write itself failed — last-resort log, don't raise
+        # DLQ write itself failed â€” last-resort log, don't raise
         logger.critical(
-            "[PAYMENTS] 🚨 DLQ write FAILED — reference='%s' | dlq_error='%s'",
+            "[PAYMENTS] ðŸš¨ DLQ write FAILED â€” reference='%s' | dlq_error='%s'",
             reference,
             dlq_exc,
         )
 
 
-# ─── Webhook ──────────────────────────────────────────────────────────────────
+# â”€â”€â”€ Webhook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _handle_charge_success(data: dict, db: Session) -> dict:
@@ -854,7 +844,7 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
 
     if not user_id_raw:
         raise ValueError(
-            "charge.success: metadata.user_id is absent — cannot upgrade subscription."
+            "charge.success: metadata.user_id is absent â€” cannot upgrade subscription."
         )
 
     user: User | None = db.query(User).filter(User.id == int(user_id_raw)).first()
@@ -873,13 +863,13 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
     user.auto_renew = True
     user.burst_chat_count = 0
 
-    # ── Capture subscription codes if Paystack includes them ───────────────────
+    # â”€â”€ Capture subscription codes if Paystack includes them â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # charge.success events may embed `subscription` as either an object or a
     # plain code string, so use the shared tolerant parser.
     identifiers_saved = _persist_subscription_identifiers(user, data)
     if identifiers_saved:
         logger.info(
-            "[WEBHOOK] charge.success — captured subscription identifiers for user_id=%s",
+            "[WEBHOOK] charge.success â€” captured subscription identifiers for user_id=%s",
             user.id,
         )
 
@@ -899,26 +889,26 @@ def _handle_charge_success(data: dict, db: Session) -> dict:
     db.refresh(user)
 
     logger.info(
-        "[WEBHOOK] charge.success — upgraded user_id=%s to %s | expiry=%s | dependents=%s",
+        "[WEBHOOK] charge.success â€” upgraded user_id=%s to %s | expiry=%s | dependents=%s",
         user.id,
         user.plan,
         user.subscription_expiry,
         upgraded_dependents,
     )
 
-    # ── FCM: notify the user their subscription is now active ──────────────
+    # â”€â”€ FCM: notify the user their subscription is now active â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try:
         expiry_str = user.subscription_expiry.strftime("%d %b %Y") if user.subscription_expiry else "N/A"
         dispatch_push(
             token=user.fcm_token,
-            title="🎉 MDQ+ Subscription Activated!",
+            title="ðŸŽ‰ MDQ+ Subscription Activated!",
             body=f"Your subscription is active until {expiry_str}. Enjoy unlimited access!",
             data={"type": "subscription_successful", "plan": str(user.plan)},
             event_label="PAYMENTS/CHARGE_SUCCESS",
         )
     except Exception as notif_exc:
         logger.error(
-            "[WEBHOOK] charge.success FCM push failed — user_id=%s: %s",
+            "[WEBHOOK] charge.success FCM push failed â€” user_id=%s: %s",
             user.id,
             notif_exc,
             exc_info=True,
@@ -969,7 +959,7 @@ def _handle_subscription_disable(data: dict, db: Session) -> dict:
 
     if not user_id_raw and not subscription_code:
         raise ValueError(
-            "subscription.disable: user_id/subscription_code not found in payload — "
+            "subscription.disable: user_id/subscription_code not found in payload â€” "
             "cannot downgrade subscription."
         )
 
@@ -1004,7 +994,7 @@ def _handle_subscription_disable(data: dict, db: Session) -> dict:
     db.refresh(user)
 
     logger.info(
-        "[WEBHOOK] subscription.disable — user_id=%s auto_renew disabled; "
+        "[WEBHOOK] subscription.disable â€” user_id=%s auto_renew disabled; "
         "downgraded=%s; previous_plan=%s; dependents_downgraded=%s.",
         user.id,
         downgraded,
@@ -1041,7 +1031,7 @@ def _handle_subscription_create(data: dict, db: Session) -> dict:
             "subscription.create: data.subscription_code is absent."
         )
 
-    # Resolve user_id — Paystack stores it in the customer's metadata
+    # Resolve user_id â€” Paystack stores it in the customer's metadata
     customer: dict = data.get("customer") or {}
     customer_meta: dict = customer.get("metadata") or {}
     top_meta: dict = data.get("metadata") or {}
@@ -1049,7 +1039,7 @@ def _handle_subscription_create(data: dict, db: Session) -> dict:
 
     if not user_id_raw:
         raise ValueError(
-            "subscription.create: customer.metadata.user_id is absent — "
+            "subscription.create: customer.metadata.user_id is absent â€” "
             "cannot persist subscription codes."
         )
 
@@ -1090,7 +1080,7 @@ def _handle_subscription_create(data: dict, db: Session) -> dict:
     db.refresh(user)
 
     logger.info(
-        "[WEBHOOK] subscription.create — persisted sub_code='%s' for user_id=%s",
+        "[WEBHOOK] subscription.create â€” persisted sub_code='%s' for user_id=%s",
         subscription_code,
         user.id,
     )
@@ -1173,7 +1163,7 @@ def _handle_transfer_success(data: dict, db: Session) -> dict:
         _push_user(
             doctor_user,
             title="Payout Sent",
-            body=f"Your payout of ₦{float(ledger.amount):,.2f} has been processed.",
+            body=f"Your payout of â‚¦{float(ledger.amount):,.2f} has been processed.",
             data={
                 "type": "payout_sent",
                 "doctor_id": str(doctor.id),
@@ -1216,7 +1206,7 @@ def _handle_transfer_success(data: dict, db: Session) -> dict:
     db.refresh(doctor)
 
     logger.info(
-        "[WEBHOOK] transfer.success — credited doctor_id=%s | amount=%.2f NGN "
+        "[WEBHOOK] transfer.success â€” credited doctor_id=%s | amount=%.2f NGN "
         "| new total_earnings=%.2f",
         doctor.id,
         amount_naira,
@@ -1231,7 +1221,7 @@ def _handle_transfer_success(data: dict, db: Session) -> dict:
     _push_user(
         doctor_user,
         title="Payout Sent",
-        body=f"Your payout of ₦{amount_naira:,.2f} has been processed.",
+        body=f"Your payout of â‚¦{amount_naira:,.2f} has been processed.",
         data={"type": "payout_sent", "doctor_id": str(doctor.id)},
         event_label="PAYMENTS/PAYOUT_SENT",
     )
@@ -1298,6 +1288,48 @@ def _handle_transfer_status(
         "action": f"consultation_payout_{status_value}",
         "payout_id": payout.id,
         "appointment_id": payout.appointment_id,
+    }
+
+
+def _handle_paystack_dispute(data: dict, db: Session, *, event: str) -> dict:
+    """Freeze consultation payout when Paystack reports a customer dispute."""
+    transaction = data.get("transaction") or {}
+    reference = str(
+        data.get("transaction_reference")
+        or data.get("reference")
+        or transaction.get("reference")
+        or ""
+    )
+    if not reference:
+        return {"action": "ignored_dispute_without_reference"}
+
+    appointment = (
+        db.query(Appointment)
+        .filter(Appointment.paystack_reference == reference)
+        .with_for_update()
+        .first()
+    )
+    if appointment is None:
+        transaction_type, ref_appointment_id, _ = _parse_reference(reference)
+        if transaction_type in CONSULTATION_TRANSACTION_TYPES and ref_appointment_id:
+            appointment = (
+                db.query(Appointment)
+                .filter(Appointment.id == int(ref_appointment_id))
+                .with_for_update()
+                .first()
+            )
+
+    if appointment is None:
+        return {"action": "ignored_dispute_without_consultation"}
+
+    appointment.refund_status = REFUND_STATUS_AWAITING_ADMIN
+    appointment.refund_amount = appointment.amount
+    appointment.refund_last_error = f"Paystack dispute received: {event}"
+    db.commit()
+    return {
+        "action": "consultation_payout_frozen_for_dispute",
+        "appointment_id": appointment.id,
+        "refund_status": appointment.refund_status,
     }
 
 
@@ -1380,35 +1412,35 @@ async def paystack_webhook(
     2. Parses the reference string to extract transaction type + DB IDs.
     3. Updates the database (subscription or appointment).
     4. On any DB failure, writes to the failed_webhooks DLQ instead of
-       raising — so Paystack receives 200 and stops retrying a
+       raising â€” so Paystack receives 200 and stops retrying a
        structurally unprocessable event.
 
     Always returns HTTP 200 so Paystack never enters a retry loop for
     events we deliberately ignore or route to the DLQ.
     """
 
-    # ── 1. Read raw body BEFORE any parsing ───────────────────────────────────
+    # â”€â”€ 1. Read raw body BEFORE any parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     body: bytes = await request.body()
 
-    # ── 2. Extract Paystack signature header ──────────────────────────────────
+    # â”€â”€ 2. Extract Paystack signature header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     signature: str = request.headers.get("x-paystack-signature", "")
     if not signature:
-        logger.warning("[WEBHOOK] Request missing x-paystack-signature header — rejected.")
+        logger.warning("[WEBHOOK] Request missing x-paystack-signature header â€” rejected.")
         raise HTTPException(status_code=400, detail="Missing signature header")
 
-    # ── 3. Recompute HMAC-SHA512 digest ───────────────────────────────────────
+    # â”€â”€ 3. Recompute HMAC-SHA512 digest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     expected_hash: str = hmac.new(
         PAYSTACK_SECRET_KEY.encode("utf-8"),
         msg=body,
         digestmod=hashlib.sha512,
     ).hexdigest()
 
-    # ── 4. Timing-attack-safe comparison ─────────────────────────────────────
+    # â”€â”€ 4. Timing-attack-safe comparison â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if not hmac.compare_digest(expected_hash, signature):
-        logger.warning("[WEBHOOK] Signature mismatch — request rejected.")
+        logger.warning("[WEBHOOK] Signature mismatch â€” request rejected.")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    # ── 5. Parse payload ──────────────────────────────────────────────────────
+    # â”€â”€ 5. Parse payload â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try:
         payload: dict = json.loads(body)
     except json.JSONDecodeError:
@@ -1422,7 +1454,7 @@ async def paystack_webhook(
     )
     raw_event: str = payload.get("event", "unknown")
 
-    # ── 6. Parse reference string ─────────────────────────────────────────────
+    # â”€â”€ 6. Parse reference string â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     transaction_type, ref_appointment_id, ref_user_id = _parse_reference(reference)
 
     logger.info(
@@ -1492,6 +1524,8 @@ async def paystack_webhook(
                 db=db,
                 status_value="reversed",
             )
+        elif raw_event in {"charge.dispute.create", "charge.dispute.remind"}:
+            result = _handle_paystack_dispute(data=data, db=db, event=raw_event)
         elif raw_event in {
             "refund.pending",
             "refund.processing",
@@ -1527,13 +1561,13 @@ async def paystack_webhook(
         )
         return {
             "status": "success",
-            "detail": "event routed to DLQ — see failed_webhooks table",
+            "detail": "event routed to DLQ â€” see failed_webhooks table",
         }
 
     return {"status": "success", **result}
 
 
-# ─── Manual Verification Endpoint ────────────────────────────────────────────
+# â”€â”€â”€ Manual Verification Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/verify/{reference}")
 async def verify_transaction(
@@ -1559,10 +1593,10 @@ async def verify_transaction(
     if not PAYSTACK_SECRET_KEY:
         raise HTTPException(
             status_code=503,
-            detail="Payment verification is unavailable — secret key not configured.",
+            detail="Payment verification is unavailable â€” secret key not configured.",
         )
 
-    # ── 1. Query Paystack ─────────────────────────────────────────────────────
+    # â”€â”€ 1. Query Paystack â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
@@ -1577,7 +1611,7 @@ async def verify_transaction(
             detail="Could not reach Paystack verification endpoint.",
         )
 
-    # ── 2. Inspect Paystack's verdict ─────────────────────────────────────────
+    # â”€â”€ 2. Inspect Paystack's verdict â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if not paystack_data.get("status"):
         logger.warning(
             "[VERIFY] Paystack returned an error for reference='%s': %s",
@@ -1604,7 +1638,7 @@ async def verify_transaction(
             "detail": "Transaction is not yet successful.",
         }
 
-    # ── 3. Parse reference and update database ────────────────────────────────
+    # â”€â”€ 3. Parse reference and update database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     transaction_type, ref_appointment_id, ref_user_id = _parse_reference(reference)
     if (
         transaction_type in {"subscription", "family_subscription"}
@@ -1628,7 +1662,7 @@ async def verify_transaction(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     logger.info(
-        "[VERIFY] ✅ Paystack confirmed success — reference='%s' | type='%s' "
+        "[VERIFY] âœ… Paystack confirmed success â€” reference='%s' | type='%s' "
         "| appointment_id='%s' | user_id='%s'",
         reference,
         transaction_type,

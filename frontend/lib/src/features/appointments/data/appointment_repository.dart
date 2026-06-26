@@ -17,7 +17,7 @@ class AppointmentRepository {
 
   AppointmentRepository(this._dio);
 
-  // ── Internal helper: log the current Supabase session state before any call ──
+  // â”€â”€ Internal helper: log the current Supabase session state before any call â”€â”€
   void _logAuthHandshake(String endpoint) {
     if (!kDebugMode) return;
     final session = Supabase.instance.client.auth.currentSession;
@@ -94,6 +94,25 @@ class AppointmentRepository {
     _logAuthHandshake(ep);
     try {
       await _dio.put('/api/v1/appointments/$id/cancel');
+    } catch (e) {
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
+    }
+  }
+
+  Future<void> raiseAppointmentComplaint({
+    required int id,
+    required String reason,
+  }) async {
+    const ep = 'POST /api/v1/appointments/:id/complaint';
+    _logAuthHandshake(ep);
+    try {
+      await _dio.post(
+        '/api/v1/appointments/$id/complaint',
+        data: {'reason': reason},
+      );
     } catch (e) {
       throw AppException(
         UIErrorFormatter.getMessage(e),
@@ -334,6 +353,4 @@ class AppointmentRepository {
       );
     }
   }
-
-
 }

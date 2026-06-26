@@ -91,7 +91,7 @@ from app.core.scheduler import (
     cleanup_expired_slots,
     cleanup_old_notifications,
     mark_consultation_no_shows,
-    process_approved_general_queue_payouts,
+    process_approved_consultation_payouts,
     process_approved_consultation_refunds,
     sweep_stale_appointments,
 )
@@ -400,6 +400,23 @@ def _apply_schema_patches():
         """
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS last_lab_reset DATE NULL;
+        """,
+        # Lab scanner failed-attempt guard (added 2026-06-25)
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS lab_failed_attempt_count INTEGER NOT NULL DEFAULT 0;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS lab_failed_attempt_started_at TIMESTAMPTZ NULL;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS lab_last_failed_attempt_at TIMESTAMPTZ NULL;
+        """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS lab_cooldown_until TIMESTAMPTZ NULL;
         """,
         # Voice / TTS quota tracking columns (added 2026-06-16)
         """
@@ -717,16 +734,16 @@ async def lifespan(app: FastAPI):
         sweep_stale_appointments,
         trigger=IntervalTrigger(hours=1),
         id="stale_appointment_sweep",
-        name="Hourly stale-appointment sweep (auto-close & cancel)",
+        name="Hourly stale pending appointment sweep",
         replace_existing=True,
     )
 
-    # Job 5: End consultations after the 10-minute message grace period.
+    # Job 5: Nightly wrap-up for consultations doctors forgot to complete.
     scheduler.add_job(
         complete_expired_consultations,
-        trigger=IntervalTrigger(minutes=1),
+        trigger=CronTrigger(hour=23, minute=30, timezone="UTC"),
         id="consultation_completion_sweep",
-        name="Consultation completion sweep after message grace",
+        name="Nightly consultation completion sweep",
         replace_existing=True,
     )
 
@@ -739,12 +756,12 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
-    # Job 7: Initiate admin-approved general-queue doctor payouts.
+    # Job 7: Initiate admin-approved doctor consultation payouts.
     scheduler.add_job(
-        process_approved_general_queue_payouts,
+        process_approved_consultation_payouts,
         trigger=CronTrigger(minute="*/10", hour="3", timezone="UTC"),
-        id="general_queue_payout_processor",
-        name="General queue doctor payout processor",
+        id="consultation_payout_processor",
+        name="Admin-approved consultation payout processor",
         replace_existing=True,
     )
 
