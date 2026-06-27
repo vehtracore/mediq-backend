@@ -54,7 +54,15 @@ class DoctorProfileScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 32),
               _buildOption(context, Icons.edit_outlined, "Edit Public Profile",
-                  () => context.push('/doctor_edit_profile', extra: doctor)),
+                  () {
+                context
+                    .push('/doctor_edit_profile', extra: doctor)
+                    .then((result) {
+                  if (result == true) {
+                    ref.invalidate(myDoctorProfileProvider);
+                  }
+                });
+              }),
               const SizedBox(height: 12),
               _buildOption(
                   context,

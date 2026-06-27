@@ -186,7 +186,7 @@ class Appointment {
   bool get canDoctorWrapUp =>
       status == 'confirmed' &&
       paymentStatus == 'paid' &&
-      hasConsultationStarted;
+      (hasConsultationOpened || isConsultationClosed);
 
   bool get canDoctorCancel {
     if (status == 'awaiting_payment') return true;
@@ -241,7 +241,7 @@ class Appointment {
 
   bool get canPatientReportIssue {
     if (status != 'completed' || paymentStatus != 'paid') return false;
-    if (refundStatus != null && refundStatus != 'rejected') return false;
+    if (refundStatus != null) return false;
     final windowEndsAt = complaintWindowEndsAt;
     if (windowEndsAt == null) return false;
     return DateTime.now().isBefore(windowEndsAt);

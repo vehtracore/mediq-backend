@@ -25,15 +25,30 @@ class HealthTip {
   });
 
   factory HealthTip.fromJson(Map<String, dynamic> json) {
+    String safeText(dynamic value, {String fallback = ''}) {
+      if (value == null) return fallback;
+      final text = value.toString().trim();
+      return text.isEmpty ? fallback : text;
+    }
+
     return HealthTip(
-      id: json['id'],
-      title: json['title'],
-      category: json['category'],
-      readTime: json['read_time'],
+      id: json['id'] is int
+          ? json['id'] as int
+          : int.tryParse('${json['id']}') ?? 0,
+      title: safeText(json['title'], fallback: 'Untitled health tip'),
+      category: safeText(json['category'], fallback: 'General'),
+      readTime: safeText(json['read_time'], fallback: '1 min'),
       imageUrl: _sanitizeHealthTipImageUrl(json['image_url']),
-      externalLink: json['external_url'],
-      content: json['content'],
+      externalLink: _normalizeOptionalUrl(json['external_url']),
+      content: safeText(json['content']),
     );
+  }
+
+  static String? _normalizeOptionalUrl(dynamic value) {
+    if (value is! String) return null;
+    final trimmed = value.trim();
+    if (trimmed.isEmpty || !trimmed.startsWith('http')) return null;
+    return trimmed;
   }
 
   static String? _sanitizeHealthTipImageUrl(dynamic value) {
@@ -43,8 +58,7 @@ class HealthTip {
     if (trimmed.isEmpty || !trimmed.startsWith('http')) return null;
 
     final host = Uri.tryParse(trimmed)?.host.toLowerCase() ?? '';
-    final isRandomPlaceholderHost =
-        host == 'source.unsplash.com' ||
+    final isRandomPlaceholderHost = host == 'source.unsplash.com' ||
         host == 'images.unsplash.com' ||
         host == 'picsum.photos' ||
         host == 'loremflickr.com' ||

@@ -97,7 +97,7 @@ class _DoctorEditProfileScreenState
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text("Updated!"), backgroundColor: Colors.green));
-        context.pop();
+        context.pop(true);
       }
     } catch (e) {
       debugPrint('[DoctorEditProfile] Save failed: $e');
@@ -125,9 +125,16 @@ class _DoctorEditProfileScreenState
     return Scaffold(
       appBar: AppBar(
           title: const Text("Edit Profile"),
-          backgroundColor: Colors.white,
+          backgroundColor: Theme.of(context).appBarTheme.backgroundColor ??
+              Theme.of(context).colorScheme.surface,
           elevation: 0,
-          foregroundColor: Colors.black),
+          iconTheme: Theme.of(context).appBarTheme.iconTheme ??
+              IconThemeData(
+                  color: Theme.of(context).colorScheme.onSurface),
+          titleTextStyle: Theme.of(context).appBarTheme.titleTextStyle ??
+              Theme.of(context).textTheme.titleLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurface,
+                  )),
       body: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(children: [

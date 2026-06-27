@@ -1566,10 +1566,10 @@ def raise_appointment_complaint(
             detail="Complaint reason is too long.",
         )
 
-    if appt.refund_status and appt.refund_status != "rejected":
+    if appt.refund_status:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="This consultation is already under refund or dispute review.",
+            detail="This consultation has already been reported and reviewed.",
         )
 
     appt.refund_status = REFUND_STATUS_AWAITING_ADMIN

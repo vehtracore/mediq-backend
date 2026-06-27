@@ -727,13 +727,13 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                                       ),
                                       Text(
                                         "Patient: ${payout['patient_name'] ?? 'Unknown'}"
-                                        " Ã¢â‚¬Â¢ Appointment #${payout['appointment_id']}",
+                                        " • Appointment #${payout['appointment_id']}",
                                       ),
                                     ],
                                   ),
                                 ),
                                 Text(
-                                  "Ã¢â€šÂ¦${amount.toStringAsFixed(2)}",
+                                  "₦${amount.toStringAsFixed(2)}",
                                   style: theme.textTheme.titleMedium?.copyWith(
                                     fontWeight: FontWeight.bold,
                                     color: Colors.green,
@@ -744,7 +744,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                             const Divider(height: 24),
                             Text(
                               "Outcome: ${payout['appointment_status'] ?? 'Unknown'}"
-                              " Ã¢â‚¬Â¢ Payment: ${payout['payment_status'] ?? 'Unknown'}",
+                              " • Payment: ${payout['payment_status'] ?? 'Unknown'}",
                             ),
                             const SizedBox(height: 6),
                             Text(
@@ -991,7 +991,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                                       ),
                                       Text(
                                         "Doctor: ${refund['doctor_name']}"
-                                        " Ã¢â‚¬Â¢ Appointment #$appointmentId",
+                                        " • Appointment #$appointmentId",
                                       ),
                                     ],
                                   ),
@@ -1008,7 +1008,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                             const Divider(height: 24),
                             Text(
                               "Outcome: ${refund['appointment_status']}"
-                              " Ã¢â‚¬Â¢ Refund: ${refund['refund_status']}",
+                              " • Refund: ${refund['refund_status']}",
                             ),
                             Text(
                               "Patient joined: "
@@ -1210,7 +1210,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                         ),
                         title: Text(fullName, style: theme.textTheme.bodyLarge),
                         subtitle: Text(
-                            "${user.email} Ã¢â‚¬Â¢ ${user.role.toUpperCase()}",
+                            "${user.email} • ${user.role.toUpperCase()}",
                             style: theme.textTheme.bodyMedium),
                         trailing: IconButton.filledTonal(
                           onPressed: () => _suspendUser(user.id),
@@ -1271,58 +1271,96 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
             ),
           ],
         ),
-        data: (tips) => ListView.builder(
-          physics: const AlwaysScrollableScrollPhysics(),
-          itemCount: tips.length,
-          padding: const EdgeInsets.all(16),
-          itemBuilder: (ctx, i) => Card(
-            color: theme.cardTheme.color, // Ã¢Å“â€¦ Dynamic Card
-            margin: const EdgeInsets.only(bottom: 12),
-            child: ListTile(
-              title: Text(tips[i].title, style: theme.textTheme.bodyLarge),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton.filledTonal(
-                    icon: const Icon(Icons.edit, size: 20),
-                    tooltip: "Edit",
-                    style: IconButton.styleFrom(
-                      backgroundColor:
-                          theme.colorScheme.primary.withOpacity(0.15),
-                      foregroundColor: theme.colorScheme.primary,
-                      elevation: 0,
+        data: (tips) {
+          if (tips.isEmpty) {
+            return ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(24),
+              children: [
+                SizedBox(height: MediaQuery.of(context).size.height * 0.18),
+                Icon(
+                  Icons.article_outlined,
+                  size: 56,
+                  color: theme.colorScheme.onSurface.withOpacity(0.45),
+                ),
+                const SizedBox(height: 16),
+                Center(
+                  child: Text(
+                    "No health tips yet",
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
                     ),
-                    onPressed: () async {
-                      final result = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => AdminContentEditorScreen(
-                                  healthTip: tips[i])));
-                      if (result == true) ref.invalidate(adminContentProvider);
-                    },
                   ),
-                  const SizedBox(width: 8),
-                  IconButton.filledTonal(
-                    icon: const Icon(Icons.delete, size: 20),
-                    tooltip: "Delete",
-                    style: IconButton.styleFrom(
-                      backgroundColor:
-                          theme.colorScheme.primary.withOpacity(0.15),
-                      foregroundColor: theme.colorScheme.primary,
-                      elevation: 0,
+                ),
+                const SizedBox(height: 8),
+                Center(
+                  child: Text(
+                    "Tap the + button to publish your first health tip.",
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurface.withOpacity(0.6),
                     ),
-                    onPressed: () async {
-                      await ref
-                          .read(contentRepositoryProvider)
-                          .deleteHealthTip(tips[i].id);
-                      ref.invalidate(adminContentProvider);
-                    },
                   ),
-                ],
+                ),
+              ],
+            );
+          }
+
+          return ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            itemCount: tips.length,
+            padding: const EdgeInsets.all(16),
+            itemBuilder: (ctx, i) => Card(
+              color: theme.cardTheme.color,
+              margin: const EdgeInsets.only(bottom: 12),
+              child: ListTile(
+                title: Text(tips[i].title, style: theme.textTheme.bodyLarge),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton.filledTonal(
+                      icon: const Icon(Icons.edit, size: 20),
+                      tooltip: "Edit",
+                      style: IconButton.styleFrom(
+                        backgroundColor:
+                            theme.colorScheme.primary.withOpacity(0.15),
+                        foregroundColor: theme.colorScheme.primary,
+                        elevation: 0,
+                      ),
+                      onPressed: () async {
+                        final result = await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => AdminContentEditorScreen(
+                                    healthTip: tips[i])));
+                        if (result == true) {
+                          ref.invalidate(adminContentProvider);
+                        }
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
+                      icon: const Icon(Icons.delete, size: 20),
+                      tooltip: "Delete",
+                      style: IconButton.styleFrom(
+                        backgroundColor:
+                            theme.colorScheme.primary.withOpacity(0.15),
+                        foregroundColor: theme.colorScheme.primary,
+                        elevation: 0,
+                      ),
+                      onPressed: () async {
+                        await ref
+                            .read(contentRepositoryProvider)
+                            .deleteHealthTip(tips[i].id);
+                        ref.invalidate(adminContentProvider);
+                      },
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
