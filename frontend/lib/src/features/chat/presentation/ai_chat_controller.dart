@@ -213,6 +213,20 @@ class AiChatController extends StateNotifier<AiChatState> {
     }
   }
 
+  /// Reports a specific AI-generated message to the backend.
+  ///
+  /// This is a side-effect-only call — it does not mutate [AiChatState].
+  /// Throws an [AppException] on failure so the caller (UI) can show an error.
+  Future<void> reportMessage(String messageText, String reason) async {
+    await _dio.post(
+      '/api/v1/chat/report',
+      data: {
+        'message_text': messageText,
+        'reason': reason,
+      },
+    );
+  }
+
   Future<void> sendLabResult(LabAnalysisResponse result) async {
     if (state.isLoading) return;
 

@@ -916,10 +916,20 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
           if (!isMe)
             Padding(
               padding: const EdgeInsets.only(left: 4, bottom: 2),
-              child: _PremiumVoiceButton(
-                text: text,
-                language: _selectedLanguage,
-                isDark: isDark,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _PremiumVoiceButton(
+                    text: text,
+                    language: _selectedLanguage,
+                    isDark: isDark,
+                  ),
+                  _FlagButton(
+                    messageText: text,
+                    onReport: _showReportDialog,
+                    isDark: isDark,
+                  ),
+                ],
               ),
             ),
         ],
@@ -953,6 +963,129 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                   fontSize: 14)),
         ],
       ),
+    );
+  }
+
+  // ── Report AI Response dialog ─────────────────────────────────────────────
+  Future<void> _showReportDialog(String messageText) async {
+    String? selectedReason;
+    bool isSubmitting = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: !isSubmitting,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.flag_outlined, size: 20, color: Colors.orange),
+                  SizedBox(width: 8),
+                  Text('Report AI Response'),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Please select the reason for reporting this response:',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedReason,
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      isDense: true,
+                    ),
+                    hint: const Text('Select a reason'),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'Inaccurate medical information',
+                        child: Text('Inaccurate medical information'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'Inappropriate content',
+                        child: Text('Inappropriate content'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'Other',
+                        child: Text('Other'),
+                      ),
+                    ],
+                    onChanged: isSubmitting
+                        ? null
+                        : (value) {
+                            setDialogState(() => selectedReason = value);
+                          },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: (selectedReason == null || isSubmitting)
+                      ? null
+                      : () async {
+                          setDialogState(() => isSubmitting = true);
+                          // Capture messenger before async gap to avoid
+                          // use_build_context_synchronously lint warnings.
+                          final messenger = ScaffoldMessenger.of(dialogContext);
+                          try {
+                            await ref
+                                .read(aiChatControllerProvider.notifier)
+                                .reportMessage(messageText, selectedReason!);
+                            if (dialogContext.mounted) {
+                              Navigator.of(dialogContext).pop();
+                            }
+                            messenger.showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  '\u2705 Report submitted. Thank you for your feedback.',
+                                ),
+                                duration: Duration(seconds: 3),
+                              ),
+                            );
+                          } catch (_) {
+                            setDialogState(() => isSubmitting = false);
+                            messenger.showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Failed to submit report. Please try again.',
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                  child: isSubmitting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Submit'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }
@@ -1144,6 +1277,37 @@ class _BouncingDotsState extends State<_BouncingDots>
         _buildDot(1),
         _buildDot(2),
       ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _FlagButton — small flag icon shown below AI message bubbles only.
+// Tapping it triggers the "Report AI Response" dialog on the parent state.
+// ─────────────────────────────────────────────────────────────────────────────
+class _FlagButton extends StatelessWidget {
+  final String messageText;
+  final Future<void> Function(String) onReport;
+  final bool isDark;
+
+  const _FlagButton({
+    required this.messageText,
+    required this.onReport,
+    required this.isDark,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Report this response',
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+      icon: Icon(
+        Icons.flag_outlined,
+        size: 16,
+        color: isDark ? Colors.white30 : Colors.black26,
+      ),
+      onPressed: () => onReport(messageText),
     );
   }
 }

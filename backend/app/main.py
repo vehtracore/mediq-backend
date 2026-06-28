@@ -78,7 +78,7 @@ from app.core.limiter import limiter
 from app.core.database import engine, Base, SessionLocal
 
 # ✅ KEEP "app." prefix because your main.py is inside the app folder
-from app.api.v1 import auth, chat, ai_consent, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab, vault, voice, notifications
+from app.api.v1 import auth, chat, ai_consent, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab, vault, voice, notifications, ai_report
 
 from app.api.v1 import emergency
 from app.api.v1 import payments
@@ -400,6 +400,24 @@ def _apply_schema_patches():
         """
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS last_lab_reset DATE NULL;
+        """,
+        # AI chat reports — Google Play AI-Generated Content Policy compliance (added 2026-06-28)
+        """
+        CREATE TABLE IF NOT EXISTS ai_chat_reports (
+            id           SERIAL PRIMARY KEY,
+            user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            message_text TEXT    NOT NULL,
+            reason       VARCHAR(200) NOT NULL,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_ai_chat_reports_user_id
+        ON ai_chat_reports (user_id);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_ai_chat_reports_created_at
+        ON ai_chat_reports (created_at);
         """,
         # Lab scanner failed-attempt guard (added 2026-06-25)
         """
@@ -906,6 +924,7 @@ app.include_router(payments.router, prefix="/api/v1/payments", tags=["Payments"]
 app.include_router(family.router, prefix="/api/v1/family", tags=["Family Plan"])
 app.include_router(vault.router, prefix="/api/v1/vault", tags=["Vault"])
 app.include_router(voice.router, prefix="/api/v1/voice", tags=["Voice"])
+app.include_router(ai_report.router, prefix="/api/v1/chat", tags=["AI Health Assistant"])
 app.include_router(support.router, prefix="/api/v1/support", tags=["Support"])
 app.include_router(notifications.router, prefix="/api/v1/notifications", tags=["Notifications"])
 

@@ -44,7 +44,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.example.mediq_app"
+        applicationId "com.mdqplus.app"
         minSdk 24
         targetSdk 36 // <--- REQUIRED by dependencies
         versionCode flutterVersionCode.toInteger()
