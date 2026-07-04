@@ -16,10 +16,11 @@ production payment architecture refactor (2026-04-22).
 import logging
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.user import User
 from app.api import deps
 from app.schemas.user import UserResponse
@@ -28,6 +29,12 @@ from app.services.paystack_service import paystack_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _require_admin(current_user: User = Depends(deps.get_current_user)) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return current_user
 
 
 def _is_subscription_unexpired(expiry: datetime | None) -> bool:
@@ -39,27 +46,32 @@ def _is_subscription_unexpired(expiry: datetime | None) -> bool:
 
 
 @router.post("/upgrade", response_model=UserResponse)
+@limiter.limit("10/hour")
 def upgrade_to_premium(
+    request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
+    admin: User = Depends(_require_admin),
 ):
     """
     Manual plan upgrade endpoint (testing / admin overrides only).
     Production upgrades are handled by the Paystack webhook at
     POST /api/v1/payments/webhook with transactionType='subscription'.
     """
-    current_user.plan = "premium"
-    current_user.subscription_expiry = datetime.utcnow() + timedelta(days=30)
-    current_user.auto_renew = False
+    admin.plan = "premium"
+    admin.subscription_expiry = datetime.utcnow() + timedelta(days=30)
+    admin.auto_renew = False
 
     db.commit()
-    db.refresh(current_user)
+    db.refresh(admin)
 
-    return current_user
+    return admin
 
 
 @router.post("/cancel-subscription", response_model=UserResponse)
+@limiter.limit("5/hour")
+@limiter.limit("2/minute")
 async def cancel_subscription(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
@@ -175,7 +187,10 @@ async def cancel_subscription(
 
 
 @router.post("/restore", response_model=UserResponse)
+@limiter.limit("5/hour")
+@limiter.limit("2/minute")
 async def restore_subscription(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):

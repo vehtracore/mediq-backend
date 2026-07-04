@@ -1,39 +1,35 @@
-import cloudinary
-import cloudinary.uploader
 import logging
-import os
-import shutil
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from dotenv import load_dotenv
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
-load_dotenv()
+from app.api import deps
+from app.core.limiter import limiter
+from app.models.user import User
+from app.services.media_service import upload_image as upload_media_file
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# 1. Configure Cloudinary
-# (It reads these from your Render Environment Variables)
-cloudinary.config( 
-  cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME"), 
-  api_key = os.getenv("CLOUDINARY_API_KEY"), 
-  api_secret = os.getenv("CLOUDINARY_API_SECRET"),
-  secure = True
-)
 
 @router.post("/")
-async def upload_image(file: UploadFile = File(...)):
+@limiter.limit("20/hour")
+async def upload_profile_image(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """Authenticated profile image upload to Cloudinary."""
     try:
-        # 2. Upload directly to Cloudinary
-        # "file.file" gives us the actual file object to send
-        result = cloudinary.uploader.upload(file.file, folder="mediq_profile_pics")
-        
-        # 3. Get the Secure URL (starts with https://)
-        image_url = result.get("secure_url")
-        
+        image_url = await upload_media_file(file, folder="mediq_profile_pics")
+        logger.info(
+            "[UPLOAD] Profile image uploaded for user_id=%s",
+            current_user.id,
+        )
         return {"url": image_url}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Failed to upload image to Cloudinary: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Image upload failed")
+        raise HTTPException(status_code=502, detail="Image upload failed") from e

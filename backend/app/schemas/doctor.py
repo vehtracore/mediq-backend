@@ -71,3 +71,19 @@ class PayoutSettingsRequest(BaseModel):
     """Payload for PUT /api/v1/doctors/me/payout-settings."""
     bank_code: str      # Paystack bank code, e.g. '058' for GTBank
     account_number: str # 10-digit NUBAN
+
+    @field_validator("bank_code")
+    @classmethod
+    def validate_bank_code(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized.isdigit() or not 3 <= len(normalized) <= 6:
+            raise ValueError("Bank code must be 3 to 6 digits.")
+        return normalized
+
+    @field_validator("account_number")
+    @classmethod
+    def validate_account_number(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized.isdigit() or len(normalized) != 10:
+            raise ValueError("Account number must be a 10-digit NUBAN.")
+        return normalized

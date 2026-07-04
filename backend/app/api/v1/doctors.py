@@ -2,10 +2,11 @@
 import logging
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from typing import List
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.appointment import Appointment
@@ -202,7 +203,10 @@ def update_doctor_me(data: DoctorUpdate, db: Session = Depends(get_db), current_
 
 
 @router.put("/me/payout-settings", response_model=DoctorResponse)
+@limiter.limit("5/hour")
+@limiter.limit("2/minute")
 async def update_payout_settings(
+    request: Request,
     payload: PayoutSettingsRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
@@ -229,11 +233,18 @@ async def update_payout_settings(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor profile not found.")
 
+    if not doctor.is_verified or doctor.status != "active":
+        raise HTTPException(
+            status_code=403,
+            detail="Payout settings can only be configured by verified doctors.",
+        )
+
+    masked_account = f"******{payload.account_number[-4:]}"
     logger.info(
         "[PAYOUT] Saving payout bank for doctor_id=%s | bank=%s | account=%s",
         doctor.id,
         payload.bank_code,
-        payload.account_number,
+        masked_account,
     )
 
     # â”€â”€ Step 1: Resolve account name and verify it matches the doctor â”€â”€â”€â”€â”€â”€â”€â”€â”€

@@ -138,38 +138,6 @@ def read_doctor(doctor_id: int, db: Session = Depends(get_db)):
     return doctor
 """,
 
-    # 4. Update Seeder (Add Years Exp)
-    "backend/seed_doctors.py": """
-import sys, os
-from datetime import date
-sys.path.append(os.getcwd())
-from app.core.database import SessionLocal
-from app.models.doctor import Doctor
-from app.models.user import User
-from app.core.security import get_password_hash
-
-def seed():
-    db = SessionLocal()
-    if db.query(Doctor).first(): return
-    
-    docs = [
-        {"email": "house@mediq.com", "name": "Dr. Gregory House", "spec": "Diagnostician", "lic": "MDCN-001", "rate": 5000.0, "exp": 15},
-        {"email": "cuddy@mediq.com", "name": "Dr. Lisa Cuddy", "spec": "Endocrinologist", "lic": "MDCN-002", "rate": 4500.0, "exp": 12},
-        {"email": "wilson@mediq.com", "name": "Dr. James Wilson", "spec": "Oncologist", "lic": "MDCN-003", "rate": 4800.0, "exp": 10},
-    ]
-
-    for d in docs:
-        u = User(email=d["email"], first_name=d["name"].split()[0], last_name=d["name"].split()[-1], hashed_password=get_password_hash("password123"), role="doctor", dob=date(1980,1,1), location="Lagos")
-        db.add(u)
-        db.flush()
-        doc = Doctor(user_id=u.id, full_name=d["name"], specialty=d["spec"], license_number=d["lic"], hourly_rate=d["rate"], years_experience=d["exp"], is_verified=True, is_available=True)
-        db.add(doc)
-    
-    db.commit()
-    print("Seeded Doctors with Experience Stats.")
-
-if __name__ == "__main__": seed()
-""",
 
     # ================= FRONTEND =================
 

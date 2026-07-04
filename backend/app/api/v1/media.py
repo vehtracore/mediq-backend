@@ -1,26 +1,26 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+
+from app.api import deps
+from app.core.limiter import limiter
+from app.models.user import User
 from app.services import media_service
-# Removed: from app.api import deps
-# Removed: from app.models.user import User
 
 router = APIRouter()
 
+
 @router.post("/upload")
+@limiter.limit("20/hour")
 async def upload_file(
+    request: Request,
     file: UploadFile = File(...),
-    folder: str = Form("mdq_plus/general"), 
-    # REMOVED: current_user: User = Depends(deps.get_current_user)
+    folder: str = Form("mdq_plus/general"),
+    current_user: User = Depends(deps.get_current_user),
 ):
     """
-    Uploads a file. 
-    OPEN ACCESS: Used for registration uploads (Licenses) and Profile pics.
-    Returns: { "url": "https://..." }
-    """
-    # 1. Security Check: Validate file type
-    if file.content_type not in ["image/jpeg", "image/png", "application/pdf"]:
-        raise HTTPException(400, detail="Invalid file type. Only JPG, PNG, and PDF allowed.")
+    Authenticated media upload.
 
-    # 2. Upload
+    The shared media service enforces allowed folders, file types, and size
+    limits before any Cloudinary API call is made.
+    """
     url = await media_service.upload_image(file, folder)
-    
     return {"url": url}

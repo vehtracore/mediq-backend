@@ -47,12 +47,13 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.user import User
 from app.services.termii_service import termii_service
 
@@ -176,7 +177,9 @@ class EmergencyTriggerRequest(BaseModel):
         "A 5-minute cooldown and 5-SMS quota are enforced for premium users."
     ),
 )
+@limiter.limit("10/hour")
 async def trigger_emergency(
+    request: Request,
     payload: EmergencyTriggerRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -383,6 +386,13 @@ _PLACES_NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby"
 _PLACES_FIELD_MASK = "places.displayName,places.nationalPhoneNumber"
 _SEARCH_RADIUS_METERS = 5000.0
 _TARGET_TYPES = ["hospital", "police"]
+_LOCAL_SERVICES_CACHE_TTL = timedelta(minutes=10)
+_LOCAL_SERVICES_CACHE_MAX = 512
+_LOCAL_SERVICES_CACHE: dict[tuple[float, float], tuple[datetime, List[LocalServiceResult]]] = {}
+
+
+def _local_services_cache_key(lat: float, lon: float) -> tuple[float, float]:
+    return round(lat, 3), round(lon, 3)
 
 
 @router.get(
@@ -396,9 +406,12 @@ _TARGET_TYPES = ["hospital", "police"]
         "have a registered phone number are included. Returns [] on any error."
     ),
 )
+@limiter.limit("30/hour")
 async def get_local_services(
-    lat: float = Query(..., description="Latitude of the user's position"),
-    lon: float = Query(..., description="Longitude of the user's position"),
+    request: Request,
+    lat: float = Query(..., ge=-90, le=90, description="Latitude of the user's position"),
+    lon: float = Query(..., ge=-180, le=180, description="Longitude of the user's position"),
+    current_user: User = Depends(deps.get_current_user),
 ) -> List[LocalServiceResult]:
     """
     GET /api/v1/emergency/local-services?lat=<float>&lon=<float>
@@ -412,6 +425,18 @@ async def get_local_services(
       5. Catch every exception and return [] so the Flutter app can always
          fall back to its hardcoded default numbers.
     """
+    cache_key = _local_services_cache_key(lat, lon)
+    now_utc = datetime.now(timezone.utc)
+    cached = _LOCAL_SERVICES_CACHE.get(cache_key)
+    if cached and now_utc - cached[0] < _LOCAL_SERVICES_CACHE_TTL:
+        logger.info(
+            "[LOCAL-SERVICES] Cache hit for user_id=%s near (%.4f, %.4f)",
+            current_user.id,
+            lat,
+            lon,
+        )
+        return cached[1]
+
     api_key: Optional[str] = os.getenv("Maps_API_KEY")
     if not api_key:
         logger.warning(
@@ -488,6 +513,9 @@ async def get_local_services(
             lat,
             lon,
         )
+        if len(_LOCAL_SERVICES_CACHE) >= _LOCAL_SERVICES_CACHE_MAX:
+            _LOCAL_SERVICES_CACHE.clear()
+        _LOCAL_SERVICES_CACHE[cache_key] = (now_utc, results)
         return results
 
     except httpx.TimeoutException:

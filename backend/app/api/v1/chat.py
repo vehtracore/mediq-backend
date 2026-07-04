@@ -96,6 +96,7 @@ _COLD_CAP_MINUTES: int = 15
 
 _PAID_PLANS = {"premium", "family"}
 _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
+_MAX_TEMP_IMAGE_BYTES = 5 * 1024 * 1024
 _TEMP_IMAGE_TTL = timedelta(hours=2)
 
 
@@ -209,7 +210,9 @@ def cleanup_stale_temp_images() -> int:
 # ---------------------------------------------------------------------------
 
 @router.post("/image", response_model=TemporaryImageResponse)
+@limiter.limit("10/hour")
 async def upload_temporary_chat_image(
+    request: Request,
     file: UploadFile = File(...),
     current_user: User = Depends(deps.get_current_user),
 ):
@@ -223,10 +226,22 @@ async def upload_temporary_chat_image(
             detail="Invalid image type. Use JPEG, PNG, or WebP.",
         )
 
+    content = await file.read(_MAX_TEMP_IMAGE_BYTES + 1)
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded image is empty.",
+        )
+    if len(content) > _MAX_TEMP_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Image exceeds the 5MB upload limit.",
+        )
+
     public_id = f"mediq_ai_temp/{current_user.id}/{uuid.uuid4()}"
     try:
         result = cloudinary.uploader.upload(
-            file.file,
+            content,
             public_id=public_id,
             resource_type="image",
             overwrite=False,

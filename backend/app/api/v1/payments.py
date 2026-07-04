@@ -47,6 +47,7 @@ from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.appointment import (
     APPOINTMENT_TYPE_GENERAL_QUEUE,
     APPOINTMENT_TYPE_SPECIALIST_SCHEDULED,
@@ -130,7 +131,7 @@ class PaymentInitializeRequest(BaseModel):
 
     email: EmailStr
     amount: int = Field(..., gt=0, description="Amount in Kobo (Naira Ã— 100)")
-    reference: str = Field(..., min_length=8, description="MDQ-prefixed transaction reference")
+    reference: str = Field(..., min_length=8, max_length=128, description="MDQ-prefixed transaction reference")
     plan: Optional[str] = Field(
         default=None,
         description="Paystack Plan Code for recurring subscriptions (e.g. PLN_xxxx). "
@@ -141,7 +142,10 @@ class PaymentInitializeRequest(BaseModel):
 # â”€â”€â”€ Initialize Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.post("/initialize", status_code=200)
+@limiter.limit("20/hour")
+@limiter.limit("5/minute")
 async def initialize_transaction(
+    request: Request,
     payload: PaymentInitializeRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
@@ -195,8 +199,14 @@ async def initialize_transaction(
         "reference": payload.reference,
     }
 
-    transaction_type, ref_appointment_id, ref_user_id = _parse_reference(
-        payload.reference
+    (
+        transaction_type,
+        ref_appointment_id,
+        ref_user_id,
+    ) = _validate_reference_owner_before_paystack(
+        reference=payload.reference,
+        db=db,
+        current_user=current_user,
     )
     expected_subscription_amounts = {
         "subscription": INDIVIDUAL_SUBSCRIPTION_AMOUNT_KOBO,
@@ -348,6 +358,72 @@ EXPECTED_TRANSACTION_TYPE_BY_APPOINTMENT_TYPE = {
     APPOINTMENT_TYPE_SPECIALIST_SCHEDULED: "specialist_consult",
     APPOINTMENT_TYPE_VIP_REQUEST: "vip_request",
 }
+
+
+SUBSCRIPTION_TRANSACTION_TYPES = {"subscription", "family_subscription"}
+_REFERENCE_MAX_LENGTH = 128
+_REFERENCE_ALLOWED_CHARS = set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+)
+
+
+def _validate_reference_shape(reference: str) -> None:
+    if not reference or len(reference) > _REFERENCE_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail="Invalid payment reference.")
+    if reference.strip() != reference:
+        raise HTTPException(status_code=400, detail="Invalid payment reference.")
+    if not reference.startswith("MDQ-"):
+        raise HTTPException(status_code=400, detail="Invalid payment reference.")
+    if any(ch not in _REFERENCE_ALLOWED_CHARS for ch in reference):
+        raise HTTPException(status_code=400, detail="Invalid payment reference.")
+
+
+def _validate_reference_owner_before_paystack(
+    *,
+    reference: str,
+    db: Session,
+    current_user: User,
+) -> tuple[str, str | None, str | None]:
+    """Reject unknown or unowned references before spending a Paystack API call."""
+    _validate_reference_shape(reference)
+    transaction_type, ref_appointment_id, ref_user_id = _parse_reference(reference)
+
+    if transaction_type not in CONSULTATION_TRANSACTION_TYPES | SUBSCRIPTION_TRANSACTION_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported payment reference type.")
+
+    if not ref_user_id or not ref_user_id.isdigit():
+        raise HTTPException(status_code=400, detail="Payment reference is missing an owner.")
+    if int(ref_user_id) != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="This payment reference does not belong to your account.",
+        )
+
+    if transaction_type in SUBSCRIPTION_TRANSACTION_TYPES:
+        return transaction_type, ref_appointment_id, ref_user_id
+
+    if not ref_appointment_id or not ref_appointment_id.isdigit():
+        raise HTTPException(status_code=400, detail="Payment reference is missing an appointment.")
+
+    appointment = (
+        db.query(Appointment)
+        .filter(Appointment.id == int(ref_appointment_id))
+        .first()
+    )
+    if appointment is None:
+        raise HTTPException(status_code=404, detail="Consultation appointment was not found.")
+    if appointment.paystack_reference != reference:
+        raise HTTPException(status_code=403, detail="Payment reference does not match this appointment.")
+    if appointment.patient_id != current_user.id or appointment.patient_id != int(ref_user_id):
+        raise HTTPException(status_code=403, detail="Payment reference does not belong to your account.")
+
+    expected_transaction_type = EXPECTED_TRANSACTION_TYPE_BY_APPOINTMENT_TYPE.get(
+        resolve_appointment_type(appointment)
+    )
+    if expected_transaction_type != transaction_type:
+        raise HTTPException(status_code=400, detail="Payment reference type does not match the appointment.")
+
+    return transaction_type, ref_appointment_id, ref_user_id
 
 
 def _validate_consultation_payment(
@@ -1570,8 +1646,11 @@ async def paystack_webhook(
 # â”€â”€â”€ Manual Verification Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/verify/{reference}")
+@limiter.limit("30/hour")
+@limiter.limit("5/minute")
 async def verify_transaction(
     reference: str,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
@@ -1595,6 +1674,17 @@ async def verify_transaction(
             status_code=503,
             detail="Payment verification is unavailable â€” secret key not configured.",
         )
+
+
+    (
+        transaction_type,
+        ref_appointment_id,
+        ref_user_id,
+    ) = _validate_reference_owner_before_paystack(
+        reference=reference,
+        db=db,
+        current_user=current_user,
+    )
 
     # â”€â”€ 1. Query Paystack â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try:
@@ -1638,16 +1728,7 @@ async def verify_transaction(
             "detail": "Transaction is not yet successful.",
         }
 
-    # â”€â”€ 3. Parse reference and update database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    transaction_type, ref_appointment_id, ref_user_id = _parse_reference(reference)
-    if (
-        transaction_type in {"subscription", "family_subscription"}
-        and ref_user_id != str(current_user.id)
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="This payment reference does not belong to your account.",
-        )
+    # Step 3: update database using the pre-validated reference.
     try:
         _validate_consultation_payment(
             transaction_type=transaction_type,

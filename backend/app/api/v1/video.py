@@ -2,13 +2,14 @@ import logging
 import os
 import random
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from agora_token_builder import RtcTokenBuilder
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.core.notifications import dispatch_push
 from app.models.user import User
 from app.models.appointment import consultation_started_utc
@@ -26,10 +27,38 @@ router = APIRouter()
 
 # Manually define the role (1 = Publisher, 2 = Subscriber)
 Role_Publisher = 1
+_ROOM_OPEN_NOTIFICATION_COOLDOWN = timedelta(minutes=2)
+_room_open_notification_sent_at: dict[tuple[int, int], datetime] = {}
+
+
+def _should_send_room_open_notification(appointment_id: int, patient_id: int) -> bool:
+    now = datetime.utcnow()
+    if len(_room_open_notification_sent_at) > 1000:
+        cutoff = now - _ROOM_OPEN_NOTIFICATION_COOLDOWN
+        stale_keys = [
+            key
+            for key, sent_at in _room_open_notification_sent_at.items()
+            if sent_at < cutoff
+        ]
+        for key in stale_keys:
+            _room_open_notification_sent_at.pop(key, None)
+
+    key = (appointment_id, patient_id)
+    last_sent_at = _room_open_notification_sent_at.get(key)
+    if last_sent_at and now - last_sent_at < _ROOM_OPEN_NOTIFICATION_COOLDOWN:
+        return False
+
+    _room_open_notification_sent_at[key] = now
+    return True
+
+
 
 
 @router.get("/token/{appointment_id}")
+@limiter.limit("30/hour")
+@limiter.limit("10/minute")
 def get_agora_token(
+    request: Request,
     appointment_id: int,
     current_user: User = Depends(deps.get_current_user),
     db: Session = Depends(get_db),
@@ -101,7 +130,11 @@ def get_agora_token(
             if doctor_row:
                 if appt and appt.patient_id:
                     patient = db.query(User).filter(User.id == appt.patient_id).first()
-                    if patient and patient.fcm_token:
+                    if (
+                        patient
+                        and patient.fcm_token
+                        and _should_send_room_open_notification(appointment_id, patient.id)
+                    ):
                         doctor_name = doctor_row.full_name or "Your doctor"
                         dispatch_push(
                             token=patient.fcm_token,
