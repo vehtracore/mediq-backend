@@ -1,5 +1,5 @@
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 from typing import Literal, Optional
 from datetime import datetime, timezone
 
@@ -136,6 +136,6 @@ class ReferralCreate(BaseModel):
     clinical_notes   : The body text of the referral letter.
     """
     appointment_id: int
-    recipient_email: str
+    recipient_email: EmailStr
     specialist_type: str
     clinical_notes: str

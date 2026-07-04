@@ -1,45 +1,47 @@
+﻿import os
 import sys
-import os
 from datetime import date
 
 sys.path.append(os.getcwd())
 
 from app.core.database import SessionLocal
-from app.models.user import User
 from app.core.security import get_password_hash
+from app.models.user import User
+
 
 def seed_admin():
+    admin_email = os.getenv('ADMIN_EMAIL', 'owner@mdqplus.com')
+    admin_password = os.getenv('ADMIN_PASSWORD')
+    if not admin_password:
+        raise SystemExit('Set ADMIN_PASSWORD before running seed_admin.py.')
+
     db = SessionLocal()
-    
-    # --- 🔒 SECURITY CONFIGURATION ---
-    # CHANGE THESE VALUES to your preferred secure credentials
-    ADMIN_EMAIL = "owner@mdqplus.com" 
-    ADMIN_PASSWORD = "NewSecurePass2025" 
-    # ---------------------------------
+    try:
+        if db.query(User).filter(User.email == admin_email).first():
+            print(f'Admin account ({admin_email}) already exists.')
+            return
 
-    if db.query(User).filter(User.email == ADMIN_EMAIL).first():
-        print(f"Admin account ({ADMIN_EMAIL}) already exists.")
-        return
+        print(f'Creating Super Admin: {admin_email}...')
 
-    print(f"Creating Super Admin: {ADMIN_EMAIL}...")
+        admin_user = User(
+            email=admin_email,
+            first_name='Super',
+            last_name='Admin',
+            dob=date(1990, 1, 1),
+            hashed_password=get_password_hash(admin_password),
+            role='admin',
+            is_active=True,
+            is_banned=False,
+        )
 
-    admin_user = User(
-        email=ADMIN_EMAIL,
-        first_name="Super",
-        last_name="Admin",
-        dob=date(1990, 1, 1),
-        hashed_password=get_password_hash(ADMIN_PASSWORD),
-        role="admin",
-        is_active=True,
-        is_banned=False
-    )
-    
-    db.add(admin_user)
-    db.commit()
-    print("✅ Admin account created successfully.")
-    print(f"📧 Email: {ADMIN_EMAIL}")
-    print("🔑 Password: [HIDDEN] (The one you set in the script)")
-    db.close()
+        db.add(admin_user)
+        db.commit()
+        print('Admin account created successfully.')
+        print(f'Email: {admin_email}')
+        print('Password: [HIDDEN]')
+    finally:
+        db.close()
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     seed_admin()

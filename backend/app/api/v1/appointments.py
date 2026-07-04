@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from typing import List
@@ -32,6 +32,13 @@ from app.services.consultation_payout_service import consultation_payout_hold_un
 from app.services.consultation_refund_service import REFUND_STATUS_AWAITING_ADMIN
 from app.api import deps
 from app.core.notifications import dispatch_push
+from app.core.limiter import limiter
+from app.services.email_guard import (
+    get_from_email,
+    get_resend_api_key,
+    mask_email,
+    reserve_email_send,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1589,7 +1596,9 @@ def raise_appointment_complaint(
 # ---------------------------------------------------------------------------
 
 @router.post("/referral", status_code=200)
+@limiter.limit("5/hour")
 async def send_specialist_referral(
+    request: Request,
     payload: ReferralCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
@@ -1612,7 +1621,6 @@ async def send_specialist_referral(
     import asyncio
     from fpdf import FPDF
     import resend as _resend
-    import os
 
     # Fetch and verify active-doctor assignment.
     appt = (
@@ -1729,25 +1737,29 @@ async def send_specialist_referral(
     pdf_b64: str = base64.b64encode(pdf_bytes).decode("utf-8")
 
     # ── 4. Send email with PDF attachment via Resend ──────────────────────────
-    resend_api_key: str = os.environ.get("RESEND_API_KEY", "")
-    email_from: str = os.environ.get("EMAIL_FROM", "MDQ+ Health <noreply@mdqplus.app>")
-
-    if not resend_api_key:
+    email_subject = f"Clinical Referral for {patient_name} from MDQ+"
+    recipient = reserve_email_send(
+        str(payload.recipient_email),
+        email_subject,
+        purpose="clinical_referral",
+    )
+    if recipient is None:
         logger.warning(
-            "[REFERRAL] RESEND_API_KEY not set — PDF generated but email not sent "
+            "[REFERRAL] PDF generated but email skipped by guard "
             "(appointment_id=%s recipient=%s)",
             appt.id,
             payload.recipient_email,
         )
         return {
             "status": "pdf_generated_no_email",
-            "detail": "RESEND_API_KEY not configured — email skipped.",
+            "detail": "Email delivery is disabled, unconfigured, invalid, or capped.",
             "appointment_id": appt.id,
-            "recipient": payload.recipient_email,
+            "recipient": str(payload.recipient_email),
         }
 
+    resend_api_key = get_resend_api_key()
+    email_from = get_from_email("MDQ+ Health <noreply@mdqplus.app>")
     _resend.api_key = resend_api_key
-
     html_body = f"""
     <div style="font-family:sans-serif;max-width:560px;margin:auto;">
       <h2 style="color:#1E73BE;">Clinical Referral — MDQ+</h2>
@@ -1770,8 +1782,8 @@ async def send_specialist_referral(
 
     params: _resend.Emails.SendParams = {
         "from": email_from,
-        "to": [payload.recipient_email],
-        "subject": f"Clinical Referral for {patient_name} from MDQ+",
+        "to": [recipient],
+        "subject": email_subject,
         "html": html_body,
         "attachments": [
             {
@@ -1805,7 +1817,7 @@ async def send_specialist_referral(
 
     return {
         "status": "sent",
-        "recipient": payload.recipient_email,
+        "recipient": str(payload.recipient_email),
         "appointment_id": appt.id,
         "patient_name": patient_name,
         "specialist_type": payload.specialist_type,

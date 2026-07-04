@@ -14,49 +14,60 @@ from app.api import deps
 
 from app.services.media_service import upload_image
 from app.core.limiter import limiter
+from app.services.email_guard import (
+    email_test_endpoint_enabled,
+    get_from_email,
+    get_resend_api_key,
+    mask_email,
+    reserve_email_send,
+)
 
 router = APIRouter()
 
+
+def _require_admin(current_user: User = Depends(deps.get_current_user)) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access only")
+    return current_user
 # --- 🧪 DIAGNOSTIC: Test Email Endpoint ---
 @router.get("/test-email/{email}")
-def test_email_endpoint(email: str):
+@limiter.limit("2/hour")
+def test_email_endpoint(request: Request, email: EmailStr):
     """
-    Diagnostic endpoint to test email delivery.
-    Sends synchronously and returns result directly.
+    Diagnostic endpoint for manual email testing.
+
+    Disabled by default. Enable only temporarily with
+    EMAIL_TEST_ENDPOINT_ENABLED=true, and keep EMAIL_DELIVERY_ENABLED=true.
     """
-    import os
-    import resend
-    
-    # Debug: List all env vars that contain 'RESEND' or start with key letters
-    all_env = os.environ
-    resend_vars = {k: v[:10]+"..." if v else v for k, v in all_env.items() if "RESEND" in k.upper()}
-    
-    api_key = os.getenv("RESEND_API_KEY")
-    from_email = os.getenv("RESEND_FROM_EMAIL", "mdqplus <noreply@mdqplus.com>")
-    
-    debug_info = {
-        "resend_env_vars_found": resend_vars,
-        "api_key_present": bool(api_key),
-        "api_key_prefix": api_key[:10] + "..." if api_key else None
-    }
-    
-    if not api_key:
-        return {"success": False, "error": "RESEND_API_KEY not found", "debug": debug_info}
-    
+    if not email_test_endpoint_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    subject = "mdqplus Email Test"
+    recipient = reserve_email_send(str(email), subject, purpose="diagnostic_test")
+    if recipient is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Email delivery is disabled, unconfigured, or capped.",
+        )
+
     try:
-        resend.api_key = api_key
-        
+        resend.api_key = get_resend_api_key()
         result = resend.Emails.send({
-            "from": from_email,
-            "to": [email],
-            "subject": "mdqplus Email Test",
-            "text": "This is a test email from mdqplus. If you received this, email delivery is working!"
+            "from": get_from_email("mdqplus <noreply@mdqplus.com>"),
+            "to": [recipient],
+            "subject": subject,
+            "text": "This is a test email from mdqplus.",
         })
-        
-        return {"success": True, "email_id": result.get("id"), "sent_to": email, "debug": debug_info}
-        
-    except Exception as e:
-        return {"success": False, "error": str(e), "debug": debug_info}
+        email_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", "N/A")
+        return {"success": True, "email_id": email_id, "sent_to": mask_email(recipient)}
+    except Exception as exc:
+        logger.error(
+            "[EMAIL TEST] Resend delivery failed | to=%s | error=%s",
+            mask_email(recipient),
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=502, detail="Email delivery failed.") from exc
 
 # --- 📧 EMAIL SERVICE (Resend HTTP API) ---
 import os
@@ -69,69 +80,56 @@ logger = logging.getLogger("uvicorn.error")
 def send_email(to_email: str, subject: str, body: str):
     """
     Send email using Resend HTTP API.
-    Logs are intentionally verbose so failures are visible in Render's log stream.
+
+    Delivery is centrally guarded by EMAIL_DELIVERY_ENABLED,
+    EMAIL_DAILY_SEND_LIMIT, recipient validation, and RESEND_API_KEY presence.
     """
-    logger.info(f"[EMAIL] >>> START send_email | to={to_email} | subject='{subject}'")
-
-    api_key = os.getenv("RESEND_API_KEY")
-    from_email = os.getenv("RESEND_FROM_EMAIL", "MDQ+ <noreply@mdqplus.com>")
-
-    # ── Guard: API key must exist ─────────────────────────────────────────────
-    if not api_key:
-        logger.error(
-            "[EMAIL] FATAL: RESEND_API_KEY environment variable is NOT SET. "
-            "Go to Render → your service → Environment and add it."
-        )
+    recipient = reserve_email_send(to_email, subject, purpose="auth")
+    if recipient is None:
         return
 
+    api_key = get_resend_api_key()
+    from_email = get_from_email("MDQ+ <noreply@mdqplus.com>")
+
     logger.info(
-        f"[EMAIL] Config OK | key_prefix={api_key[:8]}... | from={from_email}"
+        "[EMAIL] START send_email | to=%s | subject='%s'",
+        mask_email(recipient),
+        subject,
     )
 
     try:
         resend.api_key = api_key
-
         payload = {
             "from": from_email,
-            "to": [to_email],
+            "to": [recipient],
             "subject": subject,
             "html": body if body.strip().startswith("<") else body.replace("\n", "<br>"),
         }
-        logger.info(f"[EMAIL] Sending payload to Resend API: to={to_email}")
 
         result = resend.Emails.send(payload)
-
-        # The SDK returns a dict-like object — extract the ID safely
         email_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", "N/A")
-        logger.info(f"[EMAIL] SUCCESS | id={email_id} | to={to_email}")
+        logger.info("[EMAIL] SUCCESS | id=%s | to=%s", email_id, mask_email(recipient))
 
     except Exception as e:
-        # ── Aggressive diagnostic logging ─────────────────────────────────────
-        # str(e) alone is often useless for Resend SDK errors.
-        # We extract every available attribute to surface the real cause.
         error_type = type(e).__name__
-        error_str  = str(e)
-
-        # Resend SDK wraps API errors — try to pull structured fields
-        resend_name    = getattr(e, "name",       None)   # e.g. "validation_error"
-        resend_message = getattr(e, "message",    None)   # human-readable reason
-        resend_status  = getattr(e, "status_code", None)  # HTTP status from Resend
-        raw_repr       = repr(e)                           # full Python repr as fallback
+        error_str = str(e)
+        resend_name = getattr(e, "name", None)
+        resend_message = getattr(e, "message", None)
+        resend_status = getattr(e, "status_code", None)
+        raw_repr = repr(e)
 
         logger.error(
-            "[EMAIL] ❌ FAILED TO SEND EMAIL\n"
-            f"  │ to            : {to_email}\n"
-            f"  │ subject       : {subject}\n"
-            f"  │ from          : {from_email}\n"
-            f"  │ error_type    : {error_type}\n"
-            f"  │ error_str     : {error_str}\n"
-            f"  │ resend.name   : {resend_name}\n"
-            f"  │ resend.message: {resend_message}\n"
-            f"  │ resend.status : {resend_status}\n"
-            f"  │ raw_repr      : {raw_repr}\n"
-            "  └─ Check Render logs for the line above to diagnose the Resend failure."
+            "[EMAIL] FAILED TO SEND EMAIL\n"
+            f"  | to            : {mask_email(recipient)}\n"
+            f"  | subject       : {subject}\n"
+            f"  | from          : {from_email}\n"
+            f"  | error_type    : {error_type}\n"
+            f"  | error_str     : {error_str}\n"
+            f"  | resend.name   : {resend_name}\n"
+            f"  | resend.message: {resend_message}\n"
+            f"  | resend.status : {resend_status}\n"
+            f"  | raw_repr      : {raw_repr}"
         )
-
 
 # ---------------------------------------------------------------------------
 # 🔐 SIGNUP — Creates the local DB row for a Supabase-authenticated user.
@@ -145,7 +143,8 @@ def send_email(to_email: str, subject: str, body: str):
 # ---------------------------------------------------------------------------
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("5/minute")
+@limiter.limit("20/hour")
+@limiter.limit("3/minute")
 def create_user(request: Request, user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user: raise HTTPException(400, detail="Email already registered")
@@ -226,7 +225,10 @@ def doctor_registration_preflight(
 
 
 @router.post("/doctor/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/hour")
+@limiter.limit("2/minute")
 async def register_doctor(
+    request: Request,
     background_tasks: BackgroundTasks,
     email: str = Form(...),
     full_name: str = Form(...),
@@ -302,7 +304,7 @@ async def register_doctor(
     )
 
     # ✅ Email 2: Notify Admin (using SMTP_EMAIL as admin for now)
-    admin_email = os.getenv("SMTP_EMAIL", "admin@mediq.com")
+    admin_email = os.getenv("ADMIN_EMAIL") or os.getenv("SMTP_EMAIL", "admin@mediq.com")
     background_tasks.add_task(
         send_email,
         admin_email,
@@ -421,10 +423,10 @@ def verify_email(token: str, db: Session = Depends(get_db)):
 
 @router.post("/admin/approve-doctor/{doctor_id}")
 def approve_doctor(
-    doctor_id: int, 
+    doctor_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    # In real app: current_user: User = Depends(deps.get_current_active_superuser)
+    admin: User = Depends(_require_admin),
 ):
     doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
     if not doctor:
