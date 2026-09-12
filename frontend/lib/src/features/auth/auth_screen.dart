@@ -26,7 +26,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   DateTime? _selectedDate;
   bool _agreedToPrivacy = false;
   bool _agreedToTC = false;
-  bool _obscurePassword = true;  // ✅ State for password visibility
+  bool _obscurePassword = true; // ✅ State for password visibility
   final _formKey = GlobalKey<FormState>();
 
   @override
@@ -54,27 +54,24 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   Future<void> _navigateAfterAuth() async {
     if (!mounted) return;
-    
+
     try {
-      // FIX: Call repository directly to avoid Potential Riverpod Refresh hang
-      final authRepo = ref.read(authRepositoryProvider);
-      final user = await authRepo.getUserProfile();
-      
-      // Update the provider manually to keep state in sync
-      if (user != null) {
-         ref.invalidate(userProvider);
-      }
-      
+      // Share the same authoritative profile load used by the router/shell.
+      final user = await ref.read(userProvider.future);
+
       if (!mounted) return;
 
       // Redirect based on role
       if (user == null) {
-        context.go('/auth');
+        context.go(
+          Supabase.instance.client.auth.currentSession == null ? '/auth' : '/',
+        );
       } else if (user.role == 'admin') {
         context.go('/admin_dashboard');
       } else if (user.role == 'doctor') {
         try {
-          final doctor = await ref.read(authRepositoryProvider).getMyDoctorProfile();
+          final doctor =
+              await ref.read(authRepositoryProvider).getMyDoctorProfile();
           if (!mounted) return;
           if (doctor.isVerified) {
             context.go('/doctor_home');
@@ -87,7 +84,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       } else if (user.role == 'patient') {
         context.go('/patient_home');
       } else {
-        context.go('/auth');
+        context.go('/');
       }
     } catch (e) {
       if (mounted) {
@@ -97,24 +94,29 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             backgroundColor: Colors.red,
           ),
         );
-        context.go('/auth');
+        // Authentication succeeded; a temporary profile failure must not
+        // present the login screen or destroy the refreshable session.
+        ref.invalidate(userProvider);
+        context.go('/');
       }
     }
   }
 
   Future<void> _handleSubmit() async {
     if (!_formKey.currentState!.validate()) return;
-    if (!_isLogin && (_selectedDate == null || !_agreedToPrivacy || !_agreedToTC)) {
+    if (!_isLogin &&
+        (_selectedDate == null || !_agreedToPrivacy || !_agreedToTC)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("Please complete all fields and accept the legal terms."),
+          content:
+              Text("Please complete all fields and accept the legal terms."),
         ),
       );
       return;
     }
 
     final controller = ref.read(authControllerProvider.notifier);
-    
+
     // ✅ FIX: Use Positional Arguments to match AuthController
     if (_isLogin) {
       await controller.login(
@@ -179,8 +181,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                           await Supabase.instance.client.auth
                               .resetPasswordForEmail(
                             email,
-                            redirectTo:
-                                'io.supabase.mediqapp://login-callback',
+                            redirectTo: 'io.supabase.mediqapp://login-callback',
                           );
                           if (ctx.mounted) {
                             Navigator.pop(ctx);
@@ -199,8 +200,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                             setDialogState(() => isSending = false);
                             ScaffoldMessenger.of(ctx).showSnackBar(
                               SnackBar(
-                                content:
-                                    Text(UIErrorFormatter.getMessage(e)),
+                                content: Text(UIErrorFormatter.getMessage(e)),
                               ),
                             );
                           }
@@ -228,8 +228,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final authState = ref.watch(authControllerProvider);
     final theme = Theme.of(context);
 
-    ref.listen<AsyncValue<void>>(authControllerProvider,
-        (previous, next) {
+    ref.listen<AsyncValue<void>>(authControllerProvider, (previous, next) {
       if (next.hasError) {
         final safeMsg = UIErrorFormatter.getMessage(next.error);
 
@@ -241,7 +240,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         );
         return;
       }
-      
+
       // ✅ FIX: Only navigate when transitioning FROM loading state (after actual login/signup)
       final wasLoading = previous?.isLoading ?? false;
       if (wasLoading && !next.isLoading && !next.hasError) {
@@ -302,7 +301,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                             child: Text(
                               _selectedDate == null
                                   ? "Select"
-                                  : DateFormat('yyyy-MM-dd').format(_selectedDate!),
+                                  : DateFormat('yyyy-MM-dd')
+                                      .format(_selectedDate!),
                             ),
                           ),
                         ),
@@ -319,45 +319,55 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   ),
                   const SizedBox(height: 16),
                 ],
-                  TextFormField(
-                    controller: _emailController,
-                    decoration: const InputDecoration(labelText: "Email"),
-                    validator: (v) {
-                      if (v == null || v.isEmpty) return 'Please enter your email';
-                      final bool emailValid = RegExp(r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+").hasMatch(v ?? '');
-                      if (!emailValid) return 'Please enter a valid email address';
-                      return null;
-                    },
-                  ),
+                TextFormField(
+                  controller: _emailController,
+                  decoration: const InputDecoration(labelText: "Email"),
+                  validator: (v) {
+                    if (v == null || v.isEmpty)
+                      return 'Please enter your email';
+                    final bool emailValid = RegExp(
+                            r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+")
+                        .hasMatch(v ?? '');
+                    if (!emailValid)
+                      return 'Please enter a valid email address';
+                    return null;
+                  },
+                ),
                 const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _passwordController,
-                    obscureText: _obscurePassword, // ✅ Toggles
-                    decoration: InputDecoration(
-                      labelText: "Password",
-                      suffixIcon: IconButton( // ✅ Eye Button
-                        icon: Icon(
-                          _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                        ),
-                        onPressed: () {
-                          setState(() {
-                            _obscurePassword = !_obscurePassword;
-                          });
-                        },
+                TextFormField(
+                  controller: _passwordController,
+                  obscureText: _obscurePassword, // ✅ Toggles
+                  decoration: InputDecoration(
+                    labelText: "Password",
+                    suffixIcon: IconButton(
+                      // ✅ Eye Button
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_off
+                            : Icons.visibility,
                       ),
+                      onPressed: () {
+                        setState(() {
+                          _obscurePassword = !_obscurePassword;
+                        });
+                      },
                     ),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter your password';
-                      }
-                      if (!_isLogin) {
-                        if (value.length < 6) return 'Password must be at least 6 characters';
-                        if (!RegExp(r'[0-9]').hasMatch(value)) return 'Password must contain at least one number';
-                        if (!RegExp(r'[!@#$%^&*(),.?":{}|<>]').hasMatch(value)) return 'Password must contain a special character';
-                      }
-                      return null;
-                    },
                   ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter your password';
+                    }
+                    if (!_isLogin) {
+                      if (value.length < 6)
+                        return 'Password must be at least 6 characters';
+                      if (!RegExp(r'[0-9]').hasMatch(value))
+                        return 'Password must contain at least one number';
+                      if (!RegExp(r'[!@#$%^&*(),.?":{}|<>]').hasMatch(value))
+                        return 'Password must contain a special character';
+                    }
+                    return null;
+                  },
+                ),
                 if (_isLogin)
                   Align(
                     alignment: Alignment.centerRight,
@@ -373,14 +383,16 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     linkText: "Privacy Policy",
                     value: _agreedToPrivacy,
                     onChanged: (v) => setState(() => _agreedToPrivacy = v!),
-                    onTapLink: () => _launchURL("https://mdqplus.com/legal.html#privacy"),
+                    onTapLink: () =>
+                        _launchURL("https://mdqplus.com/legal.html#privacy"),
                   ),
                   _buildLegalCheckbox(
                     title: "I agree to the ",
                     linkText: "Terms & Conditions",
                     value: _agreedToTC,
                     onChanged: (v) => setState(() => _agreedToTC = v!),
-                    onTapLink: () => _launchURL("https://mdqplus.com/legal.html#terms"),
+                    onTapLink: () =>
+                        _launchURL("https://mdqplus.com/legal.html#terms"),
                   ),
                 ],
                 const SizedBox(height: 32),
@@ -397,7 +409,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 const SizedBox(height: 16),
                 TextButton(
                   onPressed: () => setState(() => _isLogin = !_isLogin),
-                  child: Text(_isLogin ? "Create an account" : "Have an account? Login"),
+                  child: Text(_isLogin
+                      ? "Create an account"
+                      : "Have an account? Login"),
                 ),
                 const Divider(),
                 TextButton(

@@ -25,6 +25,7 @@ from app.models.user import User
 from app.api import deps
 from app.schemas.user import UserResponse
 from app.services.paystack_service import paystack_service
+from app.services.notification_service import NotificationType, notify_user
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +55,8 @@ def upgrade_to_premium(
 ):
     """
     Manual plan upgrade endpoint (testing / admin overrides only).
-    Production upgrades are handled by the Paystack webhook at
-    POST /api/v1/payments/webhook with transactionType='subscription'.
+    Production upgrades are handled by verified Paystack events through
+    POST /api/v1/payments/webhook.
     """
     admin.plan = "premium"
     admin.subscription_expiry = datetime.utcnow() + timedelta(days=30)
@@ -158,12 +159,11 @@ async def cancel_subscription(
     except HTTPException as paystack_exc:
         # Log enough context for ops to diagnose without alarming the user.
         logger.warning(
-            "[SUBSCRIPTION] ⚠️  Paystack disable failed for user_id=%s "
-            "(sub_code='%s') — HTTP %s: %s. Local auto_renew unchanged.",
+            "[SUBSCRIPTION] Paystack disable failed for user_id=%s "
+            "(sub_code='%s') — HTTP %s. Local auto_renew unchanged.",
             current_user.id,
             sub_code,
             paystack_exc.status_code,
-            paystack_exc.detail,
         )
         raise
 
@@ -181,6 +181,17 @@ async def cancel_subscription(
         "Premium access retained until expiry=%s.",
         current_user.id,
         current_user.subscription_expiry,
+    )
+
+    notify_user(
+        db,
+        user_id=current_user.id,
+        notification_type=NotificationType.SUBSCRIPTION_CANCELLED,
+        navigation_data={"subscription_destination": "subscription"},
+        event_key=(
+            f"subscription:{sub_code}:"
+            f"{NotificationType.SUBSCRIPTION_CANCELLED}:{current_user.id}"
+        ),
     )
 
     return current_user

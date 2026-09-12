@@ -8,8 +8,19 @@ from datetime import date, datetime, timezone
 from app.core.database import get_db
 from app.models.user import User
 from app.models.doctor import Doctor
-from app.schemas.user import UserCreate, UserResponse, UserUpdate, DeviceTokenUpdate
+from app.schemas.user import (
+    DeviceTokenDelete,
+    DeviceTokenUpdate,
+    UserCreate,
+    UserResponse,
+    UserUpdate,
+)
 from app.schemas.doctor import DoctorRegistrationPreflight, DoctorResponse
+from app.models.notification_device_token import NotificationDeviceToken
+from app.services.notification_device_service import (
+    claim_device_token,
+    unregister_device_token,
+)
 from app.api import deps
 
 from app.services.media_service import upload_image
@@ -456,16 +467,39 @@ def approve_doctor(
 
 # --- 📲 FCM Device Token Registration ---
 
-@router.patch("/me/device-token")
+@router.post("/me/device-token")
+@router.put("/me/device-token")
+@router.patch("/me/device-token", include_in_schema=False)
 def update_device_token(
     body: DeviceTokenUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
-    """Store the client's FCM device token for push notifications."""
-    current_user.fcm_token = body.fcm_token
-    db.commit()
-    return {"message": "Device token updated"}
+    """Atomically claim an app installation and FCM token for this user."""
+    installation_id = str(body.installation_id)
+    claim_device_token(
+        db,
+        user_id=current_user.id,
+        installation_id=installation_id,
+        token=body.fcm_token,
+        platform=body.platform,
+    )
+    return {"message": "Device token registered"}
+
+
+@router.delete("/me/device-token")
+def delete_device_token(
+    body: DeviceTokenDelete,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """Remove only the authenticated user's current app installation."""
+    deleted = unregister_device_token(
+        db,
+        user_id=current_user.id,
+        installation_id=str(body.installation_id),
+    )
+    return {"message": "Device token unregistered", "deleted": bool(deleted)}
 
 
 # --- ⚖️ Account Deactivation — NDPA 30-Day Legal Hold ---
@@ -492,6 +526,11 @@ def deactivate_account(
 
     current_user.is_active = False
     current_user.fcm_token = None
+    (
+        db.query(NotificationDeviceToken)
+        .filter(NotificationDeviceToken.user_id == current_user.id)
+        .delete(synchronize_session=False)
+    )
     current_user.deletion_requested_at = now_utc
 
     db.commit()
@@ -593,6 +632,11 @@ def scrub_expired_accounts(db: Session) -> int:
         user.auth_provider      = None
         user.verification_token = None
         user.fcm_token          = None
+        (
+            db.query(NotificationDeviceToken)
+            .filter(NotificationDeviceToken.user_id == user.id)
+            .delete(synchronize_session=False)
+        )
         user.deletion_requested_at = None   # Marks scrub as complete
 
         scrubbed += 1

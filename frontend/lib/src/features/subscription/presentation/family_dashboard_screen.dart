@@ -3,13 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
-import 'package:mediq_app/src/features/auth/data/user_model.dart';
+import 'package:mediq_app/src/features/auth/presentation/profile_recovery_view.dart';
 
 class FamilyDashboardScreen extends ConsumerStatefulWidget {
   const FamilyDashboardScreen({super.key});
 
   @override
-  ConsumerState<FamilyDashboardScreen> createState() => _FamilyDashboardScreenState();
+  ConsumerState<FamilyDashboardScreen> createState() =>
+      _FamilyDashboardScreenState();
 }
 
 class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
@@ -21,7 +22,8 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
     });
 
     try {
-      final inviteCode = await ref.read(authRepositoryProvider).generateFamilyInvite();
+      final inviteCode =
+          await ref.read(authRepositoryProvider).generateFamilyInvite();
       if (!mounted) return;
       _showInviteCodeModal(inviteCode);
     } catch (e) {
@@ -65,7 +67,8 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
                 decoration: BoxDecoration(
                   color: Colors.grey.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Theme.of(context).primaryColor, width: 1),
+                  border: Border.all(
+                      color: Theme.of(context).primaryColor, width: 1),
                 ),
                 child: Text(
                   inviteCode,
@@ -86,7 +89,8 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
                     Clipboard.setData(ClipboardData(text: inviteCode));
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Invite code copied to clipboard!')),
+                      const SnackBar(
+                          content: Text('Invite code copied to clipboard!')),
                     );
                   },
                   icon: const Icon(Icons.copy),
@@ -113,11 +117,14 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
       body: userAsync.when(
         data: (user) {
           if (user == null) {
-            return const Center(child: Text("Unable to load user data"));
+            return AuthenticatedProfileRecoveryView(
+              error: StateError('Authenticated profile was unavailable.'),
+            );
           }
 
           final dependents = user.dependents;
-          final int seatsUsed = 1 + dependents.length; // 1 for primary + dependents
+          final int seatsUsed =
+              1 + dependents.length; // 1 for primary + dependents
           final int totalSeats = 4;
 
           return SingleChildScrollView(
@@ -148,7 +155,8 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
                         children: [
                           const Text(
                             "Seats Used",
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                            style: TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.bold),
                           ),
                           Text(
                             "$seatsUsed / $totalSeats",
@@ -184,12 +192,16 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
                           ? const SizedBox(
                               width: 20,
                               height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
                             )
                           : const Icon(Icons.person_add),
-                      label: Text(_isLoading ? 'Generating...' : 'Invite Family Member'),
+                      label: Text(_isLoading
+                          ? 'Generating...'
+                          : 'Invite Family Member'),
                       style: ElevatedButton.styleFrom(
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                   )
@@ -228,7 +240,8 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
                       padding: const EdgeInsets.all(32.0),
                       child: Column(
                         children: [
-                          Icon(Icons.group_outlined, size: 64, color: Colors.grey.withOpacity(0.5)),
+                          Icon(Icons.group_outlined,
+                              size: 64, color: Colors.grey.withOpacity(0.5)),
                           const SizedBox(height: 16),
                           const Text(
                             "No family members linked yet.",
@@ -243,42 +256,45 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
                     itemCount: dependents.length,
-                      separatorBuilder: (context, index) => const Divider(),
-                      itemBuilder: (context, index) {
-                        final dependent = dependents[index];
-                        return ListTile(
-                          leading: CircleAvatar(
-                            backgroundImage: dependent.imageUrl.isNotEmpty
-                                ? NetworkImage(dependent.imageUrl)
-                                : null,
-                            child: dependent.imageUrl.isEmpty
-                                ? Text(dependent.firstName.isNotEmpty
-                                    ? dependent.firstName[0].toUpperCase()
-                                    : '?')
-                                : null,
+                    separatorBuilder: (context, index) => const Divider(),
+                    itemBuilder: (context, index) {
+                      final dependent = dependents[index];
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundImage: dependent.imageUrl.isNotEmpty
+                              ? NetworkImage(dependent.imageUrl)
+                              : null,
+                          child: dependent.imageUrl.isEmpty
+                              ? dependent.firstName.isNotEmpty
+                                  ? Text(dependent.firstName[0].toUpperCase())
+                                  : const Icon(Icons.person_outline)
+                              : null,
+                        ),
+                        title: Text(
+                            "${dependent.firstName} ${dependent.lastName}"),
+                        subtitle: Text(dependent.email),
+                        trailing: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: theme.primaryColor.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
                           ),
-                          title: Text("${dependent.firstName} ${dependent.lastName}"),
-                          subtitle: Text(dependent.email),
-                          trailing: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: theme.primaryColor.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              "Dependent",
-                              style: TextStyle(fontSize: 12, color: theme.primaryColor),
-                            ),
+                          child: Text(
+                            "Dependent",
+                            style: TextStyle(
+                                fontSize: 12, color: theme.primaryColor),
                           ),
-                        );
-                      },
-                    ),
+                        ),
+                      );
+                    },
+                  ),
               ],
             ),
           );
         },
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, stack) => Center(child: Text("Error: $error")),
+        loading: () => const AuthenticatedProfileRecoveryView(),
+        error: (error, stack) => AuthenticatedProfileRecoveryView(error: error),
       ),
     );
   }

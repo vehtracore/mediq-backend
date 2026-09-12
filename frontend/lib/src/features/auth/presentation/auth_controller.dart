@@ -1,12 +1,16 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
+import 'package:mediq_app/src/features/auth/data/auth_session_coordinator.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:mediq_app/src/features/auth/presentation/auth_session_lifecycle.dart';
 import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
 import 'package:mediq_app/src/core/services/notification_service.dart';
 import 'package:mediq_app/src/features/vault/data/vault_repository.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-final authControllerProvider = StateNotifierProvider<AuthController, AsyncValue<void>>((ref) {
+final authControllerProvider =
+    StateNotifierProvider<AuthController, AsyncValue<void>>((ref) {
   return AuthController(
     ref.read(authRepositoryProvider),
     ref.read(imageUploadServiceProvider),
@@ -24,26 +28,20 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
 
   Future<void> login(String email, String password) async {
     state = const AsyncLoading();
-    state = await AsyncValue.guard(() => _authRepository.login(email, password));
-    
+    state =
+        await AsyncValue.guard(() => _authRepository.login(email, password));
+
     if (!state.hasError) {
-      _syncDeviceToken();
+      _ref.invalidate(vaultHistoryProvider);
     }
-    
+
     _ref.invalidate(userProvider);
   }
 
-  Future<void> _syncDeviceToken() async {
-    final notificationService = _ref.read(notificationServiceProvider);
-    final token = await notificationService.getToken();
-    if (token != null) {
-      await _authRepository.updateDeviceToken(token);
-    }
-  }
-
-  Future<void> signUp(String email, String password, String firstName, String lastName, DateTime dob) async {
+  Future<void> signUp(String email, String password, String firstName,
+      String lastName, DateTime dob) async {
     state = const AsyncLoading();
-    
+
     // signUp() creates an authenticated Supabase session automatically.
     // The GoRouter redirect listens to onAuthStateChange and will navigate
     // to the appropriate dashboard once the session is established.
@@ -52,17 +50,23 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
     );
 
     if (!state.hasError) {
-      _syncDeviceToken();
       _ref.invalidate(userProvider);
+      _ref.invalidate(vaultHistoryProvider);
     }
   }
 
   Future<void> logout() async {
     state = const AsyncLoading();
-    await _authRepository.logout();
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    await _ref.read(notificationServiceProvider).prepareForLogout();
+    await _ref.read(authSessionCoordinatorProvider).signOutExplicitly();
+    try {
+      await _authRepository.clearRedundantSessionCopiesAfterLogout();
+    } catch (_) {
+      // These legacy copies are non-authoritative; teardown must still finish.
+    }
+    await clearAuthenticatedUserState(_ref, userId);
     state = const AsyncData(null);
-    _ref.invalidate(userProvider);
-    _ref.invalidate(vaultHistoryProvider);
   }
 
   // Fix: Added settings parameters here to match Repository
@@ -88,7 +92,7 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
     try {
       String? imageUrl;
       if (profileImage != null) {
-        imageUrl = await _uploadService.uploadFile(profileImage); 
+        imageUrl = await _uploadService.uploadFile(profileImage);
       }
 
       await _authRepository.updateUser(
@@ -140,9 +144,17 @@ class AuthController extends StateNotifier<AsyncValue<void>> {
     }
   }
 
-  Future<void> sendSupportMessage({required String subject, required String message}) async {
+  Future<SupportSubmissionResult> sendSupportMessage({
+    required String requestId,
+    required String subject,
+    required String message,
+  }) async {
     try {
-      await _authRepository.sendSupportMessage(subject: subject, message: message);
+      return await _authRepository.sendSupportMessage(
+        requestId: requestId,
+        subject: subject,
+        message: message,
+      );
     } catch (e) {
       rethrow;
     }

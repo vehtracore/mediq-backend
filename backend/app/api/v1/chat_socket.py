@@ -103,12 +103,19 @@ def get_chat_history(
     cursor: Optional[str] = Query(None, description="ID of the last message from the previous page"),
     limit: int = Query(20, ge=1, le=100, description="Number of messages per page"),
 ):
-    require_consultation_access(
+    appointment = require_consultation_access(
         db,
         appointment_id,
         current_user,
         allow_completed=True,
     )
+    peer_user_id = (
+        appointment.doctor.user_id
+        if appointment.patient_id == current_user.id and appointment.doctor is not None
+        else appointment.patient_id
+    )
+    peer_user = db.query(User).filter(User.id == peer_user_id).first()
+    peer_presence_id = getattr(peer_user, "supabase_auth_id", None)
     query = db.query(Message).filter(Message.appointment_id == appointment_id)
 
     # If cursor is provided, find the cursor message's timestamp and filter older messages
@@ -155,6 +162,12 @@ def get_chat_history(
         "messages": serialized,
         "next_cursor": next_cursor,
         "has_more": has_more,
+        # Presence is UX-only. The authorized history response supplies the
+        # expected peer identity so client-authored presence metadata is not
+        # accepted solely because it claims an arbitrary user_id.
+        "peer_presence_id": (
+            str(peer_presence_id) if peer_presence_id is not None else None
+        ),
     }
 
 # --- HELPER: Save Message Safely ---

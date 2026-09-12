@@ -90,11 +90,13 @@ from app.core.scheduler import (
     complete_expired_consultations,
     cleanup_expired_slots,
     cleanup_old_notifications,
+    cleanup_old_support_messages,
     mark_consultation_no_shows,
     process_approved_consultation_payouts,
     process_approved_consultation_refunds,
     sweep_stale_appointments,
 )
+from app.services.support_email_service import support_email_readiness
 
 Base.metadata.create_all(bind=engine)
 
@@ -716,9 +718,19 @@ async def lifespan(app: FastAPI):
       • doctor_slot_cleanup     — daily 00:00 UTC  (delete expired free slots)
       • stale_appointment_sweep — hourly           (close/cancel stale bookings)
       • notification_cleanup    — daily 00:15 UTC  (90-day retention cleanup)
+      • support_message_cleanup — daily 00:30 UTC  (30-day retention cleanup)
       • ai_temp_image_cleanup   — hourly           (delete abandoned AI images)
     """
     scheduler = AsyncIOScheduler(timezone="UTC")
+
+    support_readiness = support_email_readiness()
+    if support_readiness.ready:
+        _sched_log.info("[SUPPORT EMAIL] Configuration readiness check passed.")
+    else:
+        _sched_log.warning(
+            "[SUPPORT EMAIL] Configuration unavailable | issues=%s",
+            ",".join(support_readiness.issues),
+        )
 
     # Job 1: NDPA PII scrubber — daily at 02:00 UTC
     scheduler.add_job(
@@ -801,6 +813,14 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
+    scheduler.add_job(
+        cleanup_old_support_messages,
+        trigger=CronTrigger(hour=0, minute=30, timezone="UTC"),
+        id="support_message_retention_cleanup",
+        name="Nightly 30-day support-message retention cleanup",
+        replace_existing=True,
+    )
+
     # Job 9: Temporary AI image cleanup — hourly
     scheduler.add_job(
         _run_ai_temp_cleanup_async,
@@ -817,6 +837,7 @@ async def lifespan(app: FastAPI):
         "Payment watchdog every 5 min | "
         "Doctor-slot cleanup @ 00:00 UTC daily | "
         "Stale-appointment sweep every 1 hour | "
+        "Support-message cleanup @ 00:30 UTC daily | "
         "AI temporary-image cleanup every 1 hour."
     )
 
@@ -937,4 +958,8 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.get("/")
 async def health_check():
-    return {"status": "healthy", "service": "MDQ+ API"}
+    return {
+        "status": "healthy",
+        "service": "MDQ+ API",
+        "support_email": support_email_readiness().public_dict(),
+    }

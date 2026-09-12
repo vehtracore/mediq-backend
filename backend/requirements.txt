@@ -69,5 +69,7 @@ slowapi>=0.1.8
 firebase-admin
 apscheduler==3.11.0
 fpdf2
+pypdf==6.16.2
+mutagen==1.47.0
 
 

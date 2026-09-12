@@ -1,6 +1,7 @@
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
 from typing import Optional
 from datetime import date, datetime
+from uuid import UUID
 
 # Base schema with shared fields
 class UserBase(BaseModel):
@@ -99,3 +100,25 @@ class DependentUser(BaseModel):
 
 class DeviceTokenUpdate(BaseModel):
     fcm_token: str
+    installation_id: UUID
+    platform: str
+
+    @field_validator("fcm_token")
+    @classmethod
+    def validate_fcm_token(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("FCM token cannot be empty")
+        return value
+
+    @field_validator("platform")
+    @classmethod
+    def validate_platform(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in {"android", "ios", "web", "macos", "windows", "linux"}:
+            raise ValueError("Unsupported notification platform")
+        return value
+
+
+class DeviceTokenDelete(BaseModel):
+    installation_id: UUID

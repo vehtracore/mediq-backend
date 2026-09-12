@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.core.database import get_db
 from app.models.user import User
+from app.services.notification_service import NotificationType, notify_user
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -269,6 +270,21 @@ def join_family(
         primary_user.id,
         _FAMILY_PLAN_NAME,
         primary_user.subscription_expiry,
+    )
+
+    notify_user(
+        db,
+        user_id=primary_user.id,
+        notification_type=NotificationType.FAMILY_MEMBER_JOINED,
+        navigation_data={"family_context": "dashboard"},
+        event_key=f"family:{primary_user.id}:member:{current_user.id}:joined:primary",
+    )
+    notify_user(
+        db,
+        user_id=current_user.id,
+        notification_type=NotificationType.FAMILY_JOINED,
+        navigation_data={"family_context": "dashboard"},
+        event_key=f"family:{primary_user.id}:member:{current_user.id}:joined:member",
     )
 
     return JoinResponse(

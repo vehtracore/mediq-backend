@@ -1,31 +1,142 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
-import 'package:permission_handler/permission_handler.dart';
-import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:dio/dio.dart';
-import 'dart:math' as math;
-import 'package:mediq_app/src/features/chat/presentation/ai_chat_controller.dart';
-import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
-import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
-import 'package:mediq_app/src/core/api/dio_client.dart';
-import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:mediq_app/src/core/constants/mdq_ai_assets.dart';
+import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:mediq_app/src/features/chat/data/ai_pdf_attachment.dart';
+import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
+import 'package:mediq_app/src/features/chat/data/voice_input_capability.dart';
+import 'package:mediq_app/src/features/chat/data/voice_input_service.dart';
+import 'package:mediq_app/src/features/chat/presentation/ai_chat_controller.dart';
+import 'package:mediq_app/src/features/chat/presentation/voice_input_controller.dart';
+import 'package:mediq_app/src/features/chat/presentation/widgets/voice_input_microphone_button.dart';
+import 'package:mediq_app/src/features/vault/data/vault_repository.dart';
+import 'package:go_router/go_router.dart';
 import '../../lab/data/lab_result_model.dart';
 import 'widgets/lab_result_bubble.dart';
 import 'widgets/markdown_bubble.dart';
 
 class AiChatScreen extends ConsumerStatefulWidget {
-  const AiChatScreen({super.key});
+  final String? sourceSummaryId;
+  final String? sourceSummaryUpdatedAt;
+
+  const AiChatScreen({
+    super.key,
+    this.sourceSummaryId,
+    this.sourceSummaryUpdatedAt,
+  }) : assert(
+          (sourceSummaryId == null) == (sourceSummaryUpdatedAt == null),
+          'A continued chat requires both the summary ID and its version.',
+        );
 
   @override
   ConsumerState<AiChatScreen> createState() => _AiChatScreenState();
 }
 
-class _AiChatScreenState extends ConsumerState<AiChatScreen> {
+class AiChatExitDialog extends StatelessWidget {
+  final bool canSave;
+  final VoidCallback onCancel;
+  final VoidCallback onExit;
+  final Future<void> Function()? onSave;
+
+  const AiChatExitDialog({
+    super.key,
+    required this.canSave,
+    required this.onCancel,
+    required this.onExit,
+    this.onSave,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('End Consultation'),
+      content: Text(
+        canSave
+            ? 'This chat is ephemeral — all messages will be discarded when you leave.\n\n'
+                'Would you like to save a summary to your Health Vault before exiting?'
+            : 'This chat is ephemeral — all messages will be discarded when you leave.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: onCancel,
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+          onPressed: onExit,
+          child: Text(canSave ? 'Exit & Delete' : 'Exit'),
+        ),
+        if (canSave)
+          FilledButton.icon(
+            icon: const Icon(Icons.health_and_safety_outlined, size: 18),
+            label: const Text('Exit & Save'),
+            onPressed: onSave == null ? null : () async => onSave!(),
+          ),
+      ],
+    );
+  }
+}
+
+class AiChatWelcomeState extends StatelessWidget {
+  const AiChatWelcomeState({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blue.withValues(alpha: 0.05),
+              shape: BoxShape.circle,
+            ),
+            child: Image.asset(
+              MdqAiAssets.conversation,
+              key: const ValueKey('mdq-ai-conversation'),
+              width: 88,
+              height: 88,
+              fit: BoxFit.contain,
+              excludeFromSemantics: true,
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            "Hello! I'm MDQ+.",
+            style: TextStyle(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontSize: 18,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'I can help assess your symptoms.',
+            style: TextStyle(
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AiChatScreenState extends ConsumerState<AiChatScreen>
+    with WidgetsBindingObserver {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
@@ -33,12 +144,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   String _selectedLanguage = 'English';
 
   // --- VOICE STATE ---
-  late stt.SpeechToText _speech;
-  bool _isListening = false; // Visual UI state (drives the pulsing mic)
-  bool _isUserIntendingToListen = false; // Master toggle — survives OS kills
-  bool _speechEnabled = false;
-  String _preListenText =
-      ''; // Accumulated text snapshot before each listen cycle
+  late final VoiceInputController _voiceInput;
 
   // --- TTS STATE ---
   // (Per-message speak — no global auto-play toggle)
@@ -47,19 +153,52 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   String? _stagedImageUrl; // Cloudinary URL after upload
   String? _stagedImagePublicId;
   bool _isUploadingImage = false;
+  AiPdfAttachment? _stagedPdf;
+  bool _isPickingPdf = false;
   bool _checkingConsent = true;
   bool _hasAiConsent = false;
+  late final AiChatContinuation? _continuation;
 
   @override
   void initState() {
     super.initState();
-    _speech = stt.SpeechToText();
+    _continuation = widget.sourceSummaryId == null
+        ? null
+        : AiChatContinuation(
+            summaryId: widget.sourceSummaryId!,
+            sourceUpdatedAt: widget.sourceSummaryUpdatedAt!,
+          );
+    WidgetsBinding.instance.addObserver(this);
+    _voiceInput = VoiceInputController(
+      recorder: RecordVoiceRecorder(),
+      transcription: DioVoiceTranscriptionApi(ref.read(dioProvider)),
+      tempFiles: VoiceTempFileStore(),
+      permission: PermissionHandlerMicrophonePermission(),
+    )..addListener(_handleVoiceStateChanged);
+    unawaited(_voiceInput.initialize());
     WidgetsBinding.instance.addPostFrameCallback((_) => _initializeAiConsent());
   }
 
   Future<void> _initializeAiConsent() async {
     try {
-      final controller = ref.read(aiChatControllerProvider.notifier);
+      if (_continuation != null) {
+        final user = await ref.read(userProvider.future);
+        if (user?.isPremium != true) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Continue with AI is available on Premium and Family plans.',
+              ),
+            ),
+          );
+          Navigator.of(context).pop();
+          return;
+        }
+      }
+
+      final controller =
+          ref.read(aiChatControllerProvider(_continuation).notifier);
       final hasConsent = await controller.hasActiveConsent();
       if (!mounted) return;
 
@@ -112,7 +251,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             children: [
               const Text(
                 'Your symptoms, health text, chronic conditions, and uploaded '
-                'images may be processed by our third-party AI provider.',
+                'images or PDF documents may be processed by our third-party AI provider.',
               ),
               const SizedBox(height: 12),
               const Text(
@@ -157,119 +296,95 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     return accepted == true;
   }
 
-  /// Lazy speech initialization with aggressive restart callbacks
-  Future<bool> _ensureSpeechInitialized() async {
-    if (_speechEnabled) return true;
-
-    try {
-      if (!kIsWeb) {
-        var status = await Permission.microphone.request();
-        if (status != PermissionStatus.granted) return false;
-      }
-
-      bool available = await _speech.initialize(
-        onStatus: (status) {
-          debugPrint('🎤 Status: $status');
-          if (status == 'notListening' || status == 'done') {
-            if (_isUserIntendingToListen && mounted) {
-              // OS killed the listener against the user's will.
-              // Snapshot whatever we have so far, then restart.
-              _preListenText = _messageController.text.trim();
-              debugPrint(
-                  '🔄 Auto-restarting listener (OS timeout). Snapshot: "${_preListenText.length} chars"');
-              Future.delayed(const Duration(milliseconds: 50), () {
-                if (_isUserIntendingToListen && mounted) {
-                  _startListeningSession();
-                }
-              });
-            } else {
-              if (mounted) setState(() => _isListening = false);
-            }
-          }
-        },
-        onError: (e) {
-          debugPrint('❌ Voice Error: ${e.errorMsg}');
-          if (_isUserIntendingToListen && mounted) {
-            // Error (e.g. error_speech_timeout) — restart if user still wants to talk
-            _preListenText = _messageController.text.trim();
-            debugPrint(
-                '🔄 Auto-restarting listener after error: ${e.errorMsg}');
-            Future.delayed(const Duration(milliseconds: 50), () {
-              if (_isUserIntendingToListen && mounted) {
-                _startListeningSession();
-              }
-            });
-          } else {
-            if (mounted) {
-              setState(() => _isListening = false);
-            }
-          }
-        },
-        debugLogging: true,
-      );
-
-      if (mounted) {
-        setState(() => _speechEnabled = available);
-      }
-      return available;
-    } catch (e) {
-      debugPrint("❌ Init Exception: $e");
-      return false;
-    }
-  }
-
-  /// Internal: starts a single listen() session that appends to _preListenText.
-  void _startListeningSession() {
-    _speech.listen(
-      onResult: (result) {
-        final recognized = result.recognizedWords;
-        final appended =
-            _preListenText.isEmpty ? recognized : '$_preListenText $recognized';
-        if (mounted) {
-          setState(() {
-            _messageController.text = appended;
-            _messageController.selection = TextSelection.fromPosition(
-              TextPosition(offset: _messageController.text.length),
-            );
-          });
-        }
-      },
-    );
-  }
-
-  void _toggleListening() async {
-    final isAvailable = await _ensureSpeechInitialized();
-
-    if (!isAvailable) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text("Microphone access denied or not available.")),
+  void _handleVoiceStateChanged() {
+    if (!mounted) return;
+    final transcript = _voiceInput.consumeTranscript();
+    setState(() {
+      if (transcript != null) {
+        _messageController.text = transcript;
+        _messageController.selection = TextSelection.collapsed(
+          offset: transcript.length,
         );
       }
+    });
+  }
+
+  Future<void> _toggleVoiceInput() async {
+    final voiceState = _voiceInput.state;
+    if (voiceState.phase == VoiceInputPhase.recording) {
+      await _voiceInput.stopAndTranscribe();
+      return;
+    }
+    if (voiceState.phase != VoiceInputPhase.idle) return;
+
+    final capability = aiLanguageCapabilityFor(_selectedLanguage);
+    if (!capability.voiceInputEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "Voice input isn't available for $_selectedLanguage yet. "
+            'You can still type your message.',
+          ),
+        ),
+      );
       return;
     }
 
-    if (_isUserIntendingToListen) {
-      // ── USER TAPS STOP ──
-      _isUserIntendingToListen = false;
-      _speech.stop();
-      setState(() => _isListening = false);
-    } else {
-      // ── USER TAPS START ──
-      _preListenText = _messageController.text.trim();
-      _isUserIntendingToListen = true;
-      setState(() => _isListening = true);
-      _startListeningSession();
+    final outcome = await _voiceInput.start(
+      language: _selectedLanguage,
+      existingComposerText: _messageController.text,
+    );
+    if (!mounted) return;
+    if (outcome == VoiceStartOutcome.permissionDenied) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Microphone permission is required for voice input.'),
+        ),
+      );
+    } else if (outcome == VoiceStartOutcome.permissionPermanentlyDenied) {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Microphone permission required'),
+          content: const Text(
+            'Allow microphone access in app settings to use voice input.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Not now'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                unawaited(_voiceInput.openPermissionSettings());
+              },
+              child: const Text('Open settings'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive &&
+        _voiceInput.isRequestingMicrophonePermission) {
+      return;
+    }
+    if (state != AppLifecycleState.resumed) {
+      unawaited(_voiceInput.interrupt());
     }
   }
 
   @override
   void dispose() {
-    _isUserIntendingToListen = false; // Kill the restart loop before disposing
+    WidgetsBinding.instance.removeObserver(this);
+    _voiceInput.removeListener(_handleVoiceStateChanged);
+    unawaited(_voiceInput.disposeAsync());
     _messageController.dispose();
     _scrollController.dispose();
-    _speech.stop();
     super.dispose();
   }
 
@@ -294,7 +409,10 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   Future<void> _stageImage() async {
     await _deleteStagedImage();
     if (!mounted) return;
-    setState(() => _isUploadingImage = true);
+    setState(() {
+      _stagedPdf = null;
+      _isUploadingImage = true;
+    });
     try {
       final image = await ref
           .read(imageUploadServiceProvider)
@@ -329,34 +447,80 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     }
     if (publicId != null) {
       await ref
-          .read(aiChatControllerProvider.notifier)
+          .read(aiChatControllerProvider(_continuation).notifier)
           .deleteTemporaryImage(publicId);
     }
   }
 
+  Future<void> _stagePdf() async {
+    await _deleteStagedImage();
+    if (!mounted) return;
+    setState(() => _isPickingPdf = true);
+    try {
+      final document = await ref.read(aiPdfPickerProvider).pick();
+      if (document != null && mounted) {
+        setState(() => _stagedPdf = document);
+      }
+    } on AiPdfSelectionException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      }
+    } catch (_) {
+      debugPrint('[AiChatScreen] PDF selection failed.');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('This PDF could not be selected. Please try again.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isPickingPdf = false);
+    }
+  }
+
+  void _removeStagedPdf() {
+    setState(() => _stagedPdf = null);
+  }
+
   /// Send message with optional staged image
   void _sendMessage() {
-    final chatState = ref.read(aiChatControllerProvider);
-    if (chatState.isLoading || _isUploadingImage) return;
+    final chatState = ref.read(aiChatControllerProvider(_continuation));
+    if (chatState.isLoading ||
+        _isUploadingImage ||
+        _isPickingPdf ||
+        _voiceInput.state.locksComposer) {
+      return;
+    }
 
     final text = _messageController.text.trim();
     final imageUrl = _stagedImageUrl;
     final imagePublicId = _stagedImagePublicId;
+    final document = _stagedPdf;
 
     // Need either text or an image
-    if (text.isEmpty && imageUrl == null) return;
+    if (text.isEmpty && imageUrl == null && document == null) return;
 
-    final messageText = text.isNotEmpty ? text : "Analyze this image";
+    final messageText = text.isNotEmpty
+        ? text
+        : document != null
+            ? 'Analyse and explain this PDF document.'
+            : 'Analyze this image';
 
-    ref.read(aiChatControllerProvider.notifier).sendMessage(messageText,
+    ref.read(aiChatControllerProvider(_continuation).notifier).sendMessage(
+        messageText,
         imageUrl: imageUrl,
         imagePublicId: imagePublicId,
+        document: document,
         language: _selectedLanguage);
 
     _messageController.clear();
     setState(() {
       _stagedImageUrl = null;
       _stagedImagePublicId = null;
+      _stagedPdf = null;
     });
 
     // Scroll after state update
@@ -402,7 +566,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                     await context.push<LabAnalysisResponse>('/lab_scanner');
                 if (result != null) {
                   ref
-                      .read(aiChatControllerProvider.notifier)
+                      .read(aiChatControllerProvider(_continuation).notifier)
                       .sendLabResult(result);
                   WidgetsBinding.instance
                       .addPostFrameCallback((_) => _scrollToBottom());
@@ -418,80 +582,171 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                 _stageImage(); // Stage, don't send immediately
               },
             ),
+            ListTile(
+              leading:
+                  const Icon(Icons.picture_as_pdf, color: Colors.redAccent),
+              title: const Text('Upload PDF'),
+              subtitle: const Text('Medical reports and other documents'),
+              onTap: () {
+                Navigator.pop(context);
+                _stagePdf();
+              },
+            ),
           ],
         ),
       ),
     );
   }
 
-  /// Shows the "End Consultation" exit dialog with three options.
+  /// Ends Free chats directly and offers paid users the existing save choice.
   Future<void> _showExitDialog() async {
+    await _voiceInput.interrupt();
+    if (!mounted) return;
+    final controller =
+        ref.read(aiChatControllerProvider(_continuation).notifier);
+    final canSave = controller.hasPaidContinuity;
     final shouldClose = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('End Consultation'),
-        content: const Text(
-          'This chat is ephemeral — all messages will be discarded when you leave.\n\n'
-          'Would you like to save a summary to your Health Vault before exiting?',
-        ),
-        actions: [
-          // ── Cancel ──────────────────────────────────────────────────────
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-
-          // ── Exit & Delete ────────────────────────────────────────────────
-          TextButton(
-            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Exit & Delete'),
-          ),
-
-          // ── Exit & Save ──────────────────────────────────────────────────
-          FilledButton.icon(
-            icon: const Icon(Icons.health_and_safety_outlined, size: 18),
-            label: const Text('Exit & Save'),
-            onPressed: () async {
-              Navigator.of(dialogContext)
-                  .pop(false); // keep screen alive for now
-              await _deleteStagedImage();
-              if (!mounted) return;
-              final success = await ref
-                  .read(aiChatControllerProvider.notifier)
-                  .saveSummary();
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    success
-                        ? '✅ Summary saved to Health Vault!'
-                        : '⚠️ Summary save failed. Exiting anyway.',
+      builder: (dialogContext) => AiChatExitDialog(
+        canSave: canSave,
+        onCancel: () => Navigator.of(dialogContext).pop(false),
+        onExit: () => Navigator.of(dialogContext).pop(true),
+        onSave: !canSave
+            ? null
+            : () async {
+                Navigator.of(dialogContext)
+                    .pop(false); // keep screen alive for now
+                await _deleteStagedImage();
+                if (!mounted) return;
+                final success = await ref
+                    .read(aiChatControllerProvider(_continuation).notifier)
+                    .saveSummary();
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      success
+                          ? '✅ Summary saved to Health Vault!'
+                          : 'Couldn’t save this chat. Please try again.',
+                    ),
+                    duration: const Duration(seconds: 2),
                   ),
-                  duration: const Duration(seconds: 2),
-                ),
-              );
-              if (mounted) Navigator.of(context).pop();
-            },
-          ),
-        ],
+                );
+                if (success && mounted) {
+                  ref.invalidate(vaultHistoryProvider);
+                  Navigator.of(context).pop();
+                }
+              },
       ),
     );
 
     if (shouldClose == true && mounted) {
       await _deleteStagedImage();
       if (!mounted) return;
+      setState(() => _stagedPdf = null);
       Navigator.of(context).pop();
     }
   }
 
+  String _formatVoiceDuration(Duration duration) {
+    final seconds = duration.inSeconds.clamp(0, 90);
+    return '${(seconds ~/ 60).toString().padLeft(2, '0')}:'
+        '${(seconds % 60).toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildVoiceInputStatus(
+    ThemeData theme,
+    VoiceInputState voiceState,
+  ) {
+    final elapsed = _formatVoiceDuration(voiceState.elapsed);
+    final remaining = 90 - voiceState.elapsed.inSeconds.clamp(0, 90);
+
+    late final Widget leading;
+    late final String label;
+    switch (voiceState.phase) {
+      case VoiceInputPhase.starting:
+        leading = const SizedBox.square(
+          dimension: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        );
+        label = 'Starting microphone…';
+        break;
+      case VoiceInputPhase.recording:
+        leading = const Icon(Icons.fiber_manual_record,
+            color: Colors.redAccent, size: 18);
+        label =
+            'Recording $elapsed${remaining <= 10 ? ' • ${remaining}s left' : ''}';
+        break;
+      case VoiceInputPhase.stopping:
+        leading = const SizedBox.square(
+          dimension: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        );
+        label = 'Finishing recording…';
+        break;
+      case VoiceInputPhase.transcribing:
+        leading = const SizedBox.square(
+          dimension: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        );
+        label = 'Transcribing $elapsed recording…';
+        break;
+      case VoiceInputPhase.error:
+        leading =
+            Icon(Icons.info_outline, color: theme.colorScheme.error, size: 18);
+        label =
+            voiceState.errorMessage ?? 'Voice input could not be completed.';
+        break;
+      case VoiceInputPhase.idle:
+      case VoiceInputPhase.ready:
+        return const SizedBox.shrink();
+    }
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          leading,
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall,
+            ),
+          ),
+          if (voiceState.phase == VoiceInputPhase.recording)
+            TextButton(
+              onPressed: _voiceInput.stopAndTranscribe,
+              child: const Text('Stop'),
+            ),
+          if (voiceState.phase == VoiceInputPhase.error && voiceState.canRetry)
+            TextButton(
+              onPressed: _voiceInput.retry,
+              child: const Text('Retry'),
+            ),
+          TextButton(
+            onPressed: _voiceInput.cancel,
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final chatState = ref.watch(aiChatControllerProvider);
+    final chatState = ref.watch(aiChatControllerProvider(_continuation));
     final userAsync = ref.watch(userProvider);
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final voiceState = _voiceInput.state;
 
     // Scroll to bottom when messages change
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
@@ -538,6 +793,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
           surfaceTintColor: Colors.transparent,
           actions: [
             PopupMenuButton<String>(
+              enabled: !voiceState.locksLanguage,
               icon: Icon(Icons.language, color: theme.colorScheme.onSurface),
               onSelected: (String lang) {
                 setState(() => _selectedLanguage = lang);
@@ -547,8 +803,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                   borderRadius: BorderRadius.circular(12)),
               elevation: 4,
               itemBuilder: (BuildContext context) {
-                return ['English', 'Nigerian Pidgin', 'Yoruba', 'Hausa', 'Igbo']
-                    .map((String choice) {
+                return aiLanguageCapabilities.keys.map((String choice) {
                   return PopupMenuItem<String>(
                     value: choice,
                     child: Row(
@@ -585,11 +840,27 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                 ),
               ),
             ),
+            if (widget.sourceSummaryId != null)
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                color: Colors.amber.withValues(alpha: 0.16),
+                child: Text(
+                  'Continuing from a saved AI summary. Earlier information may be out of date; tell MDQ+ what has changed.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: isDark ? Colors.amber[200] : Colors.brown[700],
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
             Expanded(
               child: _checkingConsent || !_hasAiConsent
                   ? const Center(child: CircularProgressIndicator())
                   : chatState.messages.isEmpty
-                      ? _buildEmptyState(theme)
+                      ? const AiChatWelcomeState()
                       : ListView.builder(
                           controller: _scrollController,
                           padding: const EdgeInsets.all(16),
@@ -631,6 +902,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                               msg['message'],
                               isMe,
                               imageUrl: msg['image'],
+                              documentName: msg['documentName'],
                               isSending: msg['isSending'] == true,
                               theme: theme,
                               isDark: isDark,
@@ -688,6 +960,37 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                 ),
               ),
 
+            if (_stagedPdf != null)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                color: isDark ? Colors.grey[900] : Colors.grey[100],
+                child: Row(
+                  children: [
+                    const Icon(Icons.picture_as_pdf,
+                        color: Colors.redAccent, size: 32),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _stagedPdf!.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: isDark ? Colors.grey[300] : Colors.grey[700],
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 20),
+                      onPressed: _removeStagedPdf,
+                      color: Colors.redAccent,
+                      tooltip: 'Remove PDF',
+                    ),
+                  ],
+                ),
+              ),
+
             // --- UPLOADING INDICATOR ---
             if (_isUploadingImage)
               Container(
@@ -707,6 +1010,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                   ],
                 ),
               ),
+
+            if (voiceState.phase != VoiceInputPhase.idle)
+              _buildVoiceInputStatus(theme, voiceState),
 
             // --- INPUT BAR ---
             Container(
@@ -732,7 +1038,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                           color: Colors.blueAccent),
                       onPressed: _hasAiConsent &&
                               !chatState.isLoading &&
-                              !_isUploadingImage
+                              !_isUploadingImage &&
+                              !_isPickingPdf &&
+                              !voiceState.locksComposer
                           ? _showAttachmentMenu
                           : null,
                     ),
@@ -741,7 +1049,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                         controller: _messageController,
                         enabled: _hasAiConsent &&
                             !chatState.isLoading &&
-                            !_isUploadingImage,
+                            !_isUploadingImage &&
+                            !_isPickingPdf &&
+                            !voiceState.locksComposer,
                         style: TextStyle(
                             color: isDark ? Colors.white : Colors.black87),
                         minLines: 1,
@@ -749,13 +1059,18 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                         keyboardType: TextInputType.multiline,
                         textInputAction: TextInputAction.newline,
                         decoration: InputDecoration(
-                          hintText: _isListening
-                              ? "Listening..."
-                              : (_stagedImageUrl != null
-                                  ? "Add a message..."
-                                  : "Describe symptoms..."),
+                          hintText: voiceState.phase ==
+                                  VoiceInputPhase.recording
+                              ? "Recording..."
+                              : voiceState.phase == VoiceInputPhase.transcribing
+                                  ? 'Transcribing...'
+                                  : (_stagedImageUrl != null ||
+                                          _stagedPdf != null
+                                      ? "Add a message..."
+                                      : "Describe symptoms..."),
                           hintStyle: TextStyle(
-                              color: _isListening
+                              color: voiceState.phase ==
+                                      VoiceInputPhase.recording
                                   ? Colors.redAccent
                                   : (isDark ? Colors.white54 : Colors.black54),
                               fontSize: 15),
@@ -765,21 +1080,16 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                         ),
                       ),
                     ),
-                    GestureDetector(
-                      onTap: _hasAiConsent ? _toggleListening : null,
-                      child: CircleAvatar(
-                        backgroundColor: _isListening
-                            ? Colors.redAccent
-                            : Colors.transparent,
-                        radius: 20,
-                        child: Icon(
-                          _isListening ? Icons.mic : Icons.mic_none,
-                          color: _isListening
-                              ? Colors.white
-                              : Theme.of(context).colorScheme.onSurfaceVariant,
-                          size: 22,
-                        ),
-                      ),
+                    VoiceInputMicrophoneButton(
+                      selectedLanguage: _selectedLanguage,
+                      phase: voiceState.phase,
+                      interactionEnabled: _hasAiConsent &&
+                          !chatState.isLoading &&
+                          !_isUploadingImage &&
+                          !_isPickingPdf &&
+                          (voiceState.phase == VoiceInputPhase.idle ||
+                              voiceState.phase == VoiceInputPhase.recording),
+                      onPressed: _toggleVoiceInput,
                     ),
                     const SizedBox(width: 4),
                     Container(
@@ -790,7 +1100,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                       child: IconButton(
                         onPressed: _hasAiConsent &&
                                 !chatState.isLoading &&
-                                !_isUploadingImage
+                                !_isUploadingImage &&
+                                !_isPickingPdf &&
+                                !voiceState.locksComposer
                             ? _sendMessage
                             : null,
                         icon: const Icon(Icons.arrow_upward,
@@ -809,6 +1121,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   Widget _buildMessageBubble(String text, bool isMe,
       {String? imageUrl,
+      String? documentName,
       bool isSending = false,
       required ThemeData theme,
       required bool isDark}) {
@@ -854,6 +1167,40 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (documentName != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isMe
+                          ? Colors.white24
+                          : Colors.red.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.picture_as_pdf,
+                            size: 18,
+                            color: isMe ? Colors.white : Colors.redAccent),
+                        const SizedBox(width: 7),
+                        Flexible(
+                          child: Text(
+                            documentName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: isMe
+                                  ? Colors.white
+                                  : theme.colorScheme.onSurface,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 if (resolvedImageUrl != null)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8.0),
@@ -932,35 +1279,6 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                 ],
               ),
             ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEmptyState(ThemeData theme) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: Colors.blue.withValues(alpha: 0.05),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(Icons.auto_awesome,
-                size: 64, color: Colors.blue.withValues(alpha: 0.8)),
-          ),
-          const SizedBox(height: 24),
-          Text("Hello! I'm MDQ+.",
-              style: TextStyle(
-                  color: theme.colorScheme.onSurfaceVariant, fontSize: 18)),
-          const SizedBox(height: 8),
-          Text("I can help assess your symptoms.",
-              style: TextStyle(
-                  color:
-                      theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
-                  fontSize: 14)),
         ],
       ),
     );
@@ -1046,7 +1364,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                           final messenger = ScaffoldMessenger.of(dialogContext);
                           try {
                             await ref
-                                .read(aiChatControllerProvider.notifier)
+                                .read(aiChatControllerProvider(_continuation)
+                                    .notifier)
                                 .reportMessage(messageText, selectedReason!);
                             if (dialogContext.mounted) {
                               Navigator.of(dialogContext).pop();

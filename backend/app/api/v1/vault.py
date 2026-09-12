@@ -1,97 +1,82 @@
 
 import io
+import hashlib
+import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List
-from uuid import UUID
+from uuid import UUID, uuid5
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from fpdf import FPDF
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.user import User
 from app.models.doctor import Doctor
-from app.models.vault import AIChatSummary, ConsultationRecord
-from app.schemas.vault import AISummaryCreate, VaultExportRequest, VaultHistoryResponse
+from app.models.vault import (
+    AIChatSummary,
+    AISummarySaveIdempotency,
+    ConsultationRecord,
+)
+from app.schemas.vault import (
+    AISummarySaveRequest,
+    VaultExportRequest,
+    VaultHistoryResponse,
+)
 from app.api import deps
+from app.api.v1.ai_consent import require_active_ai_consent
+from app.services.ai_request_guard import (
+    acquire_ai_request_lease,
+    ai_request_digest,
+    enforce_ai_save_rate_limit,
+    get_ai_save_result,
+    release_ai_request_lease,
+    store_ai_save_result,
+)
+from app.services.ai_summary_service import (
+    AISummaryGenerationError,
+    AISummaryInputError,
+    SummaryTurn,
+    generate_ai_vault_summary,
+)
+from app.services.ai_usage import (
+    enforce_ai_text_usage_available,
+    record_successful_ai_text_usage,
+)
+from app.services.subscription_entitlement import has_active_paid_entitlement
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_AI_SUMMARY_SAVE_NAMESPACE = UUID("a9c9f8d6-1bf6-4f7d-b0f5-e461665af16a")
 
-# ---------------------------------------------------------------------------
-# POST /vault/ai-summary
-# ---------------------------------------------------------------------------
 
-@router.post(
-    "/ai-summary",
-    response_model=VaultHistoryResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Save an AI chat summary to the patient's Health Vault",
-)
-def create_ai_summary(
-    payload: AISummaryCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
-) -> VaultHistoryResponse:
-    """
-    Persists a structured AI chat summary for the authenticated patient.
-    The patient_id is injected server-side from the JWT — never trusted from
-    the request body.
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
-    Security: system/API error strings are quarantined before persistence to
-    prevent downstream crashes (e.g. in the PDF generator).
-    """
-    # ── Error Quarantine ─────────────────────────────────────────────────────
-    # Reject AI responses that are system errors rather than genuine summaries.
-    # Patterns: Gemini quota exhaustion, HTTP 429, generic system error labels.
-    _ERROR_MARKERS = ("System Error", "429", "quota")
-    if any(marker in payload.summary_text for marker in _ERROR_MARKERS):
-        logger.warning(
-            "[Vault] AI summary save aborted — error string detected in payload "
-            "(patient_id=%s, topic=%r). Content quarantined.",
-            current_user.id,
-            payload.topic,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                "The AI service returned an error response and the summary was not saved. "
-                "Please try again later."
-            ),
-        )
 
-    now = datetime.now(timezone.utc)
-
-    record = AIChatSummary(
-        patient_id=current_user.id,
-        topic=payload.topic,
-        summary_text=payload.summary_text,
-        source="ai_generated",
-        doctor_review_status="not_reviewed",
-        reviewed_by_doctor_id=None,
-        reviewed_at=None,
-        created_at=now,
-    )
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-
-    logger.info(
-        "[Vault] AI summary saved — patient_id=%s topic=%r id=%s",
-        current_user.id,
-        payload.topic,
-        record.id,
+def _raise_stale_summary_conflict() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "This saved conversation was updated elsewhere. Your current chat "
+            "is still available; refresh the saved conversation before saving."
+        ),
     )
 
+
+def _summary_response(record: AIChatSummary) -> VaultHistoryResponse:
     return VaultHistoryResponse(
         id=record.id,
         type="ai_summary",
-        date=record.created_at,
+        date=record.updated_at or record.created_at,
         doctor_name=None,
         topic_or_reason=record.topic,
         details=record.summary_text,
@@ -99,9 +84,366 @@ def create_ai_summary(
         doctor_review_status=record.doctor_review_status,
         reviewed_by_doctor_id=record.reviewed_by_doctor_id,
         reviewed_at=record.reviewed_at,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
         prescriptions=None,
         referrals=None,
     )
+
+
+def _owned_summary(
+    db: Session,
+    summary_id: UUID,
+    user_id: int,
+) -> AIChatSummary | None:
+    return (
+        db.query(AIChatSummary)
+        .filter(
+            AIChatSummary.id == summary_id,
+            AIChatSummary.patient_id == user_id,
+        )
+        .first()
+    )
+
+
+def _new_summary_id(user_id: int, request_id: str) -> UUID:
+    return uuid5(_AI_SUMMARY_SAVE_NAMESPACE, f"{user_id}:{request_id}")
+
+
+def _owned_save_idempotency(
+    db: Session,
+    user_id: int,
+    request_key_digest: str,
+) -> AISummarySaveIdempotency | None:
+    return (
+        db.query(AISummarySaveIdempotency)
+        .filter(
+            AISummarySaveIdempotency.patient_id == user_id,
+            AISummarySaveIdempotency.request_key_digest == request_key_digest,
+        )
+        .first()
+    )
+
+
+def _fingerprint_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return _as_utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _save_request_fingerprint(
+    user_id: int,
+    payload: AISummarySaveRequest,
+) -> str:
+    identity = {
+        "user_id": user_id,
+        "turns": [
+            {"role": turn.role, "text": turn.text}
+            for turn in payload.turns
+        ],
+        "source_summary_id": (
+            str(payload.source_summary_id) if payload.source_summary_id else None
+        ),
+        "source_updated_at": _fingerprint_datetime(payload.source_updated_at),
+    }
+    canonical = json.dumps(
+        identity,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _raise_idempotency_conflict() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="This idempotency key was already used for a different summary save.",
+    )
+
+
+_AI_TEXT_USAGE_FIELDS = (
+    "chat_blocked_until",
+    "burst_start_time",
+    "burst_chat_count",
+    "monthly_chat_count",
+    "monthly_chat_image_count",
+    "last_chat_month_reset",
+    "rolling_chat_count",
+    "rolling_chat_image_count",
+    "rolling_chat_window_start",
+)
+
+
+def _capture_ai_text_usage_state(user: User) -> dict[str, object]:
+    return {
+        field: getattr(user, field, None)
+        for field in _AI_TEXT_USAGE_FIELDS
+    }
+
+
+def _restore_ai_text_usage_state(user: User, state: dict[str, object]) -> None:
+    for field, value in state.items():
+        setattr(user, field, value)
+
+
+@router.post(
+    "/ai-summary/save",
+    response_model=VaultHistoryResponse,
+    summary="Generate and save a bounded AI conversation summary",
+)
+@limiter.limit("3/minute")
+async def save_ai_summary(
+    request: Request,
+    payload: AISummarySaveRequest,
+    x_ai_request_id: str = Header(
+        alias="X-AI-Request-ID",
+        min_length=8,
+        max_length=128,
+    ),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> VaultHistoryResponse:
+    """Own validation, generation, metering, and persistence server-side."""
+    if not has_active_paid_entitlement(current_user):
+        logger.info(
+            "[Vault] AI summary save denied — plan=free quota_outcome=not_consumed"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Saving AI conversations is available on Premium and Family plans.",
+        )
+    require_active_ai_consent(current_user)
+
+    request_fingerprint = _save_request_fingerprint(current_user.id, payload)
+    request_key_digest = ai_request_digest(x_ai_request_id)
+    cached_summary_id = get_ai_save_result(
+        current_user.id,
+        x_ai_request_id,
+        request_fingerprint,
+    )
+    if cached_summary_id:
+        try:
+            cached = _owned_summary(db, UUID(cached_summary_id), current_user.id)
+        except ValueError:
+            cached = None
+        if cached is not None:
+            return _summary_response(cached)
+
+    idempotency = _owned_save_idempotency(
+        db,
+        current_user.id,
+        request_key_digest,
+    )
+    if idempotency is not None:
+        if idempotency.request_fingerprint != request_fingerprint:
+            _raise_idempotency_conflict()
+        existing = _owned_summary(db, idempotency.summary_id, current_user.id)
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="This saved conversation is no longer available.",
+            )
+        store_ai_save_result(
+            current_user.id,
+            x_ai_request_id,
+            str(existing.id),
+            request_fingerprint,
+        )
+        return _summary_response(existing)
+
+    new_summary_id = None
+    source = None
+    if payload.source_summary_id is None:
+        new_summary_id = _new_summary_id(current_user.id, x_ai_request_id)
+        existing = _owned_summary(db, new_summary_id, current_user.id)
+        if existing is not None:
+            if (
+                getattr(existing, "save_request_fingerprint", None)
+                != request_fingerprint
+            ):
+                _raise_idempotency_conflict()
+            store_ai_save_result(
+                current_user.id,
+                x_ai_request_id,
+                str(existing.id),
+                request_fingerprint,
+            )
+            return _summary_response(existing)
+    else:
+        source = _owned_summary(db, payload.source_summary_id, current_user.id)
+        if source is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="This saved conversation is no longer available.",
+            )
+        if _as_utc(source.updated_at) != _as_utc(payload.source_updated_at):
+            _raise_stale_summary_conflict()
+
+    enforce_ai_save_rate_limit(current_user.id)
+    lease = acquire_ai_request_lease(current_user.id, x_ai_request_id)
+    usage_state_before_commit = None
+    usage_committed = False
+    try:
+        usage_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        enforce_ai_text_usage_available(current_user, usage_now, db)
+        turns = [
+            SummaryTurn(role=turn.role, text=turn.text)
+            for turn in payload.turns
+        ]
+        generated = await generate_ai_vault_summary(
+            turns,
+            historical_summary=source.summary_text if source is not None else None,
+        )
+
+        now = datetime.now(timezone.utc)
+        if source is None:
+            record = AIChatSummary(
+                id=new_summary_id,
+                patient_id=current_user.id,
+                topic="AI Symptom Analysis",
+                summary_text=generated.text,
+                source="ai_generated",
+                save_request_fingerprint=request_fingerprint,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(record)
+        else:
+            if now <= _as_utc(source.updated_at):
+                now = _as_utc(source.updated_at) + timedelta(microseconds=1)
+            updated_rows = (
+                db.query(AIChatSummary)
+                .filter(
+                    AIChatSummary.id == source.id,
+                    AIChatSummary.patient_id == current_user.id,
+                    AIChatSummary.updated_at == payload.source_updated_at,
+                )
+                .update(
+                    {
+                        AIChatSummary.summary_text: generated.text,
+                        AIChatSummary.updated_at: now,
+                    },
+                    synchronize_session="fetch",
+                )
+            )
+            if updated_rows != 1:
+                db.rollback()
+                _raise_stale_summary_conflict()
+            record = source
+
+        db.add(
+            AISummarySaveIdempotency(
+                patient_id=current_user.id,
+                request_key_digest=request_key_digest,
+                request_fingerprint=request_fingerprint,
+                summary_id=record.id,
+                created_at=now,
+            )
+        )
+        usage_state_before_commit = _capture_ai_text_usage_state(current_user)
+        record_successful_ai_text_usage(current_user)
+        db.add(current_user)
+        db.commit()
+        usage_committed = True
+        lease.completed = True
+        store_ai_save_result(
+            current_user.id,
+            x_ai_request_id,
+            str(record.id),
+            request_fingerprint,
+        )
+        db.refresh(record)
+        logger.info(
+            "[Vault] AI summary save completed — patient_id=%s summary_id=%s continuation=%s",
+            current_user.id,
+            record.id,
+            source is not None,
+        )
+        return _summary_response(record)
+    except HTTPException:
+        if usage_state_before_commit is not None and not usage_committed:
+            _restore_ai_text_usage_state(current_user, usage_state_before_commit)
+        raise
+    except AISummaryInputError:
+        db.rollback()
+        if usage_state_before_commit is not None and not usage_committed:
+            _restore_ai_text_usage_state(current_user, usage_state_before_commit)
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="This conversation is too large to summarise safely.",
+        ) from None
+    except AISummaryGenerationError:
+        db.rollback()
+        if usage_state_before_commit is not None and not usage_committed:
+            _restore_ai_text_usage_state(current_user, usage_state_before_commit)
+        logger.error(
+            "[Vault] AI summary generation failed — patient_id=%s",
+            current_user.id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The summary could not be saved. Please try again.",
+        ) from None
+    except IntegrityError:
+        db.rollback()
+        if usage_state_before_commit is not None and not usage_committed:
+            _restore_ai_text_usage_state(current_user, usage_state_before_commit)
+        if new_summary_id is not None:
+            existing = _owned_summary(db, new_summary_id, current_user.id)
+            if (
+                existing is not None
+                and getattr(existing, "save_request_fingerprint", None)
+                == request_fingerprint
+            ):
+                lease.completed = True
+                store_ai_save_result(
+                    current_user.id,
+                    x_ai_request_id,
+                    str(existing.id),
+                    request_fingerprint,
+                )
+                return _summary_response(existing)
+        idempotency = _owned_save_idempotency(
+            db,
+            current_user.id,
+            request_key_digest,
+        )
+        if idempotency is not None:
+            if idempotency.request_fingerprint != request_fingerprint:
+                _raise_idempotency_conflict()
+            existing = _owned_summary(db, idempotency.summary_id, current_user.id)
+            if existing is not None:
+                lease.completed = True
+                store_ai_save_result(
+                    current_user.id,
+                    x_ai_request_id,
+                    str(existing.id),
+                    request_fingerprint,
+                )
+                return _summary_response(existing)
+        logger.error(
+            "[Vault] AI summary persistence conflict — patient_id=%s",
+            current_user.id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The summary could not be saved. Please try again.",
+        ) from None
+    except Exception:
+        db.rollback()
+        if usage_state_before_commit is not None and not usage_committed:
+            _restore_ai_text_usage_state(current_user, usage_state_before_commit)
+        logger.error(
+            "[Vault] AI summary save failed — patient_id=%s",
+            current_user.id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The summary could not be saved. Please try again.",
+        ) from None
+    finally:
+        release_ai_request_lease(lease)
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +486,7 @@ def get_vault_history(
             VaultHistoryResponse(
                 id=s.id,
                 type="ai_summary",
-                date=s.created_at,
+                date=s.updated_at or s.created_at,
                 doctor_name=None,
                 topic_or_reason=s.topic,
                 details=s.summary_text,
@@ -152,6 +494,8 @@ def get_vault_history(
                 doctor_review_status=s.doctor_review_status,
                 reviewed_by_doctor_id=s.reviewed_by_doctor_id,
                 reviewed_at=s.reviewed_at,
+                created_at=s.created_at,
+                updated_at=s.updated_at,
                 prescriptions=None,
                 referrals=None,
             )
@@ -268,9 +612,18 @@ def export_vault_records(
 
     for s in ai_summaries:
         title = "AI Summary"
-        date_str = s.created_at.strftime("%d %b %Y, %H:%M UTC")
+        activity_date = s.updated_at or s.created_at
+        created_date_str = _as_utc(s.created_at).strftime(
+            "%d %b %Y, %H:%M UTC"
+        )
+        updated_date_str = _as_utc(activity_date).strftime(
+            "%d %b %Y, %H:%M UTC"
+        )
+        date_str = f"Created: {created_date_str}"
+        if _as_utc(activity_date) != _as_utc(s.created_at):
+            date_str += f"\nLast updated: {updated_date_str}"
         body = f"Topic: {s.topic}\n\n{s.summary_text or ''}"
-        entries.append((s.created_at, title, date_str, body, [], True))
+        entries.append((activity_date, title, date_str, body, [], True))
 
     for c in consultations:
         title = "Consultation Record"
@@ -314,7 +667,11 @@ def export_vault_records(
         # ── Date ─────────────────────────────────────────────────────────────
         pdf.set_font("Helvetica", "I", 10)
         pdf.set_text_color(100, 100, 120)
-        pdf.cell(0, 6, date_str, align="R", ln=True)
+        if is_ai_summary:
+            pdf.set_x(10)
+            pdf.multi_cell(190, 6, date_str, align="R")
+        else:
+            pdf.cell(0, 6, date_str, align="R", ln=True)
 
         # ── Divider ──────────────────────────────────────────────────────────
         pdf.set_draw_color(200, 200, 220)

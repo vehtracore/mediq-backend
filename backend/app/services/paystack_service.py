@@ -36,6 +36,11 @@ logger = logging.getLogger("uvicorn.error")
 PAYSTACK_BASE_URL = "https://api.paystack.co"
 
 
+def _masked_account_number(account_number: str) -> str:
+    suffix = account_number[-4:] if account_number else ''
+    return f'******{suffix}' if suffix else '(missing)'
+
+
 class PaystackService:
     """
     Async client for server-initiated Paystack API calls.
@@ -104,9 +109,9 @@ class PaystackService:
 
         logger.info(
             "[PAYSTACK] Creating subaccount | business='%s' | bank='%s' | account='%s'",
-            business_name,
+            '(redacted)',
             bank_code,
-            account_number,
+            _masked_account_number(account_number),
         )
 
         try:
@@ -152,8 +157,8 @@ class PaystackService:
         )
         if not subaccount_code:
             logger.error(
-                "[PAYSTACK] ❌ Response OK but 'subaccount_code' missing: %s",
-                resp_json,
+                "[PAYSTACK] response omitted subaccount_code | HTTP %s",
+                response.status_code,
             )
             raise HTTPException(
                 status_code=400,
@@ -163,7 +168,7 @@ class PaystackService:
         logger.info(
             "[PAYSTACK] ✅ Subaccount created — code=%s | business='%s'",
             subaccount_code,
-            business_name,
+            '(redacted)',
         )
         return subaccount_code
 
@@ -193,7 +198,7 @@ class PaystackService:
         logger.info(
             "[PAYSTACK] Resolving account | bank='%s' | account='%s'",
             bank_code,
-            account_number,
+            _masked_account_number(account_number),
         )
 
         try:
@@ -242,8 +247,8 @@ class PaystackService:
         logger.info(
             "[PAYSTACK] ✅ Account resolved — bank='%s' | account='%s' | name='%s'",
             bank_code,
-            account_number,
-            account_name,
+            _masked_account_number(account_number),
+            '(redacted)',
         )
         return account_name
 
@@ -458,12 +463,14 @@ class PaystackService:
 
         if not response.is_success or not paystack_status:
             logger.error(
-                "[PAYSTACK] ❌ Subscription cancellation failed | HTTP %s | message='%s' | code='%s'",
+                "[PAYSTACK] subscription_disable_rejected http_status=%s code=%s",
                 response.status_code,
-                paystack_message,
                 subscription_code,
             )
-            raise HTTPException(status_code=400, detail=paystack_message)
+            raise HTTPException(
+                status_code=400,
+                detail='The payment provider could not cancel this subscription.',
+            )
 
         logger.info(
             "[PAYSTACK] ✅ Subscription disabled — code='%s'",
@@ -523,12 +530,14 @@ class PaystackService:
 
         if not response.is_success or not paystack_status:
             logger.error(
-                "[PAYSTACK] ❌ Subscription restore failed | HTTP %s | message='%s' | code='%s'",
+                "[PAYSTACK] subscription_enable_rejected http_status=%s code=%s",
                 response.status_code,
-                paystack_message,
                 subscription_code,
             )
-            raise HTTPException(status_code=400, detail=paystack_message)
+            raise HTTPException(
+                status_code=400,
+                detail='The payment provider could not restore this subscription.',
+            )
 
         logger.info(
             "[PAYSTACK] ✅ Subscription enabled — code='%s'",

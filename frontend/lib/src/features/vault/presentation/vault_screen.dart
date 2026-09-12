@@ -6,11 +6,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../core/api/dio_client.dart';
+import '../../auth/data/auth_state_provider.dart';
+import '../../auth/presentation/user_controller.dart';
 import '../data/vault_record.dart';
 import '../data/vault_repository.dart';
 
@@ -76,7 +79,8 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
       final dio = ref.read(dioProvider);
 
       if (kDebugMode) {
-        debugPrint('📤 [Vault] Exporting ${ids.length} record(s) → POST /api/v1/vault/export');
+        debugPrint(
+            '📤 [Vault] Exporting ${ids.length} record(s) → POST /api/v1/vault/export');
       }
 
       final response = await dio.post<List<int>>(
@@ -92,7 +96,8 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
 
       // Write to temp dir
       final tmpDir = await getTemporaryDirectory();
-      final fileName = 'mdq_records_${DateTime.now().millisecondsSinceEpoch}.pdf';
+      final fileName =
+          'mdq_records_${DateTime.now().millisecondsSinceEpoch}.pdf';
       final file = File('${tmpDir.path}/$fileName');
       await file.writeAsBytes(bytes, flush: true);
 
@@ -108,9 +113,8 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
 
       _clearSelection();
     } on DioException catch (e) {
-      final detail = e.response?.data is Map
-          ? e.response!.data['detail']
-          : e.message;
+      final detail =
+          e.response?.data is Map ? e.response!.data['detail'] : e.message;
       _showSnack('Export failed: ${detail ?? 'Network error'}', isError: true);
     } catch (e) {
       _showSnack('Export failed: $e', isError: true);
@@ -125,10 +129,16 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text("Are you sure?"),
-        content: const Text("Do you really want to delete this item? This action cannot be undone."),
+        content: const Text(
+            "Do you really want to delete this item? This action cannot be undone."),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("No, keep it")),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Yes, delete", style: TextStyle(color: Colors.red))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("No, keep it")),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Yes, delete",
+                  style: TextStyle(color: Colors.red))),
         ],
       ),
     );
@@ -168,7 +178,11 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final historyAsync = ref.watch(vaultHistoryProvider);
+    final authUserId = ref.watch(authUserIdProvider);
+    final canContinueAi = ref.watch(userProvider).value?.isPremium == true;
+    final AsyncValue<List<VaultRecord>> historyAsync = authUserId == null
+        ? const AsyncValue.data([])
+        : ref.watch(vaultHistoryProvider(authUserId));
     final selectedIds = ref.watch(_selectedIdsProvider);
     final inSelectionMode = selectedIds.isNotEmpty;
 
@@ -177,128 +191,156 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
         Scaffold(
           backgroundColor: theme.scaffoldBackgroundColor,
           body: RefreshIndicator(
-            onRefresh: () async => ref.refresh(vaultHistoryProvider.future),
+            onRefresh: () async {
+              if (authUserId != null) {
+                ref.invalidate(vaultHistoryProvider(authUserId));
+                await ref.read(vaultHistoryProvider(authUserId).future);
+              }
+            },
             color: _kBlue,
             child: CustomScrollView(
               slivers: [
                 // ── App Bar ────────────────────────────────────────────────────
-              SliverAppBar(
-                floating: true,
-                snap: true,
-                backgroundColor: inSelectionMode
-                    ? _kSelectionBg
-                    : (isDark ? const Color(0xFF1E1E1E) : Colors.white),
-                elevation: inSelectionMode ? 2 : 0,
-                // Leading: close-selection button when active
-                leading: inSelectionMode
-                    ? IconButton(
-                        icon: const Icon(Icons.close_rounded, color: Colors.white),
-                        tooltip: 'Clear selection',
-                        onPressed: _clearSelection,
-                      )
-                    : null,
-                title: inSelectionMode
-                    ? Text(
-                        '${selectedIds.length} Selected',
-                        style: GoogleFonts.poppins(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
+                SliverAppBar(
+                  floating: true,
+                  snap: true,
+                  backgroundColor: inSelectionMode
+                      ? _kSelectionBg
+                      : (isDark ? const Color(0xFF1E1E1E) : Colors.white),
+                  elevation: inSelectionMode ? 2 : 0,
+                  // Leading: close-selection button when active
+                  leading: inSelectionMode
+                      ? IconButton(
+                          icon: const Icon(Icons.close_rounded,
+                              color: Colors.white),
+                          tooltip: 'Clear selection',
+                          onPressed: _clearSelection,
+                        )
+                      : null,
+                  title: inSelectionMode
+                      ? Text(
+                          '${selectedIds.length} Selected',
+                          style: GoogleFonts.poppins(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Text(
+                          'Records',
+                          style: theme.textTheme.titleLarge,
                         ),
-                      )
-                    : Text(
-                        'Records',
-                        style: theme.textTheme.titleLarge,
+                  actions: [
+                    if (inSelectionMode) ...[
+                      // Download / export selected
+                      IconButton(
+                        icon: const Icon(Icons.download_rounded,
+                            color: Colors.white),
+                        tooltip: 'Export selected as PDF',
+                        onPressed: () => _exportRecords(selectedIds),
                       ),
-                actions: [
-                  if (inSelectionMode) ...[
-                    // Download / export selected
-                    IconButton(
-                      icon: const Icon(Icons.download_rounded, color: Colors.white),
-                      tooltip: 'Export selected as PDF',
-                      onPressed: () => _exportRecords(selectedIds),
-                    ),
-                    const SizedBox(width: 4),
+                      const SizedBox(width: 4),
+                    ],
                   ],
-                ],
-              ),
-
-              // ── Selection hint banner ──────────────────────────────────────
-              if (inSelectionMode)
-                SliverToBoxAdapter(
-                  child: Container(
-                    color: _kSelectionBg.withValues(alpha: 0.08),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.info_outline_rounded, size: 14, color: _kBlue),
-                        const SizedBox(width: 6),
-                        Text(
-                          'Long-press cards to select · tap Download to export',
-                          style: GoogleFonts.lato(fontSize: 12, color: _kBlue),
-                        ),
-                      ],
-                    ),
-                  ),
                 ),
 
-              // ── Body ───────────────────────────────────────────────────────
-              historyAsync.when(
-                loading: () => const SliverFillRemaining(
-                  child: Center(
-                    child: CircularProgressIndicator(color: _kBlue),
-                  ),
-                ),
-                error: (err, _) => SliverFillRemaining(
-                  child: _ErrorState(
-                    message: err.toString().replaceFirst('Exception: ', ''),
-                    onRetry: () => ref.invalidate(vaultHistoryProvider),
-                  ),
-                ),
-                data: (records) {
-                  if (records.isEmpty) {
-                    return const SliverFillRemaining(child: _EmptyState());
-                  }
-                  return SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                    sliver: SliverList(
-                      delegate: SliverChildBuilderDelegate(
-                        (context, i) {
-                          final record = records[i];
-                          final isSelected = selectedIds.contains(record.id);
-
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: _SelectableCardWrapper(
-                              recordId: record.id,
-                              isSelected: isSelected,
-                              onLongPress: () => _toggleSelection(record.id),
-                              onTap: inSelectionMode
-                                  ? () => _toggleSelection(record.id)
-                                  : null,
-                              child: record.isConsultation
-                                  ? ConsultationCard(
-                                      record: record,
-                                      isSelected: isSelected,
-                                      onExportPdf: () =>
-                                          _exportRecords({record.id}),
-                                    )
-                                  : AISummaryCard(
-                                      record: record,
-                                      isSelected: isSelected,
-                                      onExportPdf: () =>
-                                          _exportRecords({record.id}),
-                                      onDelete: () => _deleteRecord(record.id),
-                                    ),
-                            ),
-                          );
-                        },
-                        childCount: records.length,
+                // ── Selection hint banner ──────────────────────────────────────
+                if (inSelectionMode)
+                  SliverToBoxAdapter(
+                    child: Container(
+                      color: _kSelectionBg.withValues(alpha: 0.08),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.info_outline_rounded,
+                              size: 14, color: _kBlue),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Long-press cards to select · tap Download to export',
+                            style:
+                                GoogleFonts.lato(fontSize: 12, color: _kBlue),
+                          ),
+                        ],
                       ),
                     ),
-                  );
-                },
-              ),
+                  ),
+
+                // ── Body ───────────────────────────────────────────────────────
+                historyAsync.when(
+                  loading: () => const SliverFillRemaining(
+                    child: Center(
+                      child: CircularProgressIndicator(color: _kBlue),
+                    ),
+                  ),
+                  error: (err, _) => SliverFillRemaining(
+                    child: _ErrorState(
+                      message: err.toString().replaceFirst('Exception: ', ''),
+                      onRetry: () {
+                        if (authUserId != null) {
+                          ref.invalidate(vaultHistoryProvider(authUserId));
+                        }
+                      },
+                    ),
+                  ),
+                  data: (records) {
+                    if (records.isEmpty) {
+                      return const SliverFillRemaining(child: _EmptyState());
+                    }
+                    return SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                      sliver: SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, i) {
+                            final record = records[i];
+                            final isSelected = selectedIds.contains(record.id);
+
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: _SelectableCardWrapper(
+                                recordId: record.id,
+                                isSelected: isSelected,
+                                onLongPress: () => _toggleSelection(record.id),
+                                onTap: inSelectionMode
+                                    ? () => _toggleSelection(record.id)
+                                    : null,
+                                child: record.isConsultation
+                                    ? ConsultationCard(
+                                        record: record,
+                                        isSelected: isSelected,
+                                        onExportPdf: () =>
+                                            _exportRecords({record.id}),
+                                      )
+                                    : AISummaryCard(
+                                        record: record,
+                                        isSelected: isSelected,
+                                        onExportPdf: () =>
+                                            _exportRecords({record.id}),
+                                        onDelete: () =>
+                                            _deleteRecord(record.id),
+                                        canContinue: canContinueAi,
+                                        onContinue: () => context.pushNamed(
+                                          'aiChat',
+                                          extra: {
+                                            'sourceSummaryId': record.id,
+                                            'sourceSummaryUpdatedAt':
+                                                (record.updatedAt ??
+                                                        record.createdAt ??
+                                                        record.date)
+                                                    .toUtc()
+                                                    .toIso8601String(),
+                                          },
+                                        ),
+                                      ),
+                              ),
+                            );
+                          },
+                          childCount: records.length,
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ],
             ),
           ),
@@ -310,7 +352,8 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
             color: Colors.black54,
             child: Center(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 22),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 28, vertical: 22),
                 decoration: BoxDecoration(
                   color: isDark ? const Color(0xFF252525) : Colors.white,
                   borderRadius: BorderRadius.circular(16),
@@ -374,9 +417,7 @@ class _SelectableCardWrapper extends StatelessWidget {
             duration: const Duration(milliseconds: 200),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(16),
-              border: isSelected
-                  ? Border.all(color: _kBlue, width: 2)
-                  : null,
+              border: isSelected ? Border.all(color: _kBlue, width: 2) : null,
             ),
             child: child,
           ),
@@ -423,12 +464,9 @@ class ConsultationCard extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final cardBg = isSelected
-        ? (isDark
-            ? const Color(0xFF1A3A5C)
-            : const Color(0xFFE8F0FD))
+        ? (isDark ? const Color(0xFF1A3A5C) : const Color(0xFFE8F0FD))
         : (isDark ? const Color(0xFF252525) : Colors.white);
-    final borderColor =
-        isDark ? Colors.white12 : const Color(0xFFE8EEF6);
+    final borderColor = isDark ? Colors.white12 : const Color(0xFFE8EEF6);
 
     return Container(
       decoration: BoxDecoration(
@@ -454,7 +492,8 @@ class ConsultationCard extends StatelessWidget {
           trailing: PopupMenuButton<String>(
             icon: Icon(Icons.more_vert_rounded,
                 size: 18, color: isDark ? Colors.white38 : Colors.grey[500]),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             onSelected: (value) {
               if (value == 'export_pdf') onExportPdf();
             },
@@ -466,8 +505,7 @@ class ConsultationCard extends StatelessWidget {
                     const Icon(Icons.picture_as_pdf_rounded,
                         size: 16, color: _kBlue),
                     const SizedBox(width: 10),
-                    Text('Export PDF',
-                        style: GoogleFonts.lato(fontSize: 13)),
+                    Text('Export PDF', style: GoogleFonts.lato(fontSize: 13)),
                   ],
                 ),
               ),
@@ -512,7 +550,8 @@ class ConsultationCard extends StatelessWidget {
                       style: GoogleFonts.lato(
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
-                        color: isDark ? Colors.white70 : const Color(0xFF2D3436),
+                        color:
+                            isDark ? Colors.white70 : const Color(0xFF2D3436),
                       ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
@@ -532,8 +571,7 @@ class ConsultationCard extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.person_rounded,
-                          size: 12, color: _kBlue),
+                      const Icon(Icons.person_rounded, size: 12, color: _kBlue),
                       const SizedBox(width: 4),
                       Text(
                         '${record.doctorName}',
@@ -646,6 +684,8 @@ class AISummaryCard extends StatelessWidget {
   final bool isSelected;
   final VoidCallback onExportPdf;
   final VoidCallback onDelete;
+  final VoidCallback onContinue;
+  final bool canContinue;
 
   const AISummaryCard({
     super.key,
@@ -653,6 +693,8 @@ class AISummaryCard extends StatelessWidget {
     this.isSelected = false,
     required this.onExportPdf,
     required this.onDelete,
+    required this.onContinue,
+    required this.canContinue,
   });
 
   @override
@@ -690,15 +732,33 @@ class AISummaryCard extends StatelessWidget {
           // ── Trailing: popup menu ─────────────────────────────────────────
           trailing: PopupMenuButton<String>(
             icon: Icon(Icons.more_vert_rounded,
-                size: 18,
-                color: isDark ? Colors.white38 : Colors.grey[500]),
+                size: 18, color: isDark ? Colors.white38 : Colors.grey[500]),
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             onSelected: (value) {
               if (value == 'export_pdf') onExportPdf();
               if (value == 'delete') onDelete();
+              if (value == 'continue' && canContinue) onContinue();
             },
             itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'continue',
+                enabled: canContinue,
+                child: Row(
+                  children: [
+                    Icon(
+                      canContinue
+                          ? Icons.chat_bubble_outline_rounded
+                          : Icons.lock_outline_rounded,
+                      size: 16,
+                      color: canContinue ? _kAiFrom : Colors.grey,
+                    ),
+                    const SizedBox(width: 10),
+                    Text('Continue with AI',
+                        style: GoogleFonts.lato(fontSize: 13)),
+                  ],
+                ),
+              ),
               PopupMenuItem(
                 value: 'export_pdf',
                 child: Row(
@@ -706,8 +766,7 @@ class AISummaryCard extends StatelessWidget {
                     const Icon(Icons.picture_as_pdf_rounded,
                         size: 16, color: _kBlue),
                     const SizedBox(width: 10),
-                    Text('Export PDF',
-                        style: GoogleFonts.lato(fontSize: 13)),
+                    Text('Export PDF', style: GoogleFonts.lato(fontSize: 13)),
                   ],
                 ),
               ),
@@ -793,8 +852,7 @@ class AISummaryCard extends StatelessWidget {
                     p: GoogleFonts.lato(
                       fontSize: 14,
                       height: 1.6,
-                      color:
-                          isDark ? Colors.white70 : const Color(0xFF2D3436),
+                      color: isDark ? Colors.white70 : const Color(0xFF2D3436),
                     ),
                   ),
                 ),
@@ -863,8 +921,7 @@ class _PrescriptionChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFF27AE60)
-            .withValues(alpha: isDark ? 0.15 : 0.1),
+        color: const Color(0xFF27AE60).withValues(alpha: isDark ? 0.15 : 0.1),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: const Color(0xFF27AE60).withValues(alpha: 0.35),
@@ -881,9 +938,7 @@ class _PrescriptionChip extends StatelessWidget {
             style: GoogleFonts.lato(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: isDark
-                  ? const Color(0xFF81C784)
-                  : const Color(0xFF1B5E20),
+              color: isDark ? const Color(0xFF81C784) : const Color(0xFF1B5E20),
             ),
           ),
         ],
@@ -904,8 +959,7 @@ class _ReferralTile extends StatelessWidget {
     String reason = '';
 
     if (raw is Map) {
-      hospital =
-          (raw['hospital'] ?? raw['hospital_name'] ?? '').toString();
+      hospital = (raw['hospital'] ?? raw['hospital_name'] ?? '').toString();
       reason = (raw['reason'] ?? raw['note'] ?? '').toString();
     } else {
       hospital = raw.toString();
@@ -915,8 +969,7 @@ class _ReferralTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: const Color(0xFFE67E22)
-            .withValues(alpha: isDark ? 0.12 : 0.07),
+        color: const Color(0xFFE67E22).withValues(alpha: isDark ? 0.12 : 0.07),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
           color: const Color(0xFFE67E22).withValues(alpha: 0.3),

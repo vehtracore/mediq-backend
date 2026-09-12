@@ -1,18 +1,47 @@
 import os
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import Response
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api import deps
+from app.api.v1.ai_consent import require_active_ai_consent
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.user import User
+from app.services.ai_usage import enforce_ai_text_usage_available
+from app.services.stt_request_guard import (
+    acquire_stt_request_lease,
+    enforce_stt_user_rate_limit,
+    release_stt_request_lease,
+)
+from app.services.stt_usage import (
+    STT_CONSUMED,
+    STTAllowanceReservation,
+    finalize_stt_allowance,
+    reserve_stt_allowance,
+)
+from app.services.voice_transcription import (
+    OPENAI_STT_MODEL,
+    read_validated_voice_upload,
+    require_voice_input_capability,
+    transcribe_voice_audio,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +81,12 @@ class VoiceRequest(BaseModel):
     """Request body for the TTS endpoint."""
     text: str
     language: str = "english"
+
+
+class VoiceTranscriptionResponse(BaseModel):
+    transcript: str
+    language: str
+    status: str = "ready"
 
 
 def _normalise_language(language: str | None) -> str:
@@ -235,6 +270,161 @@ async def _synthesise_yarngpt(text: str, voice: str) -> bytes:
         )
 
     return response.content
+
+
+def _release_failed_stt_reservation(
+    db: Session,
+    reservation: STTAllowanceReservation,
+) -> None:
+    """Best-effort immediate refund; stale recovery covers process interruption."""
+    try:
+        finalize_stt_allowance(
+            db,
+            reservation,
+            usable_transcript=False,
+            now=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+    except Exception as exc:
+        logger.error(
+            "[STT] allowance refund deferred user_id=%s failure_category=%s",
+            reservation.user_id,
+            type(exc).__name__,
+        )
+
+
+async def _transcribe_uploaded_voice(
+    *,
+    file: UploadFile,
+    language: str,
+    request_identifier: str | None,
+    db: Session,
+    current_user: User,
+) -> VoiceTranscriptionResponse:
+    normalised_language, capability = require_voice_input_capability(language)
+    require_active_ai_consent(current_user)
+    user_id = current_user.id
+
+    # This applies the existing AI availability rules without incrementing the
+    # normal AI message counters. The eventual reviewed Send remains the one
+    # billable chat usage event inside the existing chat endpoint.
+    eligibility_now = datetime.now(timezone.utc).replace(tzinfo=None)
+    enforce_ai_text_usage_available(current_user, eligibility_now, db)
+    audio = await read_validated_voice_upload(file)
+
+    if request_identifier is None or not (8 <= len(request_identifier) <= 128):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid transcription request identifier.",
+        )
+
+    lease = acquire_stt_request_lease(user_id, request_identifier)
+    if lease.request_digest is None:
+        release_stt_request_lease(lease)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid transcription request identifier.",
+        )
+    allowance_reservation: STTAllowanceReservation | None = None
+    started_at = time.monotonic()
+    try:
+        enforce_stt_user_rate_limit(user_id)
+
+        def _acquire_monthly_allowance() -> None:
+            nonlocal allowance_reservation
+            allowance_reservation = reserve_stt_allowance(
+                db,
+                user_id=user_id,
+                request_digest=lease.request_digest,
+                now=eligibility_now,
+            )
+
+        transcript = await transcribe_voice_audio(
+            audio,
+            capability,
+            before_submit=_acquire_monthly_allowance,
+        )
+        if allowance_reservation is None:
+            raise RuntimeError("STT allowance boundary was not reached")
+        finalization = finalize_stt_allowance(
+            db,
+            allowance_reservation,
+            usable_transcript=True,
+            now=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        if finalization.status != STT_CONSUMED:
+            raise RuntimeError("STT allowance reservation was not consumed")
+        allowance = allowance_reservation
+        allowance_reservation = None
+        lease.completed = True
+        logger.info(
+            "[STT] completed user_id=%s language=%s provider=openai model=%s "
+            "duration_seconds=%.2f bytes=%d latency_ms=%d transcript_chars=%d "
+            "allowance_used=%d allowance_limit=%d",
+            user_id,
+            normalised_language,
+            OPENAI_STT_MODEL,
+            audio.duration_seconds,
+            len(audio.data),
+            int((time.monotonic() - started_at) * 1000),
+            len(transcript),
+            allowance.used,
+            allowance.limit,
+        )
+        return VoiceTranscriptionResponse(
+            transcript=transcript,
+            language=normalised_language,
+        )
+    except HTTPException:
+        if allowance_reservation is not None:
+            _release_failed_stt_reservation(db, allowance_reservation)
+        raise
+    except Exception as exc:
+        if allowance_reservation is not None:
+            _release_failed_stt_reservation(db, allowance_reservation)
+        logger.error(
+            "[STT] provider failure user_id=%s language=%s model=%s "
+            "duration_seconds=%.2f bytes=%d failure_category=%s",
+            user_id,
+            normalised_language,
+            OPENAI_STT_MODEL,
+            audio.duration_seconds,
+            len(audio.data),
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Voice transcription is temporarily unavailable.",
+        )
+    finally:
+        release_stt_request_lease(lease)
+
+
+@router.post(
+    "/transcribe",
+    response_model=VoiceTranscriptionResponse,
+    summary="Transcribe a temporary English or Nigerian Pidgin recording",
+)
+@limiter.limit("10/hour")
+async def transcribe(
+    request: Request,
+    file: UploadFile = File(...),
+    language: str = Form(...),
+    request_identifier: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> VoiceTranscriptionResponse:
+    try:
+        return await _transcribe_uploaded_voice(
+            file=file,
+            language=language,
+            request_identifier=request_identifier,
+            db=db,
+            current_user=current_user,
+        )
+    finally:
+        # UploadFile is backed by a bounded spooled temporary resource. It is
+        # always closed and is never copied to application or cloud storage.
+        await file.close()
 
 
 # ---------------------------------------------------------------------------

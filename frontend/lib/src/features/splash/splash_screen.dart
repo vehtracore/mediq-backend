@@ -1,53 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 
-class SplashScreen extends ConsumerStatefulWidget {
+import '../auth/data/auth_state_provider.dart';
+import '../auth/presentation/profile_recovery_view.dart';
+import '../auth/presentation/user_controller.dart';
+
+class SplashScreen extends ConsumerWidget {
   const SplashScreen({super.key});
+
   @override
-  ConsumerState<SplashScreen> createState() => _SplashScreenState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(supabaseAuthProvider);
+    final session = Supabase.instance.client.auth.currentSession ??
+        auth.valueOrNull?.session;
+    final profile = ref.watch(userProvider);
 
-class _SplashScreenState extends ConsumerState<SplashScreen> {
-  @override
-  void initState() {
-    super.initState();
-    _checkFirstLaunch();
-  }
-
-  // ---------------------------------------------------------------------------
-  // _checkFirstLaunch
-  //
-  // The GoRouter redirect (app_router.dart) is now the SOLE authority for all
-  // role-based navigation.  The only job left for the splash screen is to
-  // detect brand-new users (no session at all) and show the Onboarding flow.
-  //
-  // For authenticated users, we simply wait — the router's resolvedRoleProvider
-  // will fire once the role is loaded and trigger an automatic redirect to the
-  // correct dashboard with NO risk of a race condition.
-  // ---------------------------------------------------------------------------
-  Future<void> _checkFirstLaunch() async {
-    // Minimum display time so the splash logo is visible.
-    await Future.delayed(const Duration(milliseconds: 800));
-    if (!mounted) return;
-
-    final session = Supabase.instance.client.auth.currentSession;
-
-    if (session == null) {
-      // Genuinely new / logged-out user — show onboarding.
-      // The router will also handle this case but we fast-path here to avoid
-      // showing the loading spinner longer than necessary.
-      context.go('/onboarding');
+    if (session != null && profile.hasError) {
+      return Scaffold(
+        body: AuthenticatedProfileRecoveryView(error: profile.error),
+      );
     }
-    // If session != null: do nothing. The GoRouter redirect is already
-    // watching resolvedRoleProvider and will push to the correct dashboard
-    // as soon as the role resolves.  No competing navigation needed.
-  }
 
-
-  @override
-  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF4A90E2),
       body: Stack(
@@ -56,7 +30,8 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(Icons.health_and_safety, size: 100, color: Colors.white),
+                const Icon(Icons.health_and_safety,
+                    size: 100, color: Colors.white),
                 const SizedBox(height: 16),
                 // FIX: Removed GoogleFonts. Using standard TextStyle so text appears offline.
                 const Text(
@@ -70,7 +45,15 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
                 const SizedBox(height: 40),
                 const CircularProgressIndicator(color: Colors.white),
                 const SizedBox(height: 50),
-
+                if (session != null)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 32),
+                    child: Text(
+                      'Restoring your secure session…',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
               ],
             ),
           ),

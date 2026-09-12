@@ -1,141 +1,242 @@
-﻿"""
-Support Router
-==============
-Handles in-app customer support messaging.
+"""Authenticated, durable customer-support submission endpoint."""
 
-POST /contact is authenticated and forwards a support message from the current
-user to the MDQ+ admin inbox via Resend. Delivery is centrally guarded so this
-route cannot burn email quota if abused.
-"""
-
+import asyncio
 import logging
-import os
-from html import escape
+from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
-import resend
-from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.database import get_db
 from app.core.limiter import limiter
+from app.models.support_message import SupportMessage
 from app.models.user import User
-from app.services.email_guard import (
-    get_from_email,
-    get_resend_api_key,
-    mask_email,
-    reserve_email_send,
-)
+from app.services import support_email_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-FROM_ADDRESS: str = "MDQ+ Support <support@mdqplus.com>"
-ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "admin@mdqplus.com")
+_RETRYABLE_DETAIL = (
+    "We couldn't send your message right now. Your message was retained but "
+    "hasn't been marked as sent. Please try again."
+)
 
 
 class SupportMessageRequest(BaseModel):
     """Body for POST /api/v1/support/contact."""
 
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
     subject: str = Field(..., min_length=1, max_length=120)
     message: str = Field(..., min_length=1, max_length=5000)
 
+    @field_validator("subject", "message", mode="before")
+    @classmethod
+    def trim_content(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
-@router.post("/contact", status_code=200)
+
+class SupportMessageResponse(BaseModel):
+    request_id: UUID
+    status: str
+
+
+def _resolve_submission(
+    db: Session,
+    *,
+    payload: SupportMessageRequest,
+    user_id: int,
+) -> SupportMessage:
+    existing = (
+        db.query(SupportMessage)
+        .filter(SupportMessage.request_id == payload.request_id)
+        .first()
+    )
+    if existing is not None:
+        if (
+            existing.user_id != user_id
+            or existing.subject != payload.subject
+            or existing.message != payload.message
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="This support request identifier is already in use.",
+            )
+        return existing
+
+    submission = SupportMessage(
+        request_id=payload.request_id,
+        user_id=user_id,
+        subject=payload.subject,
+        message=payload.message,
+        email_status="pending",
+    )
+    db.add(submission)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(SupportMessage)
+            .filter(SupportMessage.request_id == payload.request_id)
+            .first()
+        )
+        if (
+            existing is None
+            or existing.user_id != user_id
+            or existing.subject != payload.subject
+            or existing.message != payload.message
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="This support request identifier is already in use.",
+            )
+        return existing
+
+    db.refresh(submission)
+    logger.info(
+        "[SUPPORT] Durable submission created | request_id=%s | user_id=%s",
+        submission.request_id,
+        user_id,
+    )
+    return submission
+
+
+def _failure_status(category: str) -> int:
+    return {
+        "configuration": 503,
+        "rate_limited": 503,
+        "provider_rejected": 502,
+        "provider_timeout": 504,
+        "provider_unavailable": 503,
+        "unknown": 502,
+    }.get(category, 502)
+
+
+def _claim_email_attempt(db: Session, submission: SupportMessage) -> bool:
+    """Atomically claim one live provider call, recovering stale claims."""
+    now = datetime.now(timezone.utc)
+    stale_before = now - timedelta(minutes=2)
+    claimed = (
+        db.query(SupportMessage)
+        .filter(SupportMessage.id == submission.id)
+        .filter(
+            or_(
+                SupportMessage.email_status.in_(("pending", "failed")),
+                and_(
+                    SupportMessage.email_status == "sending",
+                    SupportMessage.updated_at < stale_before,
+                ),
+            )
+        )
+        .update(
+            {
+                SupportMessage.email_status: "sending",
+                SupportMessage.failure_category: None,
+                SupportMessage.attempt_count: SupportMessage.attempt_count + 1,
+                SupportMessage.updated_at: now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    db.refresh(submission)
+    return claimed == 1
+
+
+@router.post("/contact", response_model=SupportMessageResponse, status_code=200)
 @limiter.limit("10/hour")
 async def send_support_message(
     request: Request,
     payload: SupportMessageRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
-):
-    """
-    Accept a support message from the authenticated user and forward it to admin.
-
-    The endpoint still returns 200 when email delivery is disabled/capped so the
-    client can show a stable support confirmation while ops sees guard logs.
-    """
-    user_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip() or "Unknown"
-    user_id = current_user.id
-    user_email = current_user.email or "unknown"
-
-    clean_subject = " ".join(payload.subject.split())
-    email_subject = f"MDQ+ Support: {clean_subject} (From: {user_email})"
-
-    safe_user_name = escape(user_name)
-    safe_user_email = escape(user_email)
-    safe_subject = escape(clean_subject)
-    safe_message = escape(payload.message.strip())
-
-    html_body = f"""
-    <div style="font-family:sans-serif;max-width:600px;margin:auto;padding:24px;border:1px solid #e0e0e0;border-radius:8px;">
-      <h2 style="color:#4A90E2;margin-top:0;">MDQ+ Support Request</h2>
-
-      <table style="border-collapse:collapse;width:100%;margin-bottom:24px;">
-        <tr style="background:#f5f5f5;">
-          <td style="padding:10px 14px;font-weight:bold;width:140px;">User Name</td>
-          <td style="padding:10px 14px;">{safe_user_name}</td>
-        </tr>
-        <tr>
-          <td style="padding:10px 14px;font-weight:bold;">Email</td>
-          <td style="padding:10px 14px;">{safe_user_email}</td>
-        </tr>
-        <tr style="background:#f5f5f5;">
-          <td style="padding:10px 14px;font-weight:bold;">Account ID</td>
-          <td style="padding:10px 14px;">#{user_id}</td>
-        </tr>
-        <tr>
-          <td style="padding:10px 14px;font-weight:bold;">Subject</td>
-          <td style="padding:10px 14px;">{safe_subject}</td>
-        </tr>
-      </table>
-
-      <h3 style="color:#333;margin-bottom:8px;">Message</h3>
-      <div style="background:#fafafa;border-left:4px solid #4A90E2;padding:16px;border-radius:4px;white-space:pre-wrap;">{safe_message}</div>
-
-      <p style="color:#aaa;font-size:12px;margin-top:24px;">
-        This message was submitted via the MDQ+ in-app support form.
-      </p>
-    </div>
-    """
-
-    logger.info(
-        "[SUPPORT] Support request accepted | user_id=%s | subject='%s'",
-        user_id,
-        clean_subject,
+) -> SupportMessageResponse:
+    submission = _resolve_submission(
+        db,
+        payload=payload,
+        user_id=current_user.id,
     )
 
-    recipient = reserve_email_send(ADMIN_EMAIL, email_subject, purpose="support_contact")
-    if recipient is None:
-        return {
-            "status": "success",
-            "detail": "Your message has been received. Our support team will get back to you shortly.",
-        }
+    if submission.email_status == "sent":
+        return SupportMessageResponse(
+            request_id=submission.request_id,
+            status="sent",
+        )
 
+    if not _claim_email_attempt(db, submission):
+        if submission.email_status == "sent":
+            return SupportMessageResponse(
+                request_id=submission.request_id,
+                status="sent",
+            )
+        raise HTTPException(
+            status_code=409,
+            detail="This support request is already being processed. Please try again shortly.",
+        )
+
+    logger.info(
+        "[SUPPORT] Email attempt started | request_id=%s | user_id=%s | attempt=%s",
+        submission.request_id,
+        current_user.id,
+        submission.attempt_count,
+    )
+
+    user_name = (
+        f"{current_user.first_name or ''} {current_user.last_name or ''}".strip()
+        or "Unknown"
+    )
     try:
-        resend.api_key = get_resend_api_key()
-        resend.Emails.send({
-            "from": get_from_email(FROM_ADDRESS),
-            "to": [recipient],
-            "subject": email_subject,
-            "html": html_body,
-        })
-        logger.info(
-            "[SUPPORT] Support email sent | user_id=%s | to='%s'",
-            user_id,
-            mask_email(recipient),
+        provider_message_id = await asyncio.to_thread(
+            support_email_service.send_support_email,
+            request_id=submission.request_id,
+            user_name=user_name,
+            user_email=current_user.email or "",
+            user_role=current_user.role or "unknown",
+            subject=submission.subject,
+            message=submission.message,
+            submitted_at=submission.created_at,
         )
-    except Exception as exc:
-        logger.error(
-            "[SUPPORT] Failed to send support email | user_id=%s | error=%s",
-            user_id,
-            exc,
-            exc_info=True,
+    except support_email_service.SupportEmailDeliveryError as exc:
+        submission.email_status = "failed"
+        submission.failure_category = exc.category
+        submission.provider_message_id = None
+        submission.sent_at = None
+        submission.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        logger.warning(
+            "[SUPPORT] Email attempt failed | request_id=%s | user_id=%s | category=%s",
+            submission.request_id,
+            current_user.id,
+            exc.category,
         )
+        raise HTTPException(
+            status_code=_failure_status(exc.category),
+            detail=_RETRYABLE_DETAIL,
+        ) from None
 
-    return {
-        "status": "success",
-        "detail": "Your message has been received. Our support team will get back to you shortly.",
-    }
+    sent_at = datetime.now(timezone.utc)
+    submission.email_status = "sent"
+    submission.provider_message_id = provider_message_id
+    submission.failure_category = None
+    submission.sent_at = sent_at
+    submission.updated_at = sent_at
+    db.commit()
+
+    logger.info(
+        "[SUPPORT] Email accepted | request_id=%s | user_id=%s | provider_message_id=%s",
+        submission.request_id,
+        current_user.id,
+        provider_message_id,
+    )
+    return SupportMessageResponse(
+        request_id=submission.request_id,
+        status="sent",
+    )

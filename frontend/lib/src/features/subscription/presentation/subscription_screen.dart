@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../auth/presentation/user_controller.dart';
+import '../../auth/presentation/profile_recovery_view.dart';
 import '../../auth/data/auth_repository.dart';
 
 class SubscriptionScreen extends ConsumerStatefulWidget {
@@ -17,11 +18,18 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
       required double parsedPrice,
       required bool isFamily}) async {
     final user = ref.read(userProvider).value;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Restore your profile before continuing.')),
+      );
+      return;
+    }
     await context.push('/payment', extra: {
       'transactionType': isFamily ? 'family_subscription' : 'subscription',
       'baseAmount': parsedPrice,
       'title': planTitle,
-      'userId': user?.id,
+      'userId': user.id,
     });
     ref.invalidate(userProvider);
   }
@@ -112,10 +120,21 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final user = ref.watch(userProvider).value;
-    final isFamilyUser = user?.subscriptionTier == 'family';
-    final isPremium = user?.isPremium ?? false;
+    final userAsync = ref.watch(userProvider);
+    final user = userAsync.valueOrNull;
     final theme = Theme.of(context);
+
+    if (user == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Subscription')),
+        body: userAsync.hasError
+            ? AuthenticatedProfileRecoveryView(error: userAsync.error)
+            : const AuthenticatedProfileRecoveryView(),
+      );
+    }
+
+    final isFamilyUser = user.subscriptionTier == 'family';
+    final isPremium = user.isPremium;
 
     if (isFamilyUser) {
       return Scaffold(
@@ -148,7 +167,7 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 32),
-                if (user?.isFamilyAdmin ?? false)
+                if (user.isFamilyAdmin)
                   ElevatedButton.icon(
                     onPressed: () => context.push('/family_dashboard'),
                     icon: const Icon(Icons.dashboard),

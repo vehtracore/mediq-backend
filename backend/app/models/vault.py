@@ -9,8 +9,7 @@ from app.core.database import Base
 class AIChatSummary(Base):
     """
     Persists a structured summary of an AI chat session for a patient.
-    One row per topic/session; created by the POST /vault/ai-summary endpoint
-    after the chat ends.
+    Created or consolidated only by the backend-owned AI summary save endpoint.
     """
     __tablename__ = "ai_chat_summaries"
 
@@ -19,6 +18,7 @@ class AIChatSummary(Base):
     topic = Column(String, nullable=False)
     summary_text = Column(Text, nullable=False)
     source = Column(String, nullable=False, default="ai_generated")
+    save_request_fingerprint = Column(String(64), nullable=True)
     doctor_review_status = Column(String, nullable=False, default="not_reviewed")
     reviewed_by_doctor_id = Column(
         Integer,
@@ -27,10 +27,34 @@ class AIChatSummary(Base):
     )
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
 
     # Relationships
     patient = relationship("User", foreign_keys=[patient_id])
     reviewed_by_doctor = relationship("Doctor", foreign_keys=[reviewed_by_doctor_id])
+
+
+class AISummarySaveIdempotency(Base):
+    """Binds a save idempotency key to one logical request without PHI."""
+
+    __tablename__ = "ai_summary_save_idempotency"
+    __table_args__ = (
+        UniqueConstraint(
+            "patient_id",
+            "request_key_digest",
+            name="uq_ai_summary_save_idempotency_patient_key",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    patient_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    request_key_digest = Column(String(64), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    summary_id = Column(UUID(as_uuid=True), ForeignKey("ai_chat_summaries.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+
+    patient = relationship("User", foreign_keys=[patient_id])
+    summary = relationship("AIChatSummary", foreign_keys=[summary_id])
 
 
 class ConsultationRecord(Base):

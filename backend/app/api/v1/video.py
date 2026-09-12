@@ -1,8 +1,7 @@
 import logging
 import os
-import random
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from agora_token_builder import RtcTokenBuilder
@@ -10,11 +9,15 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.core.notifications import dispatch_push
 from app.models.user import User
 from app.models.appointment import consultation_started_utc
 from app.api import deps
 from app.services.appointment_access import require_consultation_access
+from app.services.notification_service import (
+    NotificationType,
+    notify_user,
+    room_ready_event_key,
+)
 from app.services.consultation_pricing import (
     DEFAULT_CONSULTATION_DURATION_MINUTES,
     CONSULTATION_END_WARNING_MINUTES,
@@ -27,31 +30,21 @@ router = APIRouter()
 
 # Manually define the role (1 = Publisher, 2 = Subscriber)
 Role_Publisher = 1
-_ROOM_OPEN_NOTIFICATION_COOLDOWN = timedelta(minutes=2)
-_room_open_notification_sent_at: dict[tuple[int, int], datetime] = {}
 
 
-def _should_send_room_open_notification(appointment_id: int, patient_id: int) -> bool:
-    now = datetime.utcnow()
-    if len(_room_open_notification_sent_at) > 1000:
-        cutoff = now - _ROOM_OPEN_NOTIFICATION_COOLDOWN
-        stale_keys = [
-            key
-            for key, sent_at in _room_open_notification_sent_at.items()
-            if sent_at < cutoff
-        ]
-        for key in stale_keys:
-            _room_open_notification_sent_at.pop(key, None)
-
-    key = (appointment_id, patient_id)
-    last_sent_at = _room_open_notification_sent_at.get(key)
-    if last_sent_at and now - last_sent_at < _ROOM_OPEN_NOTIFICATION_COOLDOWN:
-        return False
-
-    _room_open_notification_sent_at[key] = now
-    return True
-
-
+def agora_uid_for_participant(appointment, current_user: User) -> int:
+    """Derive the channel-local Agora identity from authorized membership."""
+    if appointment.patient_id == current_user.id:
+        return 1
+    if (
+        appointment.doctor is not None
+        and appointment.doctor.user_id == current_user.id
+    ):
+        return 2
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to access this consultation.",
+    )
 
 
 @router.get("/token/{appointment_id}")
@@ -87,7 +80,9 @@ def get_agora_token(
             raise Exception("Agora Credentials are missing in Render Environment Variables!")
 
         # 3. Generate Token
-        uid = random.randint(1, 230)
+        # Appointment membership owns Agora identity. The same participant gets
+        # the same channel-local UID for both initial join and every renewal.
+        token_uid = agora_uid_for_participant(appt, current_user)
         current_timestamp = int(time.time())
         consultation_start = consultation_started_utc(appt)
         if consultation_start is None:
@@ -115,38 +110,32 @@ def get_agora_token(
         role = Role_Publisher
 
         token = RtcTokenBuilder.buildTokenWithUid(
-            app_id, app_certificate, channel_name, uid, role, privilege_expired_ts
+            app_id,
+            app_certificate,
+            channel_name,
+            token_uid,
+            role,
+            privilege_expired_ts,
         )
 
         # 4. Success Log
         logger.info("Agora token generated for channel: %s", channel_name)
 
-        # 5. ── FCM: notify the patient that the consultation room is open ────────
-        # Only fire when the caller is a doctor (has an associated Doctor row).
-        # We look up the appointment to find the patient's FCM token.
+        # Only a doctor opening the room emits this durable, DB-deduped event.
         try:
             from app.models.doctor import Doctor
             doctor_row = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-            if doctor_row:
-                if appt and appt.patient_id:
-                    patient = db.query(User).filter(User.id == appt.patient_id).first()
-                    if (
-                        patient
-                        and patient.fcm_token
-                        and _should_send_room_open_notification(appointment_id, patient.id)
-                    ):
-                        doctor_name = doctor_row.full_name or "Your doctor"
-                        dispatch_push(
-                            token=patient.fcm_token,
-                            title="🩺 Consultation Room Open",
-                            body=f"Dr. {doctor_name} has opened your consultation room. Join now!",
-                            data={
-                                "type": "consultation_room_open",
-                                "appointment_id": str(appointment_id),
-                                "channel": channel_name,
-                            },
-                            event_label="VIDEO/ROOM_OPEN",
-                        )
+            if doctor_row and appt.patient_id:
+                notify_user(
+                    db,
+                    user_id=appt.patient_id,
+                    notification_type=NotificationType.CONSULTATION_ROOM_READY,
+                    navigation_data={"appointment_id": appointment_id},
+                    event_key=room_ready_event_key(
+                        appointment_id=appointment_id,
+                        user_id=appt.patient_id,
+                    ),
+                )
         except Exception as notif_exc:
             # Never crash token generation because of a notification failure.
             logger.error(
@@ -159,7 +148,7 @@ def get_agora_token(
         return {
             "token": token,
             "channel": channel_name,
-            "uid": uid,
+            "uid": token_uid,
             "app_id": app_id,
             "warning_at": warning_at.isoformat(),
             "video_ends_at": consultation_end.isoformat(),

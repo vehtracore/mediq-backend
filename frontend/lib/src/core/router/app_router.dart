@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
-import '../../features/auth/data/auth_repository.dart';
+import '../../features/auth/data/auth_state_provider.dart';
+import '../../features/auth/data/shell_identity.dart';
+import '../../features/auth/presentation/user_controller.dart';
+import '../../features/auth/presentation/profile_recovery_view.dart';
 
 // Feature Imports
 import '../../features/splash/splash_screen.dart';
@@ -42,29 +45,14 @@ import '../../features/auth/presentation/update_password_screen.dart';
 
 // Global key so Dio interceptor can navigate imperatively
 final rootNavigatorKey = GlobalKey<NavigatorState>();
-
-// ---------------------------------------------------------------------------
-// Supabase Auth State Provider
-// ---------------------------------------------------------------------------
-// Listens to the Supabase auth stream so the router can reactively redirect
-// on every session change (sign-in, sign-out, token refresh).
-// Using AuthState (not Session?) so we can distinguish between
-// "not yet loaded" (waiting) and "loaded but null" (logged out).
-// ---------------------------------------------------------------------------
-final supabaseAuthProvider = StreamProvider<AuthState>((ref) {
-  return Supabase.instance.client.auth.onAuthStateChange;
-});
+final rootScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
 // ---------------------------------------------------------------------------
 // Role Provider — single source of truth for the current user's role.
 //
-// Strategy (fast-path first, no unnecessary network calls):
-//   1. Read role from the Supabase JWT user_metadata synchronously.  This is
-//      populated by the backend on register and is present in the cached
-//      session — zero latency, works offline.
-//   2. If the JWT metadata has no role (legacy accounts), fall back to a
-//      backend call to /api/v1/auth/me.
-//   3. Returns null when there is no active session.
+// Strategy: prefer the authoritative profile, then Supabase metadata, then a
+// user-ID-keyed cached role as a navigation hint. Backend authorization never
+// trusts this UI role.
 // ---------------------------------------------------------------------------
 final resolvedRoleProvider = FutureProvider<String?>((ref) async {
   // Re-evaluate whenever the auth stream fires (sign-in, sign-out, refresh).
@@ -73,22 +61,23 @@ final resolvedRoleProvider = FutureProvider<String?>((ref) async {
   // Still loading the stream — propagate the loading state.
   if (authAsync.isLoading) return null;
 
-  final session =
-      Supabase.instance.client.auth.currentSession ?? authAsync.valueOrNull?.session;
+  final session = Supabase.instance.client.auth.currentSession ??
+      authAsync.valueOrNull?.session;
   if (session == null) return null; // Logged out.
+
+  // Prefer the latest authoritative application profile when available.
+  final profileAsync = ref.watch(userProvider);
+  final profileRole = profileAsync.valueOrNull?.role;
+  if (profileRole != null && profileRole.isNotEmpty) return profileRole;
 
   // Fast-path: role embedded in the Supabase JWT by the backend at sign-up.
   final metaRole = session.user.userMetadata?['role'] as String?;
   if (metaRole != null && metaRole.isNotEmpty) return metaRole;
 
-  // Slow-path: fetch from the backend profile endpoint (legacy / edge-case).
-  try {
-    final repo = ref.read(authRepositoryProvider);
-    final user = await repo.getUserProfile();
-    return user?.role;
-  } catch (_) {
-    return null; // Backend unreachable — treat as unresolved.
-  }
+  // A user-ID-keyed cached role is a navigation hint only. FastAPI remains
+  // authoritative for every protected operation.
+  final shell = await ref.watch(activeShellIdentityProvider.future);
+  return shell?.role;
 });
 
 // Tracks whether the current session is a password-recovery flow.
@@ -99,6 +88,75 @@ final _isPasswordRecoveryProvider = StateProvider<bool>((ref) => false);
 // Public alias consumed by the router provider (keeps ref.watch tidy).
 final passwordRecoveryProvider = _isPasswordRecoveryProvider;
 
+bool nextPasswordRecoveryState(bool current, AuthChangeEvent event) {
+  if (event == AuthChangeEvent.passwordRecovery) return true;
+  if (event == AuthChangeEvent.signedIn || event == AuthChangeEvent.signedOut) {
+    return false;
+  }
+  return current;
+}
+
+String? authRedirectDecision({
+  required String location,
+  required bool authLoading,
+  required bool passwordRecovery,
+  required bool hasSession,
+  required bool roleLoading,
+  required String? role,
+}) {
+  if (authLoading) return location == '/' ? null : '/';
+  if (passwordRecovery) {
+    return location == '/update-password' ? null : '/update-password';
+  }
+
+  const publicRoutes = {
+    '/auth',
+    '/login',
+    '/onboarding',
+    '/safety_disclaimer',
+    '/update-password',
+    '/doctor_register',
+  };
+  final isPublicRoute = publicRoutes.contains(location);
+
+  if (!hasSession) {
+    if (location == '/') return '/auth';
+    return isPublicRoute ? null : '/auth';
+  }
+
+  if (roleLoading) return location == '/' ? null : '/';
+
+  if (role == null ||
+      (role != 'doctor' && role != 'patient' && role != 'admin')) {
+    return location == '/' ? null : '/';
+  }
+
+  if ((isPublicRoute || location == '/') &&
+      location != '/update-password' &&
+      location != '/doctor_register') {
+    if (role == 'doctor') return '/doctor_home';
+    if (role == 'admin') return '/admin_dashboard';
+    return '/patient_home';
+  }
+
+  if (role == 'patient' &&
+      (location == '/doctor_home' ||
+          location == '/doctor_edit_profile' ||
+          location == '/doctor_availability' ||
+          location == '/payout_settings')) {
+    return '/patient_home';
+  }
+  if (role == 'doctor' &&
+      (location == '/patient_home' ||
+          location == '/find_doctor' ||
+          location == '/book_appointment' ||
+          location == '/medical_history')) {
+    return '/doctor_home';
+  }
+
+  return null;
+}
+
 final goRouterProvider = Provider<GoRouter>((ref) {
   // Watch both the auth stream AND the resolved role so GoRouter rebuilds
   // on every session change AND whenever the role finishes loading.
@@ -108,12 +166,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
   // Detect PASSWORD_RECOVERY events from the Supabase stream and set the flag.
   ref.listen<AsyncValue<AuthState>>(supabaseAuthProvider, (_, next) {
     next.whenData((state) {
-      if (state.event == AuthChangeEvent.passwordRecovery) {
-        ref.read(_isPasswordRecoveryProvider.notifier).state = true;
-      } else if (state.event == AuthChangeEvent.signedIn) {
-        // Only clear recovery flag on a genuine sign-in (not the temp recovery session)
-        ref.read(_isPasswordRecoveryProvider.notifier).state = false;
-      }
+      final notifier = ref.read(_isPasswordRecoveryProvider.notifier);
+      notifier.state = nextPasswordRecoveryState(notifier.state, state.event);
     });
   });
 
@@ -134,88 +188,20 @@ final goRouterProvider = Provider<GoRouter>((ref) {
     //        doctor  → only /doctor_home and doctor-only paths allowed
     //        patient → only /patient_home and patient-only paths allowed
     //        admin   → /admin_dashboard
-    //        unknown → '/auth' (cannot determine role — treat as unauthenticated)
+    //        unknown → authenticated restoration UI on '/'
     // -------------------------------------------------------------------------
     redirect: (context, state) {
       final loc = state.matchedLocation;
-
-      // ── Step 1: Supabase session stream still initialising ────────────────
-      if (authState.isLoading) {
-        return loc == '/' ? null : '/';
-      }
-
-      // ── Step 2: Password-recovery deep link ──────────────────────────────
-      if (isPasswordRecovery) {
-        return loc == '/update-password' ? null : '/update-password';
-      }
-
-      final session =
-          Supabase.instance.client.auth.currentSession ?? authState.valueOrNull?.session;
-      final isLoggedIn = session != null;
-
-      // Public routes — accessible without a session.
-      const publicRoutes = {
-        '/auth',
-        '/login',
-        '/onboarding',
-        '/safety_disclaimer',
-        '/update-password',
-        '/doctor_register',
-      };
-      final isPublicRoute = publicRoutes.contains(loc);
-
-      // ── Step 3: No session → kick to /auth ───────────────────────────────
-      if (!isLoggedIn) {
-        if (loc == '/') return '/auth';
-        return isPublicRoute ? null : '/auth';
-      }
-
-      // ── Step 4: Session exists but role not yet resolved ─────────────────
-      // Keep the user on the splash screen until we know their role so we
-      // never accidentally drop them on the wrong dashboard.
-      if (!roleAsync.hasValue && roleAsync.isLoading) {
-        return loc == '/' ? null : '/';
-      }
-
-      // ── Step 5: Role resolved — enforce strict routing ───────────────────
-      final role = roleAsync.valueOrNull;
-
-      // Could not determine role (backend error / unknown role string).
-      // Bounce to /auth without clearing the Supabase session; profile parsing
-      // or role resolution issues should not destroy a valid auth session.
-      if (role == null || (role != 'doctor' && role != 'patient' && role != 'admin')) {
-        // Only redirect away from public routes to avoid infinite loops.
-        if (loc == '/') return '/auth';
-        return isPublicRoute ? null : '/auth';
-      }
-
-      // Logged-in user landing on a public/splash page → send to their home.
-      if ((isPublicRoute || loc == '/') &&
-          loc != '/update-password' &&
-          loc != '/doctor_register') {
-        if (role == 'doctor') return '/doctor_home';
-        if (role == 'admin') return '/admin_dashboard';
-        return '/patient_home';
-      }
-
-      // ── Cross-role contamination guard ───────────────────────────────────
-      // A doctor must never reach the patient dashboard and vice-versa.
-      // Patient trying to reach doctor routes → patient home.
-      if (role == 'patient' && (loc == '/doctor_home' ||
-          loc == '/doctor_edit_profile' ||
-          loc == '/doctor_availability' ||
-          loc == '/payout_settings')) {
-        return '/patient_home';
-      }
-      // Doctor trying to reach patient-only routes → doctor home.
-      if (role == 'doctor' && (loc == '/patient_home' ||
-          loc == '/find_doctor' ||
-          loc == '/book_appointment' ||
-          loc == '/medical_history')) {
-        return '/doctor_home';
-      }
-
-      return null; // Route is valid for this role — allow.
+      final session = Supabase.instance.client.auth.currentSession ??
+          authState.valueOrNull?.session;
+      return authRedirectDecision(
+        location: loc,
+        authLoading: authState.isLoading,
+        passwordRecovery: isPasswordRecovery,
+        hasSession: session != null,
+        roleLoading: !roleAsync.hasValue && roleAsync.isLoading,
+        role: roleAsync.valueOrNull,
+      );
     },
     routes: [
       GoRoute(path: '/', builder: (context, state) => const SplashScreen()),
@@ -259,7 +245,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           builder: (context, state) => const DoctorAvailabilityScreen()),
       GoRoute(
           path: '/emergency',
-          builder: (context, state) => const EmergencyScreen()),
+          builder: (context, state) => EmergencyScreen(
+                emergencyRequestId: state.uri.queryParameters['activationId'],
+              )),
       GoRoute(
           path: '/subscription',
           builder: (context, state) => const SubscriptionScreen()),
@@ -297,7 +285,15 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/ai-chat',
         name: 'aiChat',
-        builder: (context, state) => const AiChatScreen(),
+        builder: (context, state) {
+          final extra = state.extra is Map<String, dynamic>
+              ? state.extra as Map<String, dynamic>
+              : const <String, dynamic>{};
+          return AiChatScreen(
+            sourceSummaryId: extra['sourceSummaryId'] as String?,
+            sourceSummaryUpdatedAt: extra['sourceSummaryUpdatedAt'] as String?,
+          );
+        },
       ),
 
       GoRoute(
@@ -318,8 +314,32 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/edit_profile',
         builder: (context, state) {
-          final user = state.extra as User;
-          return EditProfileScreen(user: user);
+          final passedUser = state.extra;
+          if (passedUser is User) {
+            return EditProfileScreen(user: passedUser);
+          }
+          return Consumer(
+            builder: (context, ref, _) {
+              final profile = ref.watch(userProvider);
+              return profile.when(
+                data: (user) => user == null
+                    ? Scaffold(
+                        body: AuthenticatedProfileRecoveryView(
+                          error: StateError(
+                            'Authenticated profile was unavailable.',
+                          ),
+                        ),
+                      )
+                    : EditProfileScreen(user: user),
+                loading: () => const Scaffold(
+                  body: AuthenticatedProfileRecoveryView(),
+                ),
+                error: (error, _) => Scaffold(
+                  body: AuthenticatedProfileRecoveryView(error: error),
+                ),
+              );
+            },
+          );
         },
       ),
 
@@ -359,9 +379,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
 
           // appointmentId: may arrive as int, String, or null
           final idRaw = data['appointmentId'];
-          final int? appointmentId = idRaw is int
-              ? idRaw
-              : int.tryParse(idRaw?.toString() ?? '');
+          final int? appointmentId =
+              idRaw is int ? idRaw : int.tryParse(idRaw?.toString() ?? '');
 
           // userId: same treatment
           final userIdRaw = data['userId'];

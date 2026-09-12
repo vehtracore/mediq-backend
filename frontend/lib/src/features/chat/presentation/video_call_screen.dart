@@ -1,35 +1,46 @@
 import 'dart:async';
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:go_router/go_router.dart';
-import 'package:flutter/foundation.dart';
+import 'package:permission_handler/permission_handler.dart';
+
 import '../data/video_repository.dart';
+import 'consultation_chat_panel.dart';
 import 'consultation_countdown_badge.dart';
+import 'consultation_session_controller.dart';
 
 class VideoCallScreen extends ConsumerStatefulWidget {
-  final int appointmentId;
-  final bool isVoiceCall;
-
   const VideoCallScreen({
     super.key,
     required this.appointmentId,
-    this.isVoiceCall = false, // Defaults to Video if not specified
+    this.isVoiceCall = false,
   });
+
+  final int appointmentId;
+  final bool isVoiceCall;
 
   @override
   ConsumerState<VideoCallScreen> createState() => _VideoCallScreenState();
 }
 
 class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
+  late final ConsultationSessionController _session;
+  late final ConsultationVideoPresenceBridge _videoPresence;
   int? _remoteUid;
+  int? _localAgoraUid;
   bool _localUserJoined = false;
   RtcEngine? _engine;
   bool _isLoading = true;
   bool _muted = false;
   late bool _cameraOff;
+  bool _mediaReconnecting = false;
+  bool _mediaUnavailable = false;
+  bool _renewingToken = false;
+  bool _exiting = false;
+  bool _engineReleased = false;
   Timer? _warningTimer;
   Timer? _endTimer;
   DateTime? _videoEndsAt;
@@ -39,111 +50,187 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
   @override
   void initState() {
     super.initState();
-    // Initialize camera state based on the incoming request type
     _cameraOff = widget.isVoiceCall;
-    _initAgora();
+    _session = ref.read(consultationSessionProvider(widget.appointmentId));
+    _videoPresence = ConsultationVideoPresenceBridge(_session);
+    _videoPresence.onTransitionStarted();
+    unawaited(_initAgora());
   }
 
   Future<void> _initAgora() async {
-    // 1. Permissions: Request Microphone always. Request Camera only if Video call.
+    await _session.ensureStarted(live: true);
+    if (!mounted || _session.myUserId == null) {
+      if (mounted) _showJoinFailure();
+      return;
+    }
+
     if (!kIsWeb) {
       await [Permission.microphone].request();
-      if (!widget.isVoiceCall) {
-        await [Permission.camera].request();
-      }
+      if (!widget.isVoiceCall) await [Permission.camera].request();
     }
 
     try {
-      // 2. Fetch Token from Backend
       final data = await ref
           .read(videoRepositoryProvider)
           .getConnectionData(widget.appointmentId);
+      _localAgoraUid = (data['uid'] as num).toInt();
       final warningAt = DateTime.parse(data['warning_at'] as String).toLocal();
       final videoEndsAt =
           DateTime.parse(data['video_ends_at'] as String).toLocal();
       final messagesEndAt =
           DateTime.parse(data['messages_end_at'] as String).toLocal();
-      if (mounted) {
-        setState(() {
-          _videoEndsAt = videoEndsAt;
-          _messagesEndAt = messagesEndAt;
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _videoEndsAt = videoEndsAt;
+        _messagesEndAt = messagesEndAt;
+      });
 
-      _engine = createAgoraRtcEngine();
-      await _engine!.initialize(
+      final engine = createAgoraRtcEngine();
+      _engine = engine;
+      await engine.initialize(
         RtcEngineContext(
-          appId: data['app_id'],
+          appId: data['app_id'] as String,
           channelProfile: ChannelProfileType.channelProfileCommunication,
         ),
       );
-
-      _engine!.registerEventHandler(
-        RtcEngineEventHandler(
-          onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
-            if (mounted) setState(() => _localUserJoined = true);
-          },
-          onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
-            if (mounted) setState(() => _remoteUid = remoteUid);
-          },
-          onUserOffline: (
-            RtcConnection connection,
-            int remoteUid,
-            UserOfflineReasonType reason,
-          ) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("User Left Call")),
-              );
-              context.pop();
-            }
-          },
-        ),
-      );
-
-      await _engine!.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
-      await _engine!.enableAudio();
-
-      // 3. Handle Video State Logic
+      engine.registerEventHandler(_eventHandler());
+      await engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
+      await engine.enableAudio();
       if (widget.isVoiceCall) {
-        await _engine!.disableVideo(); // Bandwidth Saver
+        await engine.disableVideo();
       } else {
-        await _engine!.enableVideo();
-        await _engine!.startPreview();
+        await engine.enableVideo();
+        await engine.startPreview();
       }
-
-      // 4. Join Channel
-      await _engine!.joinChannel(
-        token: data['token'],
-        channelId: data['channel'],
-        uid: data['uid'],
+      await engine.joinChannel(
+        token: data['token'] as String,
+        channelId: data['channel'] as String,
+        uid: _localAgoraUid!,
         options: ChannelMediaOptions(
-          // Important: Tell Agora whether to send video packets or not
           publishCameraTrack: !widget.isVoiceCall,
           publishMicrophoneTrack: true,
           clientRoleType: ClientRoleType.clientRoleBroadcaster,
         ),
       );
-      _scheduleTimeLimit(
-        warningAt: warningAt,
-        videoEndsAt: videoEndsAt,
+      _scheduleTimeLimit(warningAt: warningAt, videoEndsAt: videoEndsAt);
+      if (mounted) setState(() => _isLoading = false);
+    } catch (error) {
+      debugPrint('[VideoCall] Unable to join consultation: $error');
+      if (mounted) _showJoinFailure();
+    }
+  }
+
+  RtcEngineEventHandler _eventHandler() => RtcEngineEventHandler(
+        onJoinChannelSuccess: (_, __) {
+          if (!mounted || _exiting) return;
+          setState(() {
+            _localUserJoined = true;
+            _mediaReconnecting = false;
+            _mediaUnavailable = false;
+          });
+          _videoPresence.onLocalJoined(remotePresent: _remoteUid != null);
+        },
+        onRejoinChannelSuccess: (_, __) {
+          if (!mounted || _exiting) return;
+          setState(() {
+            _localUserJoined = true;
+            _mediaReconnecting = false;
+            _mediaUnavailable = false;
+          });
+          _videoPresence.onReconnected(remotePresent: _remoteUid != null);
+        },
+        onUserJoined: (_, remoteUid, __) {
+          if (!mounted || _exiting) return;
+          setState(() => _remoteUid = remoteUid);
+          _videoPresence.onRemoteJoined();
+        },
+        onUserOffline: (_, remoteUid, __) {
+          if (!mounted || _exiting || _remoteUid != remoteUid) return;
+          setState(() => _remoteUid = null);
+          _videoPresence.onRemoteLeft();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content:
+                  Text('Participant left video. Waiting for them to return.'),
+            ),
+          );
+        },
+        onTokenPrivilegeWillExpire: (_, __) => unawaited(_renewAgoraToken()),
+        onRequestToken: (_) => unawaited(_renewAgoraToken()),
+        onConnectionStateChanged: (_, state, reason) {
+          if (!mounted || _exiting) return;
+          if (state == ConnectionStateType.connectionStateReconnecting) {
+            setState(() => _mediaReconnecting = true);
+            _videoPresence.onReconnecting();
+            return;
+          }
+          if (state == ConnectionStateType.connectionStateConnected) {
+            setState(() {
+              _mediaReconnecting = false;
+              _mediaUnavailable = false;
+            });
+            if (_localUserJoined) {
+              _videoPresence.onReconnected(remotePresent: _remoteUid != null);
+            }
+            return;
+          }
+          if (state == ConnectionStateType.connectionStateFailed) {
+            setState(() {
+              _mediaReconnecting = false;
+              _mediaUnavailable = true;
+            });
+            _videoPresence.onReconnecting();
+            if (reason ==
+                    ConnectionChangedReasonType.connectionChangedTokenExpired ||
+                reason ==
+                    ConnectionChangedReasonType.connectionChangedInvalidToken) {
+              unawaited(_renewAgoraToken());
+            }
+          }
+        },
       );
 
-      if (mounted) setState(() => _isLoading = false);
-    } catch (e) {
-      debugPrint('[VideoCall] Unable to join consultation: $e');
-      if (mounted) {
+  Future<void> _renewAgoraToken() async {
+    final uid = _localAgoraUid;
+    final engine = _engine;
+    if (_renewingToken || _exiting || uid == null || engine == null) return;
+    _renewingToken = true;
+    try {
+      final data = await ref
+          .read(videoRepositoryProvider)
+          .getConnectionData(widget.appointmentId);
+      final renewedUid = (data['uid'] as num).toInt();
+      if (renewedUid != uid) {
+        throw StateError('Agora renewal identity changed unexpectedly.');
+      }
+      if (!_exiting && _engine == engine) {
+        await engine.renewToken(data['token'] as String);
+      }
+    } catch (error) {
+      debugPrint('[VideoCall] Agora token renewal failed: $error');
+      if (mounted && !_exiting) {
+        setState(() => _mediaUnavailable = true);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              "Video service is temporarily unavailable. Please try again.",
-            ),
-            backgroundColor: Colors.red,
+                'Video connection needs attention. You can keep using chat.'),
           ),
         );
-        context.pop();
       }
+    } finally {
+      _renewingToken = false;
     }
+  }
+
+  void _showJoinFailure() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content:
+            Text('Video service is temporarily unavailable. Please try again.'),
+        backgroundColor: Colors.red,
+      ),
+    );
+    unawaited(_leaveVideo());
   }
 
   void _scheduleTimeLimit({
@@ -157,7 +244,6 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
     } else {
       _warningTimer = Timer(warningDelay, _showTimeWarning);
     }
-
     final endDelay = videoEndsAt.difference(now);
     if (endDelay.isNegative) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _endForTimeLimit());
@@ -170,7 +256,7 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
     if (!mounted || _timeLimitHandled) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text("5 minutes remaining in this consultation video."),
+        content: Text('5 minutes remaining in this consultation video.'),
         duration: Duration(seconds: 8),
       ),
     );
@@ -185,78 +271,116 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
-        title: const Text("Video consultation ended"),
+        title: const Text('Video consultation ended'),
         content: const Text(
-          "You can continue messaging for 10 minutes to wrap up the consultation.",
+          'You can continue messaging for 10 minutes to wrap up the consultation.',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text("Continue to messages"),
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Continue to messages'),
           ),
         ],
       ),
     );
-    if (mounted) context.pop();
+    if (mounted) await _leaveVideo();
   }
 
-  // Toggle Camera In-Call
   Future<void> _toggleCamera() async {
-    if (_engine == null) return;
-
+    final engine = _engine;
+    if (engine == null) return;
     if (_cameraOff) {
-      // Turning ON
-      await [Permission.camera].request(); // Ask permission just in case
-      await _engine!.enableVideo();
-      await _engine!.startPreview();
-      // Update channel options to start sending video
-      await _engine!.updateChannelMediaOptions(
+      await [Permission.camera].request();
+      await engine.enableVideo();
+      await engine.startPreview();
+      await engine.updateChannelMediaOptions(
         const ChannelMediaOptions(publishCameraTrack: true),
       );
     } else {
-      // Turning OFF
-      await _engine!.disableVideo();
-      await _engine!.updateChannelMediaOptions(
+      await engine.disableVideo();
+      await engine.updateChannelMediaOptions(
         const ChannelMediaOptions(publishCameraTrack: false),
       );
     }
-    setState(() => _cameraOff = !_cameraOff);
+    if (mounted) setState(() => _cameraOff = !_cameraOff);
+  }
+
+  Future<void> _openChat() async {
+    _session.setVideoChatVisible(true);
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        builder: (_) => ConsultationChatPanel(
+          appointmentId: widget.appointmentId,
+        ),
+      );
+    } finally {
+      _session.setVideoChatVisible(false);
+    }
+  }
+
+  Future<void> _leaveVideo() async {
+    if (_exiting) return;
+    _exiting = true;
+    _warningTimer?.cancel();
+    _endTimer?.cancel();
+    _videoPresence.onLeft(returningToChat: _session.isChatAttached);
+    await _releaseAgora();
+    if (mounted) context.pop();
+  }
+
+  Future<void> _releaseAgora() async {
+    if (_engineReleased) return;
+    _engineReleased = true;
+    final engine = _engine;
+    _engine = null;
+    if (engine != null) {
+      await engine.leaveChannel();
+      await engine.release();
+    }
   }
 
   @override
   void dispose() {
     _warningTimer?.cancel();
     _endTimer?.cancel();
-    _engine?.leaveChannel();
-    _engine?.release();
+    _session.setVideoChatVisible(false);
+    if (!_exiting) {
+      _exiting = true;
+      _videoPresence.onLeft(returningToChat: _session.isChatAttached);
+    }
+    unawaited(_releaseAgora());
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final session =
+        ref.watch(consultationSessionProvider(widget.appointmentId));
     return Scaffold(
       backgroundColor: Colors.grey[900],
       body: Stack(
         children: [
-          // 1. REMOTE USER VIEW
           Center(
-            child: _remoteUid != null
+            child: _remoteUid != null && _engine != null
                 ? AgoraVideoView(
                     controller: VideoViewController.remote(
                       rtcEngine: _engine!,
                       canvas: VideoCanvas(uid: _remoteUid),
                       connection: RtcConnection(
-                        channelId: "appt_${widget.appointmentId}",
+                        channelId: 'appt_${widget.appointmentId}',
                       ),
                     ),
                   )
                 : _buildPlaceholder(
-                    icon: Icons.person,
-                    label:
-                        _isLoading ? "Connecting..." : "Waiting for other...",
+                    icon: _mediaUnavailable
+                        ? Icons.videocam_off_outlined
+                        : Icons.person,
+                    label: _waitingLabel(session),
                   ),
           ),
-
           Positioned(
             top: 48,
             left: 0,
@@ -270,15 +394,12 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
               ),
             ),
           ),
-
-          // 2. LOCAL USER VIEW (Picture-in-Picture)
-          // Only show if Camera is ON
-          if (_localUserJoined && !_cameraOff)
+          if (_localUserJoined && !_cameraOff && _engine != null)
             Positioned(
               right: 20,
-              top: 50,
+              top: 90,
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(8),
                 child: SizedBox(
                   width: 120,
                   height: 160,
@@ -291,13 +412,11 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
                 ),
               ),
             ),
-
-          // 3. CONTROL BAR
           Align(
             alignment: Alignment.bottomCenter,
             child: Container(
               margin: const EdgeInsets.only(bottom: 30),
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
                 color: Colors.black54,
                 borderRadius: BorderRadius.circular(30),
@@ -305,34 +424,36 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Mute
-                  _buildControlBtn(
+                  _buildControlButton(
+                    key: const Key('video_mic_control'),
+                    tooltip: _muted ? 'Unmute' : 'Mute',
                     icon: _muted ? Icons.mic_off : Icons.mic,
                     color: _muted ? Colors.white : Colors.black,
-                    bgColor: _muted ? Colors.red : Colors.white,
-                    onTap: () {
+                    backgroundColor: _muted ? Colors.red : Colors.white,
+                    onPressed: () {
                       _engine?.muteLocalAudioStream(!_muted);
                       setState(() => _muted = !_muted);
                     },
                   ),
-                  const SizedBox(width: 20),
-
-                  // End Call
-                  _buildControlBtn(
+                  const SizedBox(width: 12),
+                  _buildChatControl(session),
+                  const SizedBox(width: 12),
+                  _buildControlButton(
+                    key: const Key('video_end_control'),
+                    tooltip: 'Leave video',
                     icon: Icons.call_end,
                     color: Colors.white,
-                    bgColor: Colors.red,
-                    scale: 1.3,
-                    onTap: () => context.pop(),
+                    backgroundColor: Colors.red,
+                    onPressed: _leaveVideo,
                   ),
-                  const SizedBox(width: 20),
-
-                  // Toggle Camera
-                  _buildControlBtn(
+                  const SizedBox(width: 12),
+                  _buildControlButton(
+                    key: const Key('video_camera_control'),
+                    tooltip: _cameraOff ? 'Turn camera on' : 'Turn camera off',
                     icon: _cameraOff ? Icons.videocam_off : Icons.videocam,
                     color: Colors.black,
-                    bgColor: _cameraOff ? Colors.grey : Colors.white,
-                    onTap: _toggleCamera,
+                    backgroundColor: _cameraOff ? Colors.grey : Colors.white,
+                    onPressed: _toggleCamera,
                   ),
                 ],
               ),
@@ -343,34 +464,90 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
     );
   }
 
-  Widget _buildPlaceholder({required IconData icon, required String label}) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
+  String _waitingLabel(ConsultationSessionController session) {
+    if (_isLoading) {
+      return 'Connecting to video...';
+    }
+    if (_mediaReconnecting) {
+      return 'Video is reconnecting';
+    }
+    if (_mediaUnavailable) {
+      return 'Video is unavailable. Chat is still available.';
+    }
+    final participant = session.peerParticipantLabel;
+    return switch (session.peerMode) {
+      ConsultationMode.chat => '$participant is in chat',
+      ConsultationMode.joiningVideo => '$participant is joining video',
+      ConsultationMode.videoWaiting => '$participant is waiting in video',
+      ConsultationMode.video => 'Waiting for $participant video',
+      ConsultationMode.reconnecting => '$participant is reconnecting',
+      null => 'Waiting for ${participant.toLowerCase()} to join',
+    };
+  }
+
+  Widget _buildChatControl(ConsultationSessionController session) {
+    return Stack(
+      clipBehavior: Clip.none,
       children: [
-        Icon(icon, size: 80, color: Colors.white38),
-        const SizedBox(height: 16),
-        Text(label, style: const TextStyle(color: Colors.white54)),
+        _buildControlButton(
+          key: const Key('video_chat_control'),
+          tooltip: 'Open chat',
+          icon: Icons.chat_bubble_outline,
+          color: Colors.black,
+          backgroundColor: Colors.white,
+          onPressed: _openChat,
+        ),
+        if (session.unreadCount > 0)
+          Positioned(
+            right: -5,
+            top: -7,
+            child: Badge(
+              key: const Key('video_chat_unread_badge'),
+              label: Text(
+                session.unreadCount > 99 ? '99+' : '${session.unreadCount}',
+              ),
+            ),
+          ),
       ],
     );
   }
 
-  Widget _buildControlBtn({
+  Widget _buildPlaceholder({required IconData icon, required String label}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 80, color: Colors.white38),
+          const SizedBox(height: 16),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white70),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildControlButton({
+    required Key key,
+    required String tooltip,
     required IconData icon,
     required Color color,
-    required Color bgColor,
-    required VoidCallback onTap,
-    double scale = 1.0,
+    required Color backgroundColor,
+    required VoidCallback onPressed,
   }) {
-    return Transform.scale(
-      scale: scale,
-      child: GestureDetector(
-        onTap: onTap,
-        child: CircleAvatar(
-          radius: 24,
-          backgroundColor: bgColor,
-          child: Icon(icon, color: color),
-        ),
+    return IconButton(
+      key: key,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      style: IconButton.styleFrom(
+        fixedSize: const Size(48, 48),
+        backgroundColor: backgroundColor,
+        foregroundColor: color,
       ),
+      icon: Icon(icon),
     );
   }
 }

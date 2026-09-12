@@ -1,9 +1,33 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http_parser/http_parser.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:mediq_app/src/features/chat/data/ai_pdf_attachment.dart';
 import 'package:mediq_app/src/features/lab/data/lab_result_model.dart';
+
+@immutable
+class AiChatContinuation {
+  final String summaryId;
+  final String sourceUpdatedAt;
+
+  const AiChatContinuation({
+    required this.summaryId,
+    required this.sourceUpdatedAt,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      other is AiChatContinuation &&
+      other.summaryId == summaryId &&
+      other.sourceUpdatedAt == sourceUpdatedAt;
+
+  @override
+  int get hashCode => Object.hash(summaryId, sourceUpdatedAt);
+}
 
 // 1. STATE
 class AiChatState {
@@ -25,11 +49,25 @@ class AiChatState {
 class AiChatController extends StateNotifier<AiChatState> {
   final Dio _dio;
   final String subscriptionTier; // "free", "premium", or "family"
+  final AiChatContinuation? continuation;
   String? _conversationMemory;
   final List<String> _unsummarizedTurns = [];
   int _requestSequence = 0;
+  String? _pendingSaveRequestId;
 
-  AiChatController(this._dio, this.subscriptionTier) : super(AiChatState());
+  AiChatController(this._dio, this.subscriptionTier, this.continuation)
+      : super(AiChatState());
+
+  String? get sourceSummaryId => continuation?.summaryId;
+  bool get hasPaidContinuity =>
+      {'premium', 'family'}.contains(subscriptionTier);
+
+  Map<String, dynamic> get _continuationRequestFields => {
+        if (continuation != null) ...{
+          'source_summary_id': continuation!.summaryId,
+          'source_summary_updated_at': continuation!.sourceUpdatedAt,
+        },
+      };
 
   Future<bool> hasActiveConsent() async {
     final response = await _dio.get('/api/v1/ai/consent/status');
@@ -41,15 +79,16 @@ class AiChatController extends StateNotifier<AiChatState> {
     return response.data['consent_granted'] == true;
   }
 
-  List<Map<String, dynamic>> _recentGeminiHistory({String? excludeId}) {
+  List<Map<String, dynamic>> _recentGeminiHistory(
+      {String? excludeId, int maxMessages = 10}) {
     final eligible = state.messages.where((message) {
       if (message['role'] == 'system') return false;
       if (excludeId != null && message['id'] == excludeId) return false;
       return message['role'] == 'user' || message['role'] == 'ai';
     }).toList();
 
-    final recent = eligible.length > 10
-        ? eligible.sublist(eligible.length - 10)
+    final recent = eligible.length > maxMessages
+        ? eligible.sublist(eligible.length - maxMessages)
         : eligible;
 
     return recent
@@ -65,6 +104,17 @@ class AiChatController extends StateNotifier<AiChatState> {
     return _unsummarizedTurns.take(_unsummarizedTurns.length - 5).join('\n\n');
   }
 
+  List<Map<String, String>> _saveConversationTurns() {
+    return state.messages
+        .where(
+            (message) => message['role'] == 'user' || message['role'] == 'ai')
+        .map((message) => {
+              'role': message['role'] == 'user' ? 'user' : 'assistant',
+              'text': (message['message'] ?? '').toString(),
+            })
+        .toList();
+  }
+
   String _nextRequestId() {
     _requestSequence += 1;
     return 'ai-${DateTime.now().microsecondsSinceEpoch}-$_requestSequence';
@@ -73,46 +123,82 @@ class AiChatController extends StateNotifier<AiChatState> {
   Future<void> sendMessage(String text,
       {String? imageUrl,
       String? imagePublicId,
+      AiPdfAttachment? document,
       String language = 'English'}) async {
     if (state.isLoading) return;
-    if (text.trim().isEmpty && imageUrl == null) return;
+    if (imageUrl != null && document != null) return;
+    if (text.trim().isEmpty && imageUrl == null && document == null) return;
+    _pendingSaveRequestId = null;
 
-    final tempId = DateTime.now().millisecondsSinceEpoch.toString();
+    final effectiveText = text.trim().isNotEmpty
+        ? text.trim()
+        : document != null
+            ? 'Analyse and explain this PDF document.'
+            : text;
+
     final requestId = _nextRequestId();
+    final tempId = requestId;
     final userMsg = {
       'id': tempId,
       'role': 'user',
-      'message': text,
+      'message': effectiveText,
       'image': imageUrl,
+      'documentName': document?.name,
       'isSending': true
     };
     state =
         state.copyWith(messages: [...state.messages, userMsg], isLoading: true);
 
     try {
-      // --- PREPARE HISTORY (Premium Only) ---
-      final hasSessionMemory = {'premium', 'family'}.contains(subscriptionTier);
-      final history = hasSessionMemory
-          ? _recentGeminiHistory(excludeId: tempId)
-          : <Map<String, dynamic>>[];
+      // Free keeps shallow session history; paid tiers also receive rolling memory.
+      final hasSessionMemory = hasPaidContinuity;
+      final history = _recentGeminiHistory(
+        excludeId: tempId,
+        maxMessages: hasSessionMemory ? 10 : 4,
+      );
       final shouldUpdateMemory =
           hasSessionMemory && _unsummarizedTurns.length >= 7;
       final olderTurnsLeavingWindow =
           shouldUpdateMemory ? _olderUnsummarizedTurns() : null;
 
       // Connects to your backend
-      final response = await _dio.post('/api/v1/chat/analyze',
+      final requestData = {
+        "message": effectiveText,
+        "history": history,
+        "language": language,
+        if (hasSessionMemory) ...{
+          "conversation_memory": _conversationMemory,
+          "memory_source": olderTurnsLeavingWindow,
+          "update_memory": shouldUpdateMemory,
+        },
+        ..._continuationRequestFields,
+      };
+      late final Response<dynamic> response;
+      if (document != null) {
+        response = await _dio.post(
+          '/api/v1/chat/analyze-document',
+          data: FormData.fromMap({
+            ...requestData,
+            'history': jsonEncode(history),
+            'file': MultipartFile.fromBytes(
+              document.bytes,
+              filename: document.name,
+              contentType: MediaType('application', 'pdf'),
+            ),
+          }),
+          options: Options(headers: {'X-AI-Request-ID': requestId}),
+        );
+      } else {
+        response = await _dio.post(
+          '/api/v1/chat/analyze',
           data: {
-            "message": text,
+            ...requestData,
             "image_url": imageUrl,
             "image_public_id": imagePublicId,
-            "history": history, // Send history (empty if free)
-            "language": language, // Send selected language
-            "conversation_memory": _conversationMemory,
-            "memory_source": olderTurnsLeavingWindow,
-            "update_memory": shouldUpdateMemory,
           },
-          options: Options(headers: {'X-AI-Request-ID': requestId}));
+          options: Options(headers: {'X-AI-Request-ID': requestId}),
+        );
+      }
 
       final aiMsg = {'role': 'ai', 'message': response.data['response']};
       final memoryUpdate = response.data['memory_summary'] as String?;
@@ -130,7 +216,7 @@ class AiChatController extends StateNotifier<AiChatState> {
         _unsummarizedTurns.clear();
       } else if (hasSessionMemory) {
         _unsummarizedTurns.add(
-          'User: $text\nAssistant: ${response.data['response']}',
+          'User: $effectiveText\nAssistant: ${response.data['response']}',
         );
       }
 
@@ -154,8 +240,24 @@ class AiChatController extends StateNotifier<AiChatState> {
     } on DioException catch (e) {
       String errorMessage = "Connection error. Please try again.";
 
-      // Extract specific error from backend (e.g. Free Tier Limit)
-      if (e.response != null && e.response?.data != null) {
+      // PDF/provider failures get a stable message. Quota and ownership
+      // responses remain actionable without exposing implementation details.
+      if (document != null) {
+        final status = e.response?.statusCode;
+        if (status == 413) {
+          errorMessage = 'PDFs must be 8 MB or smaller.';
+        } else if (status == 429) {
+          final data = e.response?.data;
+          errorMessage = data is Map && data['detail'] is String
+              ? data['detail'] as String
+              : 'Your AI attachment limit has been reached.';
+        } else if (status == 404 && sourceSummaryId != null) {
+          errorMessage = 'This saved conversation is no longer available.';
+        } else {
+          errorMessage =
+              'This PDF could not be processed. Please choose a valid PDF and try again.';
+        }
+      } else if (e.response != null && e.response?.data != null) {
         final data = e.response?.data;
         if (data is Map && data.containsKey('detail')) {
           errorMessage = data['detail'];
@@ -177,7 +279,7 @@ class AiChatController extends StateNotifier<AiChatState> {
       state = state
           .copyWith(messages: [...newMessages, errorMsg], isLoading: false);
     } catch (e) {
-      debugPrint('[AiChatController] sendMessage error: $e');
+      debugPrint('[AiChatController] AI request failed.');
       final errorMsg = {
         'role': 'system',
         'message': 'AI service is temporarily unavailable. Please try again.'
@@ -229,6 +331,7 @@ class AiChatController extends StateNotifier<AiChatState> {
 
   Future<void> sendLabResult(LabAnalysisResponse result) async {
     if (state.isLoading) return;
+    _pendingSaveRequestId = null;
 
     // 1. Create a "Medical Card" message for the user's UI
     final userMsg = {
@@ -250,10 +353,15 @@ class AiChatController extends StateNotifier<AiChatState> {
       final response = await _dio.post('/api/v1/chat/analyze',
           data: {
             "message": hiddenPrompt,
-            "history": _recentGeminiHistory(),
-            "conversation_memory": _conversationMemory,
-            "memory_source": _olderUnsummarizedTurns(),
-            "update_memory": false,
+            "history": _recentGeminiHistory(
+              maxMessages: hasPaidContinuity ? 10 : 4,
+            ),
+            if (hasPaidContinuity) ...{
+              "conversation_memory": _conversationMemory,
+              "memory_source": _olderUnsummarizedTurns(),
+              "update_memory": false,
+            },
+            ..._continuationRequestFields,
           },
           options: Options(headers: {'X-AI-Request-ID': _nextRequestId()}));
 
@@ -296,41 +404,35 @@ INSTRUCTION: Analyze these results. If any values are abnormal (Positive/High), 
 """;
   }
 
-  /// Generates an AI summary of the session and saves it to the Health Vault.
+  /// Sends typed ephemeral turns to the backend-owned Vault summary operation.
   /// Returns [true] if the save was successful, [false] otherwise.
   Future<bool> saveSummary() async {
     if (!mounted) return false;
+    if (!hasPaidContinuity) return false;
     if (state.isLoading) return false;
     state = state.copyWith(isLoading: true);
 
     try {
-      // 1. Ask the AI to produce a structured medical summary
-      final response = await _dio.post('/api/v1/chat/analyze',
-          data: {
-            "message":
-                "Summarize this entire conversation into a structured medical note. "
-                    "Sections: 1. Patient Symptoms, 2. Lab Results (if any), "
-                    "3. Recommended Actions. Keep it professional.",
-            "history": _recentGeminiHistory(),
-            "conversation_memory": _conversationMemory,
-            "memory_source": _olderUnsummarizedTurns(),
-            "update_memory": false,
+      _pendingSaveRequestId ??= _nextRequestId();
+      await _dio.post(
+        '/api/v1/vault/ai-summary/save',
+        data: {
+          'turns': _saveConversationTurns(),
+          if (continuation != null) ...{
+            'source_summary_id': continuation!.summaryId,
+            'source_updated_at': continuation!.sourceUpdatedAt,
           },
-          options: Options(headers: {'X-AI-Request-ID': _nextRequestId()}));
-
-      final summaryText = response.data['response'] as String;
-
-      // 2. POST to Health Vault
-      await _dio.post('/api/v1/vault/ai-summary', data: {
-        "topic": "AI Symptom Analysis",
-        "summary_text": summaryText,
-      });
+        },
+        options: Options(
+          headers: {'X-AI-Request-ID': _pendingSaveRequestId},
+        ),
+      );
 
       if (!mounted) return false;
       state = state.copyWith(isLoading: false);
       return true;
     } catch (e) {
-      debugPrint("[AiChatController] saveSummary error: $e");
+      debugPrint('[AiChatController] summary save failed.');
       if (!mounted) return false;
       state = state.copyWith(isLoading: false);
       return false;
@@ -340,13 +442,14 @@ INSTRUCTION: Analyze these results. If any values are abnormal (Positive/High), 
 
 // 3. PROVIDER
 // autoDispose ensures the session is wiped when user leaves the screen
-final aiChatControllerProvider =
-    StateNotifierProvider.autoDispose<AiChatController, AiChatState>((ref) {
+final aiChatControllerProvider = StateNotifierProvider.autoDispose
+    .family<AiChatController, AiChatState, AiChatContinuation?>(
+        (ref, continuation) {
   final dio = ref.watch(dioProvider);
 
   // Get User Tier (default to 'free' if loading)
   final userAsync = ref.watch(userProvider);
   final tier = userAsync.value?.subscriptionTier ?? 'free';
 
-  return AiChatController(dio, tier);
+  return AiChatController(dio, tier, continuation);
 });

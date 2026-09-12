@@ -4,7 +4,9 @@ import 'package:go_router/go_router.dart';
 import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/auth/presentation/auth_controller.dart';
+import 'package:mediq_app/src/features/auth/presentation/profile_recovery_view.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:mediq_app/src/features/profile/presentation/support_contact_sheet.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
@@ -30,16 +32,24 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         centerTitle: false,
       ),
       body: userAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (err, stack) => Center(child: Text("Error: $err")),
+        loading: () => const AuthenticatedProfileRecoveryView(),
+        error: (err, stack) => AuthenticatedProfileRecoveryView(error: err),
         data: (user) {
-          final String firstName = user?.firstName ?? "";
-          final String lastName = user?.lastName ?? "";
-          final String email = user?.email ?? "";
-          final initials = firstName.isNotEmpty
-              ? "${firstName[0]}${lastName.isNotEmpty ? lastName[0] : ''}"
-                  .toUpperCase()
-              : "?";
+          if (user == null) {
+            return AuthenticatedProfileRecoveryView(
+              error: StateError('Authenticated profile was unavailable.'),
+            );
+          }
+          final firstName = user.firstName;
+          final lastName = user.lastName;
+          final email = user.email;
+          final displayName = '$firstName $lastName'.trim();
+          final nameParts = displayName.split(RegExp(r'\s+'));
+          final initials = nameParts
+              .where((part) => part.isNotEmpty)
+              .take(2)
+              .map((part) => part[0].toUpperCase())
+              .join();
 
           return SingleChildScrollView(
             padding: const EdgeInsets.all(24.0),
@@ -51,19 +61,31 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       CircleAvatar(
                         radius: 50,
                         backgroundColor: const Color(0xFF4A90E2),
-                        backgroundImage: (user?.imageUrl != null && user!.imageUrl.isNotEmpty)
-                            ? NetworkImage(user.imageUrl)
-                            : null,
-                        child: (user?.imageUrl == null || user!.imageUrl.isEmpty)
-                            ? Text(initials,
-                                style: const TextStyle(
-                                    fontSize: 32,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white))
-                            : null,
+                        child: user.imageUrl.isNotEmpty
+                            ? ClipOval(
+                                child: Image.network(
+                                  user.imageUrl,
+                                  width: 100,
+                                  height: 100,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => const Icon(
+                                    Icons.person_outline,
+                                    size: 38,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              )
+                            : initials.isNotEmpty
+                                ? Text(initials,
+                                    style: const TextStyle(
+                                        fontSize: 32,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white))
+                                : const Icon(Icons.person_outline,
+                                    size: 38, color: Colors.white),
                       ),
                       const SizedBox(height: 16),
-                      Text("$firstName $lastName",
+                      Text(displayName,
                           style: theme.textTheme.displayMedium
                               ?.copyWith(fontSize: 22)),
                       Text(email, style: theme.textTheme.bodyMedium),
@@ -74,7 +96,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 // ── Main menu ──────────────────────────────────────────────
                 _buildProfileItem(context,
                     icon: Icons.edit_outlined, text: "Edit Profile", onTap: () {
-                  if (user != null) context.push('/edit_profile', extra: user);
+                  context.push('/edit_profile', extra: user);
                 }),
                 _buildProfileItem(context,
                     icon: Icons.history,
@@ -82,20 +104,19 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     onTap: () => context.push('/medical_history')),
                 _buildProfileItem(context,
                     icon: Icons.star_border,
-                    text: user == null || user.subscriptionTier == 'free'
+                    text: user.subscriptionTier == 'free'
                         ? "Subscription"
                         : "Manage Subscription",
-                    iconColor: Colors.amber,
-                    onTap: () {
-                      if (user == null || user.subscriptionTier == 'free') {
-                        context.push('/subscription');
-                      } else {
-                        // Pass the full User so the modal can differentiate
-                        // Premium / Family Host / Family Dependent.
-                        _showManageSubscriptionModal(context, ref, user);
-                      }
-                    }),
-                if (user != null && user.subscriptionTier == 'family')
+                    iconColor: Colors.amber, onTap: () {
+                  if (user.subscriptionTier == 'free') {
+                    context.push('/subscription');
+                  } else {
+                    // Pass the full User so the modal can differentiate
+                    // Premium / Family Host / Family Dependent.
+                    _showManageSubscriptionModal(context, ref, user);
+                  }
+                }),
+                if (user.subscriptionTier == 'family')
                   _buildProfileItem(context,
                       icon: Icons.family_restroom,
                       text: "Manage Family Plan",
@@ -115,16 +136,18 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   alignment: Alignment.centerLeft,
                   child: Text(
                     "Support",
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.grey),
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey),
                   ),
                 ),
                 const SizedBox(height: 12),
                 _buildProfileItem(context,
                     icon: Icons.support_agent,
-                    text: "Contact Support",
-                    onTap: () {
-                      _showSupportModal(context, ref);
-                    }),
+                    text: "Contact Support", onTap: () {
+                  _showSupportModal(context, ref);
+                }),
                 const Divider(height: 32),
                 // ── Logout ─────────────────────────────────────────────────
                 _buildProfileItem(context,
@@ -208,11 +231,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   //            Title : "MDQ+ Family Plan (Dependent)"
   //            Footer: "Billing is managed by your Family Host." (no cancel)
 
-  void _showManageSubscriptionModal(BuildContext context, WidgetRef ref, User user) {
+  void _showManageSubscriptionModal(
+      BuildContext context, WidgetRef ref, User user) {
     // ── Derive the three states ───────────────────────────────────────────────
-    final bool isFamilyTier  = user.subscriptionTier == 'family';
-    final bool isFamilyHost  = isFamilyTier && user.isFamilyAdmin;
-    final bool isFamilyDep   = isFamilyTier && !user.isFamilyAdmin;
+    final bool isFamilyTier = user.subscriptionTier == 'family';
+    final bool isFamilyHost = isFamilyTier && user.isFamilyAdmin;
+    final bool isFamilyDep = isFamilyTier && !user.isFamilyAdmin;
 
     // Plan label: precise enough to tell users exactly what they are on.
     final String planLabel = isFamilyHost
@@ -239,7 +263,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             ? 'Dependent · Shared access'
             : null;
 
-    final bool isCancelled = !isFamilyDep && !user.autoRenew && (user.subscriptionTier == 'premium' || user.subscriptionTier == 'family');
+    final bool isCancelled = !isFamilyDep &&
+        !user.autoRenew &&
+        (user.subscriptionTier == 'premium' ||
+            user.subscriptionTier == 'family');
 
     // Only active hosts and solo-premium users can cancel.
     final bool canCancel = !isFamilyDep && !isCancelled;
@@ -256,354 +283,361 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         return StatefulBuilder(
           builder: (sheetCtx, setSheetState) {
             return Padding(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 36),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // ── Sheet header ────────────────────────────────────────────
-              Text('Manage Subscription',
-                  style: Theme.of(sheetCtx).textTheme.titleLarge),
-              const SizedBox(height: 16),
+              padding: const EdgeInsets.fromLTRB(24, 24, 24, 36),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // ── Sheet header ────────────────────────────────────────────
+                  Text('Manage Subscription',
+                      style: Theme.of(sheetCtx).textTheme.titleLarge),
+                  const SizedBox(height: 16),
 
-              // ── Plan info card ──────────────────────────────────────────
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: accentColor.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: accentColor.withOpacity(0.35)),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      isFamilyTier ? Icons.family_restroom : Icons.verified,
-                      color: accentColor,
+                  // ── Plan info card ──────────────────────────────────────────
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: accentColor.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: accentColor.withOpacity(0.35)),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Plan name
-                          Text(
-                            planLabel,
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                              color: accentColor,
-                            ),
-                          ),
-                          // Role badge (only for family tiers)
-                          if (roleBadge != null) ...[
-                            const SizedBox(height: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: accentColor.withOpacity(0.12),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Text(
-                                roleBadge,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          isFamilyTier ? Icons.family_restroom : Icons.verified,
+                          color: accentColor,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Plan name
+                              Text(
+                                planLabel,
                                 style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 15,
                                   color: accentColor,
                                 ),
                               ),
+                              // Role badge (only for family tiers)
+                              if (roleBadge != null) ...[
+                                const SizedBox(height: 4),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: accentColor.withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    roleBadge,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: accentColor,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 6),
+                              Text(
+                                'Your plan is currently active.',
+                                style: TextStyle(
+                                    color: Colors.grey[600], fontSize: 13),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // ── State C: dependent info notice (no cancel button) ────────
+                  if (isFamilyDep)
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(10),
+                        border:
+                            Border.all(color: Colors.grey.withOpacity(0.25)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.info_outline_rounded,
+                              size: 18, color: Colors.grey),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              'Billing is managed by your Family Host. '
+                              'Contact them to make changes to the plan.',
+                              style:
+                                  TextStyle(fontSize: 13, color: Colors.grey),
                             ),
-                          ],
-                          const SizedBox(height: 6),
-                          Text(
-                            'Your plan is currently active.',
-                            style: TextStyle(
-                                color: Colors.grey[600], fontSize: 13),
                           ),
                         ],
                       ),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
 
-              // ── State C: dependent info notice (no cancel button) ────────
-              if (isFamilyDep)
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.grey.withOpacity(0.25)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.info_outline_rounded,
-                          size: 18, color: Colors.grey),
-                      const SizedBox(width: 10),
-                      const Expanded(
-                        child: Text(
-                          'Billing is managed by your Family Host. '
-                          'Contact them to make changes to the plan.',
-                          style: TextStyle(fontSize: 13, color: Colors.grey),
-                        ),
+                  // ── Cancelled state ──────────────────────────────────────────
+                  if (isCancelled)
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: cancelledBgColor,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: cancelledBorderColor),
                       ),
-                    ],
-                  ),
-                ),
-
-              // ── Cancelled state ──────────────────────────────────────────
-              if (isCancelled)
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: cancelledBgColor,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: cancelledBorderColor),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Icon(Icons.info_outline_rounded,
-                              size: 18, color: Color(0xFF6B7280)),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              "Subscription Cancelled. Access remains until ${user.subscriptionExpiry?.split('T')[0] ?? 'the end of your billing cycle'}.",
-                              style: TextStyle(
-                                  fontSize: 13, color: cancelledTextColor),
-                            ),
+                          Row(
+                            children: [
+                              const Icon(Icons.info_outline_rounded,
+                                  size: 18, color: Color(0xFF6B7280)),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  "Subscription Cancelled. Access remains until ${user.subscriptionExpiry?.split('T')[0] ?? 'the end of your billing cycle'}.",
+                                  style: TextStyle(
+                                      fontSize: 13, color: cancelledTextColor),
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      TextButton(
-                        onPressed: isRestoring
-                            ? null
-                            : () async {
-                                final messenger =
-                                    ScaffoldMessenger.of(context);
-                                if ((user.paystackSubscriptionCode ?? '')
-                                    .trim()
-                                    .isEmpty) {
-                                  setSheetState(() {
-                                    restoreInlineError =
-                                        'Auto-renew cannot be restored automatically for this subscription. Please contact support.';
-                                  });
-                                  return;
-                                }
+                          const SizedBox(height: 8),
+                          TextButton(
+                            onPressed: isRestoring
+                                ? null
+                                : () async {
+                                    final messenger =
+                                        ScaffoldMessenger.of(context);
+                                    if ((user.paystackSubscriptionCode ?? '')
+                                        .trim()
+                                        .isEmpty) {
+                                      setSheetState(() {
+                                        restoreInlineError =
+                                            'Auto-renew cannot be restored automatically for this subscription. Please contact support.';
+                                      });
+                                      return;
+                                    }
 
-                                setSheetState(() {
-                                  isRestoring = true;
-                                  restoreInlineError = null;
-                                });
-                                try {
-                                  await ref
-                                      .read(authControllerProvider.notifier)
-                                      .restoreSubscription();
-                                  ref.invalidate(userProvider);
+                                    setSheetState(() {
+                                      isRestoring = true;
+                                      restoreInlineError = null;
+                                    });
+                                    try {
+                                      await ref
+                                          .read(authControllerProvider.notifier)
+                                          .restoreSubscription();
+                                      ref.invalidate(userProvider);
 
-                                  if (sheetCtx.mounted) {
-                                    Navigator.of(sheetCtx).pop();
-                                  }
-                                  if (!context.mounted) return;
-                                  messenger.showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                          'Subscription auto-renew restored!'),
-                                      backgroundColor: Colors.green,
-                                    ),
-                                  );
-                                } catch (e) {
-                                  if (sheetCtx.mounted) {
-                                    setSheetState(() => isRestoring = false);
-                                  }
-                                  if (!context.mounted) return;
-                                  messenger.showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                          UIErrorFormatter.getMessage(e)),
-                                      backgroundColor: Colors.red,
-                                    ),
-                                  );
-                                }
-                              },
-                        style: TextButton.styleFrom(
-                          padding: EdgeInsets.zero,
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          foregroundColor: cancelledActionColor,
-                        ),
-                        child: isRestoring
-                            ? Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  SizedBox(
-                                    width: 14,
-                                    height: 14,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: cancelledActionColor,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Restoring...',
+                                      if (sheetCtx.mounted) {
+                                        Navigator.of(sheetCtx).pop();
+                                      }
+                                      if (!context.mounted) return;
+                                      messenger.showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                              'Subscription auto-renew restored!'),
+                                          backgroundColor: Colors.green,
+                                        ),
+                                      );
+                                    } catch (e) {
+                                      if (sheetCtx.mounted) {
+                                        setSheetState(
+                                            () => isRestoring = false);
+                                      }
+                                      if (!context.mounted) return;
+                                      messenger.showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                              UIErrorFormatter.getMessage(e)),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  },
+                            style: TextButton.styleFrom(
+                              padding: EdgeInsets.zero,
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              foregroundColor: cancelledActionColor,
+                            ),
+                            child: isRestoring
+                                ? Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: cancelledActionColor,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Restoring...',
+                                        style: TextStyle(
+                                          color: cancelledActionColor,
+                                          decoration: TextDecoration.underline,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                : Text(
+                                    'Restore Subscription',
                                     style: TextStyle(
                                       color: cancelledActionColor,
                                       decoration: TextDecoration.underline,
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),
-                                ],
-                              )
-                            : Text(
-                                'Restore Subscription',
-                                style: TextStyle(
-                                  color: cancelledActionColor,
-                                  decoration: TextDecoration.underline,
-                                  fontWeight: FontWeight.w600,
+                          ),
+                          if (restoreInlineError != null) ...[
+                            const SizedBox(height: 8),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color:
+                                    colorScheme.errorContainer.withOpacity(0.7),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: colorScheme.error.withOpacity(0.25),
                                 ),
                               ),
-                        ),
-                      if (restoreInlineError != null) ...[
-                        const SizedBox(height: 8),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: colorScheme.errorContainer.withOpacity(0.7),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: colorScheme.error.withOpacity(0.25),
-                            ),
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Icon(
-                                Icons.info_outline_rounded,
-                                size: 16,
-                                color: colorScheme.onErrorContainer,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  restoreInlineError!,
-                                  style: TextStyle(
-                                    fontSize: 12,
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(
+                                    Icons.info_outline_rounded,
+                                    size: 16,
                                     color: colorScheme.onErrorContainer,
-                                    height: 1.3,
                                   ),
-                                ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      restoreInlineError!,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: colorScheme.onErrorContainer,
+                                        height: 1.3,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-
-              // ── States A & B: cancel button ──────────────────────────────
-              if (canCancel)
-                OutlinedButton.icon(
-                  icon: isCancelling
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.red,
-                          ),
-                        )
-                      : const Icon(Icons.cancel_outlined, color: Colors.red),
-                  label: Text(
-                    isCancelling ? 'Cancelling...' : 'Cancel Subscription',
-                    style: const TextStyle(
-                        color: Colors.red, fontWeight: FontWeight.w600),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Colors.red),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                  ),
-                  onPressed: isCancelling
-                      ? null
-                      : () async {
-                    // Snapshot the messenger from the OUTER (ProfileScreen)
-                    // context before any pop. The sheet context (sheetCtx) will
-                    // be unmounted the moment we pop it, so we must not use it
-                    // for anything that runs asynchronously afterward.
-                    final messenger = ScaffoldMessenger.of(context);
-
-                    // Use the outer `context` (ProfileScreen – always mounted)
-                    // for the confirmation dialog.
-                    if (!context.mounted) return;
-                    final confirm = await showDialog<bool>(
-                      context: context,
-                      builder: (dialogCtx) => AlertDialog(
-                        title: const Text('Cancel Subscription'),
-                        content: const Text(
-                            'Are you sure you want to cancel your subscription? '
-                            'You will retain access to all premium features until '
-                            'your current billing cycle expires.'),
-                        actions: [
-                          TextButton(
-                            onPressed: () =>
-                                Navigator.of(dialogCtx).pop(false),
-                            child: const Text('No'),
-                          ),
-                          TextButton(
-                            onPressed: () =>
-                                Navigator.of(dialogCtx).pop(true),
-                            child: const Text('Yes',
-                                style: TextStyle(color: Colors.red)),
-                          ),
+                            ),
+                          ],
                         ],
                       ),
-                    );
+                    ),
 
-                    if (confirm != true) return;
-                    setSheetState(() => isCancelling = true);
+                  // ── States A & B: cancel button ──────────────────────────────
+                  if (canCancel)
+                    OutlinedButton.icon(
+                      icon: isCancelling
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.red,
+                              ),
+                            )
+                          : const Icon(Icons.cancel_outlined,
+                              color: Colors.red),
+                      label: Text(
+                        isCancelling ? 'Cancelling...' : 'Cancel Subscription',
+                        style: const TextStyle(
+                            color: Colors.red, fontWeight: FontWeight.w600),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.red),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                      onPressed: isCancelling
+                          ? null
+                          : () async {
+                              // Snapshot the messenger from the OUTER (ProfileScreen)
+                              // context before any pop. The sheet context (sheetCtx) will
+                              // be unmounted the moment we pop it, so we must not use it
+                              // for anything that runs asynchronously afterward.
+                              final messenger = ScaffoldMessenger.of(context);
 
-                    try {
-                      await ref
-                          .read(authControllerProvider.notifier)
-                          .cancelSubscription();
+                              // Use the outer `context` (ProfileScreen – always mounted)
+                              // for the confirmation dialog.
+                              if (!context.mounted) return;
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (dialogCtx) => AlertDialog(
+                                  title: const Text('Cancel Subscription'),
+                                  content: const Text(
+                                      'Are you sure you want to cancel your subscription? '
+                                      'You will retain access to all premium features until '
+                                      'your current billing cycle expires.'),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(dialogCtx).pop(false),
+                                      child: const Text('No'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(dialogCtx).pop(true),
+                                      child: const Text('Yes',
+                                          style: TextStyle(color: Colors.red)),
+                                    ),
+                                  ],
+                                ),
+                              );
 
-                      // Explicitly invalidate so ProfileScreen always rebuilds
-                      // with the downgraded tier, even if the controller's
-                      // internal invalidate was skipped due to Ref lifecycle.
-                      ref.invalidate(userProvider);
+                              if (confirm != true) return;
+                              setSheetState(() => isCancelling = true);
 
-                      if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
-                      messenger.showSnackBar(
-                        const SnackBar(
-                            content:
-                                Text('Subscription cancelled successfully'),
-                            backgroundColor: Colors.green),
-                      );
-                    } catch (e) {
-                      if (sheetCtx.mounted) {
-                        setSheetState(() => isCancelling = false);
-                      }
-                      messenger.showSnackBar(
-                        SnackBar(
-                            content: Text(UIErrorFormatter.getMessage(e)),
-                            backgroundColor: Colors.red),
-                      );
-                    }
-                  },
-                ),
-            ],
-          ),
-        );
+                              try {
+                                await ref
+                                    .read(authControllerProvider.notifier)
+                                    .cancelSubscription();
+
+                                // Explicitly invalidate so ProfileScreen always rebuilds
+                                // with the downgraded tier, even if the controller's
+                                // internal invalidate was skipped due to Ref lifecycle.
+                                ref.invalidate(userProvider);
+
+                                if (sheetCtx.mounted)
+                                  Navigator.of(sheetCtx).pop();
+                                messenger.showSnackBar(
+                                  const SnackBar(
+                                      content: Text(
+                                          'Subscription cancelled successfully'),
+                                      backgroundColor: Colors.green),
+                                );
+                              } catch (e) {
+                                if (sheetCtx.mounted) {
+                                  setSheetState(() => isCancelling = false);
+                                }
+                                messenger.showSnackBar(
+                                  SnackBar(
+                                      content:
+                                          Text(UIErrorFormatter.getMessage(e)),
+                                      backgroundColor: Colors.red),
+                                );
+                              }
+                            },
+                    ),
+                ],
+              ),
+            );
           },
         );
       },
@@ -612,100 +646,35 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
   // ── Contact Support modal ─────────────────────────────────────────────────
 
-  void _showSupportModal(BuildContext context, WidgetRef ref) {
-    final subjectController = TextEditingController();
-    final messageController = TextEditingController();
-    bool isLoading = false;
-
-    showModalBottomSheet(
+  Future<void> _showSupportModal(BuildContext context, WidgetRef ref) async {
+    final sent = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
-                left: 24,
-                right: 24,
-                top: 24,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text("Contact Support",
-                      style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: subjectController,
-                    decoration: const InputDecoration(
-                        labelText: "Subject",
-                        border: OutlineInputBorder()),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: messageController,
-                    minLines: 3,
-                    maxLines: 5,
-                    decoration: const InputDecoration(
-                        labelText: "Message",
-                        border: OutlineInputBorder()),
-                  ),
-                  const SizedBox(height: 24),
-                  ElevatedButton(
-                    onPressed: isLoading
-                        ? null
-                        : () async {
-                            final subject = subjectController.text.trim();
-                            final message = messageController.text.trim();
-                            if (subject.isEmpty || message.isEmpty) return;
-
-                            setState(() => isLoading = true);
-                            try {
-                              await ref
-                                  .read(authControllerProvider.notifier)
-                                  .sendSupportMessage(
-                                      subject: subject, message: message);
-                              if (context.mounted) {
-                                Navigator.pop(context);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                      content: Text(
-                                          "Message sent successfully. We will get back to you soon."),
-                                      backgroundColor: Colors.green),
-                                );
-                              }
-                            } catch (e) {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                      content: Text(e.toString()),
-                                      backgroundColor: Colors.red),
-                                );
-                              }
-                            } finally {
-                              if (context.mounted) {
-                                setState(() => isLoading = false);
-                              }
-                            }
-                          },
-                    child: isLoading
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Text("Send Message"),
-                  ),
-                  const SizedBox(height: 24),
-                ],
-              ),
-            );
-          },
-        );
-      },
+      builder: (sheetContext) => SupportContactSheet(
+        onSend: ({
+          required requestId,
+          required subject,
+          required message,
+        }) =>
+            ref.read(authControllerProvider.notifier).sendSupportMessage(
+                  requestId: requestId,
+                  subject: subject,
+                  message: message,
+                ),
+      ),
     );
+
+    if (sent == true && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Message sent successfully. We will get back to you soon.',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
   }
 }

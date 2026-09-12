@@ -2,10 +2,11 @@
 FailedWebhook model — Dead Letter Queue (DLQ)
 =============================================
 When a webhook event passes HMAC verification but its database update
-subsequently fails (e.g. record not found, constraint violation), the
-raw payload is persisted here so the event is never silently dropped.
+subsequently fails (e.g. record not found, constraint violation), a minimal
+sanitised event summary is persisted here for operational diagnosis.
 
-An ops engineer or automated retry job can inspect / replay these rows.
+An ops engineer can inspect these rows and correlate them with provider
+redelivery or a fresh, independently verified transaction lookup.
 """
 
 from datetime import datetime
@@ -27,10 +28,11 @@ class FailedWebhook(Base):
     # The raw Paystack event string, e.g. "charge.success".
     event_type = Column(Text, nullable=False)
 
-    # Full JSON payload stored as text (JSONB on Postgres via cast in patch).
+    # Legacy column name retained for schema compatibility. New writes contain
+    # only safe identifiers, never the full webhook payload.
     payload = Column(Text, nullable=False)
 
-    # The Python exception message that caused the failure.
+    # Bounded operational error classification, not an exception or payload.
     error_message = Column(Text, nullable=False)
 
     # Auto-stamped on insert; never updated.

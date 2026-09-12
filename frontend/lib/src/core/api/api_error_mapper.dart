@@ -37,6 +37,8 @@ class ApiErrorMapper {
     final detail = _extractSafeDetail(error.response?.data);
 
     switch (statusCode) {
+      case 401:
+        return 'We could not authorize this request. Please try again.';
       case 400:
         return detail ?? 'Invalid request. Please try again.';
       case 403:
@@ -68,8 +70,7 @@ class ApiErrorMapper {
     }
 
     final trimmedDetail = detail.trim();
-    if (trimmedDetail.isEmpty ||
-        _unsafeDetailPattern.hasMatch(trimmedDetail)) {
+    if (trimmedDetail.isEmpty || _unsafeDetailPattern.hasMatch(trimmedDetail)) {
       return null;
     }
 

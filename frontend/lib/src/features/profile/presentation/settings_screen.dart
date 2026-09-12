@@ -1,9 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:mediq_app/src/core/services/notification_service.dart';
 import 'package:mediq_app/src/features/auth/presentation/auth_controller.dart';
+import 'package:mediq_app/src/features/auth/presentation/profile_recovery_view.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import '../../../shared/presentation/widgets/delete_account_dialog.dart';
+
+const emergencySmsConsentCopy =
+    'When enabled, tapping Emergency may automatically send your name and '
+    'current emergency location/address to your saved Next of Kin.';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -14,28 +22,20 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   // ── General settings state ────────────────────────────────────────────────
-  late bool _isDarkMode;
-  late bool _notifications;
-  late bool _emailUpdates;
+  bool _isDarkMode = false;
+  bool _notifications = true;
+  bool _emailUpdates = false;
+  String? _hydratedUserId;
 
   // ── Emergency / NOK state ─────────────────────────────────────────────────
-  late TextEditingController _nokController;
-  bool _smsEnabled  = false;
-  bool _nokSaving   = false;
-  bool _nokInitialized = false;
+  late final TextEditingController _nokController;
+  bool _smsEnabled = false;
+  bool _nokSaving = false;
 
   @override
   void initState() {
     super.initState();
-    final user = ref.read(userProvider).value;
-    _isDarkMode   = (user?.settingsTheme == 'dark');
-    _notifications = user?.settingsNotifications ?? true;
-    _emailUpdates  = user?.settingsEmailUpdates ?? false;
-
-    // Initialize controller with persisted value from the server
-    _nokController = TextEditingController(text: user?.kinPhone ?? '');
-    _smsEnabled    = user?.emergencySmsEnabled ?? false;
-    _nokInitialized = true;
+    _nokController = TextEditingController();
   }
 
   @override
@@ -46,30 +46,67 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  bool get _isPremium {
-    final user = ref.read(userProvider).value;
-    return user?.isPremium ?? false;
+  bool _hasActivePaidPlan(User user) {
+    if (!user.isPremium) return false;
+    final expiry = DateTime.tryParse(user.subscriptionExpiry ?? '');
+    return expiry == null || !expiry.toUtc().isBefore(DateTime.now().toUtc());
+  }
+
+  void _hydrate(User user) {
+    if (!mounted || _hydratedUserId == user.id.toString()) return;
+    setState(() {
+      _hydratedUserId = user.id.toString();
+      _isDarkMode = user.settingsTheme == 'dark';
+      _notifications = user.settingsNotifications;
+      _emailUpdates = user.settingsEmailUpdates;
+      _nokController.text = user.kinPhone ?? '';
+      _smsEnabled = user.emergencySmsEnabled;
+    });
   }
 
   /// Saves general toggles (theme / notifications / email)
-  Future<void> _updateSetting(String key, bool value) async {
+  Future<bool> _updateSetting(String key, bool value) async {
     setState(() {
-      if (key == 'theme')  _isDarkMode   = value;
+      if (key == 'theme') _isDarkMode = value;
       if (key == 'notify') _notifications = value;
-      if (key == 'email')  _emailUpdates  = value;
+      if (key == 'email') _emailUpdates = value;
     });
     try {
       await ref.read(authControllerProvider.notifier).updateProfile(
-            settingsTheme:         key == 'theme'  ? (value ? 'dark' : 'light') : null,
+            settingsTheme: key == 'theme' ? (value ? 'dark' : 'light') : null,
             settingsNotifications: key == 'notify' ? value : null,
-            settingsEmailUpdates:  key == 'email'  ? value : null,
+            settingsEmailUpdates: key == 'email' ? value : null,
           );
+      return true;
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Failed to save setting.')),
         );
       }
+      return false;
+    }
+  }
+
+  Future<void> _updatePushSetting(bool value) async {
+    final saved = await _updateSetting('notify', value);
+    if (!saved) return;
+    final service = ref.read(notificationServiceProvider);
+    if (!value) {
+      service.disablePush();
+      return;
+    }
+    final permission = await service.enablePush();
+    if (permission == NotificationPermissionAvailability.denied && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Notifications are blocked in device settings.'),
+          action: SnackBarAction(
+            label: 'Settings',
+            onPressed: openAppSettings,
+          ),
+        ),
+      );
     }
   }
 
@@ -90,8 +127,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     setState(() => _nokSaving = true);
     try {
       await ref.read(authControllerProvider.notifier).updateProfile(
-            kinPhone:             phone,
-            emergencySmsEnabled:  _smsEnabled,
+            kinPhone: phone,
+            emergencySmsEnabled: _smsEnabled,
           );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -121,9 +158,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme  = Theme.of(context);
-    final isPremium = _isPremium;
-    final user = ref.read(userProvider).value;
+    final theme = Theme.of(context);
+    final userAsync = ref.watch(userProvider);
+    final user = userAsync.valueOrNull;
+    final notificationPermission = ref.watch(notificationPermissionProvider);
+
+    if (user != null && _hydratedUserId != user.id.toString()) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _hydrate(user));
+    }
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
@@ -136,36 +178,50 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           onPressed: () => context.pop(),
         ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _buildSectionHeader('Preferences'),
-          _buildSwitchTile('Dark Mode', _isDarkMode,
-              (v) => _updateSetting('theme', v), Icons.dark_mode_outlined),
-          const SizedBox(height: 8),
-          _buildSwitchTile('Push Notifications', _notifications,
-              (v) => _updateSetting('notify', v), Icons.notifications_outlined),
-          const SizedBox(height: 8),
-          _buildSwitchTile('Email Updates', _emailUpdates,
-              (v) => _updateSetting('email', v), Icons.email_outlined),
-
-          const SizedBox(height: 24),
-
-          // ── Emergency Protocol section ──────────────────────────────────
-          if (user?.role == 'patient') ...[
-            _buildSectionHeader('Emergency Protocol'),
-            _buildEmergencySection(theme, isPremium),
-            const SizedBox(height: 24),
-          ],
-
-          _buildSectionHeader('Account'),
-          _buildActionTile('Delete Account', Icons.delete_forever, () {
-            showDialog(
-              context: context,
-              builder: (_) => const DeleteAccountDialog(),
+      body: userAsync.when(
+        loading: () => const AuthenticatedProfileRecoveryView(),
+        error: (error, _) => AuthenticatedProfileRecoveryView(error: error),
+        data: (user) {
+          if (user == null) {
+            return AuthenticatedProfileRecoveryView(
+              error: StateError('Authenticated profile was unavailable.'),
             );
-          }, color: Colors.red),
-        ],
+          }
+          if (_hydratedUserId != user.id.toString()) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final isPremium = _hasActivePaidPlan(user);
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              _buildSectionHeader('Preferences'),
+              _buildSwitchTile('Dark Mode', _isDarkMode,
+                  (v) => _updateSetting('theme', v), Icons.dark_mode_outlined),
+              const SizedBox(height: 8),
+              _buildPushNotificationTile(notificationPermission),
+              const SizedBox(height: 8),
+              _buildSwitchTile('Email Updates', _emailUpdates,
+                  (v) => _updateSetting('email', v), Icons.email_outlined),
+
+              const SizedBox(height: 24),
+
+              // ── Emergency Protocol section ──────────────────────────────────
+              if (user.role == 'patient') ...[
+                _buildSectionHeader('Emergency Protocol'),
+                _buildEmergencySection(theme, isPremium),
+                const SizedBox(height: 24),
+              ],
+
+              _buildSectionHeader('Account'),
+              _buildActionTile('Delete Account', Icons.delete_forever, () {
+                showDialog(
+                  context: context,
+                  builder: (_) => const DeleteAccountDialog(),
+                );
+              }, color: Colors.red),
+            ],
+          );
+        },
       ),
     );
   }
@@ -175,9 +231,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget _buildEmergencySection(ThemeData theme, bool isPremium) {
     final isDark = theme.brightness == Brightness.dark;
     const accent = Color(0xFF4A90E2);
-    final cardColor = theme.cardTheme.color ?? (isDark ? const Color(0xFF1E2A3A) : Colors.white);
+    final cardColor = theme.cardTheme.color ??
+        (isDark ? const Color(0xFF1E2A3A) : Colors.white);
     final subtleText = isDark ? Colors.white54 : Colors.grey[600];
-    final shadow = isDark ? <BoxShadow>[] : [BoxShadow(color: Colors.grey.withOpacity(0.05), blurRadius: 4)];
+    final shadow = isDark
+        ? <BoxShadow>[]
+        : [BoxShadow(color: Colors.grey.withOpacity(0.05), blurRadius: 4)];
 
     return Container(
       decoration: BoxDecoration(
@@ -191,10 +250,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         children: [
           // Header row
           Row(children: [
-            const Icon(Icons.health_and_safety_rounded, color: Color(0xFF4A90E2), size: 20),
+            const Icon(Icons.health_and_safety_rounded,
+                color: Color(0xFF4A90E2), size: 20),
             const SizedBox(width: 8),
             Text('Next of Kin Alerts',
-                style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
+                style: theme.textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.bold)),
           ]),
           const SizedBox(height: 12),
 
@@ -213,7 +274,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => context.push('/subscription'),
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
                   color: const Color(0xFF1E293B),
                   borderRadius: BorderRadius.circular(10),
@@ -223,15 +285,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Emergency Next-of-Kin alerts require Premium',
+                      'Emergency Next-of-Kin alerts require an active paid plan',
                       style: const TextStyle(
-                          color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600),
                     ),
                   ),
                   const SizedBox(width: 8),
                   const Text('Upgrade →',
                       style: TextStyle(
-                          color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold)),
                 ]),
               ),
             ),
@@ -251,24 +317,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               theme: theme,
               subtleText: subtleText,
             ),
+            const SizedBox(height: 8),
+            Text(
+              emergencySmsConsentCopy,
+              style: theme.textTheme.bodySmall?.copyWith(color: subtleText),
+            ),
             const SizedBox(height: 20),
 
             // Save button
             SizedBox(
-              width: double.infinity, height: 48,
+              width: double.infinity,
+              height: 48,
               child: ElevatedButton(
                 onPressed: _nokSaving ? null : _saveNokSettings,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: accent,
                   disabledBackgroundColor: accent.withOpacity(0.5),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
                   elevation: 0,
                 ),
                 child: _nokSaving
-                    ? const SizedBox(width: 20, height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
                     : const Text('Save Emergency Settings',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
               ),
             ),
           ],
@@ -277,7 +354,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  Widget _nokInputField(ThemeData theme, Color cardColor, {required bool enabled}) {
+  Widget _nokInputField(ThemeData theme, Color cardColor,
+      {required bool enabled}) {
     return TextField(
       controller: _nokController,
       enabled: enabled,
@@ -286,14 +364,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       decoration: InputDecoration(
         labelText: 'Next of Kin Phone Number',
         hintText: '+2348012345678',
-        prefixIcon: const Icon(Icons.contact_phone_outlined, color: Color(0xFF4A90E2)),
+        prefixIcon:
+            const Icon(Icons.contact_phone_outlined, color: Color(0xFF4A90E2)),
         filled: true,
         fillColor: cardColor,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide.none,
         ),
-        contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+        contentPadding:
+            const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
       ),
     );
   }
@@ -346,6 +426,47 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         value: value,
         onChanged: onChanged,
         activeColor: const Color(0xFF4A90E2),
+      ),
+    );
+  }
+
+  Widget _buildPushNotificationTile(
+    NotificationPermissionAvailability permission,
+  ) {
+    final theme = Theme.of(context);
+    final blocked = _notifications &&
+        permission == NotificationPermissionAvailability.denied;
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.cardTheme.color,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: theme.brightness == Brightness.dark
+            ? []
+            : [BoxShadow(color: Colors.grey.withOpacity(0.05), blurRadius: 4)],
+      ),
+      child: ListTile(
+        leading: const Icon(
+          Icons.notifications_outlined,
+          color: Color(0xFF4A90E2),
+        ),
+        title: Text('Push Notifications', style: theme.textTheme.bodyLarge),
+        subtitle: blocked ? const Text('Blocked in device settings') : null,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (blocked)
+              IconButton(
+                tooltip: 'Open notification settings',
+                onPressed: openAppSettings,
+                icon: const Icon(Icons.settings_outlined),
+              ),
+            Switch(
+              value: _notifications,
+              onChanged: _updatePushSetting,
+              activeColor: const Color(0xFF4A90E2),
+            ),
+          ],
+        ),
       ),
     );
   }

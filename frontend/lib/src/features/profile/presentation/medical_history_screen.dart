@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 // ✅ These imports were missing:
+import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/auth/presentation/auth_controller.dart';
+import 'package:mediq_app/src/features/auth/presentation/profile_recovery_view.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 
 class MedicalHistoryScreen extends ConsumerStatefulWidget {
   const MedicalHistoryScreen({super.key});
 
   @override
-  ConsumerState<MedicalHistoryScreen> createState() => _MedicalHistoryScreenState();
+  ConsumerState<MedicalHistoryScreen> createState() =>
+      _MedicalHistoryScreenState();
 }
 
 class _MedicalHistoryScreenState extends ConsumerState<MedicalHistoryScreen> {
@@ -17,18 +20,18 @@ class _MedicalHistoryScreenState extends ConsumerState<MedicalHistoryScreen> {
   final _conditionsCtrl = TextEditingController();
   final _medicationsCtrl = TextEditingController();
   final _surgeriesCtrl = TextEditingController();
+  String? _hydratedUserId;
 
-  @override
-  void initState() {
-    super.initState();
-    final user = ref.read(userProvider).value;
-    if (user != null) {
+  void _hydrate(User user) {
+    if (!mounted || _hydratedUserId == user.id) return;
+    setState(() {
+      _hydratedUserId = user.id;
       _bloodTypeCtrl.text = user.bloodType ?? '';
       _allergiesCtrl.text = user.allergies ?? '';
       _conditionsCtrl.text = user.chronicConditions ?? '';
       _medicationsCtrl.text = user.medications ?? '';
       _surgeriesCtrl.text = user.pastSurgeries ?? '';
-    }
+    });
   }
 
   Future<void> _save() async {
@@ -40,12 +43,14 @@ class _MedicalHistoryScreenState extends ConsumerState<MedicalHistoryScreen> {
             medications: _medicationsCtrl.text.trim(),
             pastSurgeries: _surgeriesCtrl.text.trim(),
           );
-      
+
       ref.invalidate(userProvider);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Medical History Saved!"), backgroundColor: Colors.green),
+          const SnackBar(
+              content: Text("Medical History Saved!"),
+              backgroundColor: Colors.green),
         );
       }
     } catch (e) {
@@ -60,8 +65,14 @@ class _MedicalHistoryScreenState extends ConsumerState<MedicalHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final isLoading = ref.watch(authControllerProvider).isLoading;
+    final userAsync = ref.watch(userProvider);
+    final user = userAsync.valueOrNull;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+
+    if (user != null && _hydratedUserId != user.id) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _hydrate(user));
+    }
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
@@ -70,29 +81,56 @@ class _MedicalHistoryScreenState extends ConsumerState<MedicalHistoryScreen> {
         backgroundColor: theme.appBarTheme.backgroundColor,
         actions: [
           TextButton(
-            onPressed: isLoading ? null : _save,
+            onPressed: isLoading || user == null || _hydratedUserId != user.id
+                ? null
+                : _save,
             child: isLoading
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Text("Save", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text("Save",
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           )
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            _buildCard("Blood Type", "e.g., O+, A-", _bloodTypeCtrl, theme, isDark),
-            _buildCard("Allergies", "e.g., Peanuts, Penicillin", _allergiesCtrl, theme, isDark),
-            _buildCard("Chronic Conditions", "e.g., Asthma", _conditionsCtrl, theme, isDark),
-            _buildCard("Current Medications", "e.g., Ibuprofen", _medicationsCtrl, theme, isDark),
-            _buildCard("Past Surgeries", "e.g., Appendectomy", _surgeriesCtrl, theme, isDark),
-          ],
-        ),
+      body: userAsync.when(
+        loading: () => const AuthenticatedProfileRecoveryView(),
+        error: (error, _) => AuthenticatedProfileRecoveryView(error: error),
+        data: (user) {
+          if (user == null) {
+            return AuthenticatedProfileRecoveryView(
+              error: StateError('Authenticated profile was unavailable.'),
+            );
+          }
+          if (_hydratedUserId != user.id) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                _buildCard("Blood Type", "e.g., O+, A-", _bloodTypeCtrl, theme,
+                    isDark),
+                _buildCard("Allergies", "e.g., Peanuts, Penicillin",
+                    _allergiesCtrl, theme, isDark),
+                _buildCard("Chronic Conditions", "e.g., Asthma",
+                    _conditionsCtrl, theme, isDark),
+                _buildCard("Current Medications", "e.g., Ibuprofen",
+                    _medicationsCtrl, theme, isDark),
+                _buildCard("Past Surgeries", "e.g., Appendectomy",
+                    _surgeriesCtrl, theme, isDark),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
 
-  Widget _buildCard(String label, String hint, TextEditingController ctrl, ThemeData theme, bool isDark) {
+  Widget _buildCard(String label, String hint, TextEditingController ctrl,
+      ThemeData theme, bool isDark) {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(16),
@@ -103,7 +141,9 @@ class _MedicalHistoryScreenState extends ConsumerState<MedicalHistoryScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold)),
+          Text(label,
+              style: theme.textTheme.bodyLarge
+                  ?.copyWith(fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
           TextField(
             controller: ctrl,
@@ -112,7 +152,8 @@ class _MedicalHistoryScreenState extends ConsumerState<MedicalHistoryScreen> {
               hintText: hint,
               filled: true,
               fillColor: theme.inputDecorationTheme.fillColor,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
             ),
           ),
         ],

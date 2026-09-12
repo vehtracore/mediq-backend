@@ -1,25 +1,20 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/services.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:image_picker/image_picker.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
-import 'package:mediq_app/src/core/api/dio_client.dart';
-import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
-import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
-import 'package:mediq_app/src/features/doctors/data/doctor_repository.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
+
+import '../../../core/api/dio_client.dart';
+import '../../auth/presentation/profile_recovery_view.dart';
+import '../../auth/presentation/user_controller.dart';
+import '../../doctors/data/doctor_repository.dart';
+import '../data/image_upload_service.dart';
 import 'consultation_countdown_badge.dart';
+import 'consultation_session_controller.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
-  final int appointmentId;
-  final String title;
-  final bool isCompleted;
-  final int? doctorId;
-
   const ChatScreen({
     super.key,
     required this.appointmentId,
@@ -28,419 +23,68 @@ class ChatScreen extends ConsumerStatefulWidget {
     this.doctorId,
   });
 
+  final int appointmentId;
+  final String title;
+  final bool isCompleted;
+  final int? doctorId;
+
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
-  final TextEditingController _msgController = TextEditingController();
+  final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  WebSocketChannel? _channel;
-
-  // State
-  List<dynamic> _messages = [];
-  bool _isLoading = true;
-  int? _myUserId;
-
-  // Pagination State
-  String? _nextCursor;
-  bool _hasMore = true;
-  bool _isLoadingMore = false;
-
-  bool _isPeerOnline = false;
-  bool _isConsultationClosed = false;
-  bool _isMessageGracePeriod = false;
-  bool _consultationHasStarted = false;
-  DateTime? _videoEndsAt;
-  DateTime? _messagesEndAt;
-  Timer? _videoEndTimer;
-  Timer? _messageEndTimer;
-
-  RealtimeChannel? _supabaseChannel;
-  bool _isPeerWaitingOnVideo = false;
-  bool _isPeerWaitingOnVoice = false;
-
+  late final ConsultationSessionController _session;
   String? _mdcnNumber;
 
   @override
   void initState() {
     super.initState();
-    _initializeChat();
-
-    // Add Scroll Listener for Pagination
-    _scrollController.addListener(() {
-      if (_scrollController.position.pixels >=
-          _scrollController.position.maxScrollExtent - 200) {
-        _fetchMoreMessages();
-      }
-    });
+    _session = ref.read(consultationSessionProvider(widget.appointmentId));
+    _session.attachChatSurface();
+    unawaited(_session.ensureStarted(live: !widget.isCompleted));
+    unawaited(_loadDoctorDetails());
+    _scrollController.addListener(_handleScroll);
   }
 
-  Future<void> _fetchMoreMessages() async {
-    if (_isLoadingMore || !_hasMore) return;
-
-    setState(() {
-      _isLoadingMore = true;
-    });
-
+  Future<void> _loadDoctorDetails() async {
+    final doctorId = widget.doctorId;
+    if (doctorId == null) return;
     try {
-      final dio = ref.read(dioProvider);
-      final queryParam = _nextCursor != null ? "?cursor=$_nextCursor" : "";
-      final response = await dio
-          .get('/api/v1/p2p/history/${widget.appointmentId}$queryParam');
-
-      List<dynamic> olderMessages = [];
-      String? next;
-      bool hasMoreData = false;
-
-      // Handle both legacy (flat array) and new paginated object formats
-      if (response.data is List) {
-        olderMessages = response.data;
-        hasMoreData =
-            false; // Legacy backend doesn't support pagination, so no more after initial
-      } else if (response.data is Map) {
-        olderMessages = response.data['messages'] ?? [];
-        next = response.data['next_cursor'];
-        hasMoreData = response.data['has_more'] ?? false;
-      }
-
-      if (mounted) {
-        setState(() {
-          // Since reverse: true, older messages are appended to the end.
-          // The backend returns order_by(created_at.asc()), which means older first.
-          // We need newest first (0 = newest). So we reverse the older messages before appending.
-          _messages.addAll(olderMessages.reversed.toList());
-          _nextCursor = next;
-          _hasMore = hasMoreData;
-          _isLoadingMore = false;
-        });
+      final doctor =
+          await ref.read(doctorRepositoryProvider).getDoctorById(doctorId);
+      if (mounted && doctor.licenseNumber?.isNotEmpty == true) {
+        setState(() => _mdcnNumber = doctor.licenseNumber);
       }
     } catch (_) {
-      if (mounted) {
-        setState(() {
-          _isLoadingMore = false;
-          _hasMore = false; // Stop trying if error occurs
-        });
-      }
+      // Doctor metadata is optional; consultation access remains server-owned.
     }
   }
 
-  Future<void> _initializeChat() async {
-    final user = await ref.read(authRepositoryProvider).getCurrentUser();
-    if (user == null) return;
-    _myUserId = int.tryParse(user.id.toString());
-
-    if (widget.doctorId != null) {
-      try {
-        final doctor = await ref
-            .read(doctorRepositoryProvider)
-            .getDoctorById(widget.doctorId!);
-        if (mounted && doctor.licenseNumber != null) {
-          setState(() {
-            _mdcnNumber = doctor.licenseNumber;
-          });
-        }
-      } catch (_) {
-        // The doctor identifier remains optional if profile lookup fails.
-      }
-    }
-
-    final dio = ref.read(dioProvider);
-
-    // Initial Load History
-    try {
-      final response =
-          await dio.get('/api/v1/p2p/history/${widget.appointmentId}');
-      if (mounted) {
-        setState(() {
-          // We are parsing the initial fetch.
-          List<dynamic> initialMessages = [];
-          if (response.data is List) {
-            initialMessages = response.data;
-            _hasMore = false; // Legacy backend gives all at once
-          } else if (response.data is Map) {
-            initialMessages = response.data['messages'] ?? [];
-            _nextCursor = response.data['next_cursor'];
-            _hasMore = response.data['has_more'] ?? false;
-          }
-
-          // Reversing the initial messages so index 0 is newest (bottom of screen)
-          _messages = initialMessages.reversed.toList();
-          _isLoading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
-    }
-
-    // Completed consultations keep read-only history but do not open a live
-    // message socket.
-    if (widget.isCompleted) return;
-
-    // Connect WebSocket
-    try {
-      final baseUrl = dio.options.baseUrl;
-      final cleanBaseUrl = baseUrl.endsWith('/')
-          ? baseUrl.substring(0, baseUrl.length - 1)
-          : baseUrl;
-      String wsBase = cleanBaseUrl;
-      if (wsBase.startsWith('https://')) {
-        wsBase = wsBase.replaceFirst('https://', 'wss://');
-      } else if (wsBase.startsWith('http://')) {
-        wsBase = wsBase.replaceFirst('http://', 'ws://');
-      }
-
-      final accessToken =
-          Supabase.instance.client.auth.currentSession?.accessToken;
-      if (accessToken == null || accessToken.isEmpty) {
-        throw StateError('No authenticated session for consultation chat.');
-      }
-
-      final wsUri = Uri.parse(
-        '$wsBase/api/v1/p2p/live/${widget.appointmentId}/${user.id}',
-      );
-
-      _channel = WebSocketChannel.connect(wsUri);
-      _channel!.sink.add(jsonEncode({
-        'type': 'auth',
-        'token': accessToken,
-      }));
-
-      _channel!.stream.listen((data) {
-        final newMessage = jsonDecode(data);
-
-        if (newMessage['type'] == 'consultation_timing') {
-          final videoEndsAt =
-              DateTime.parse(newMessage['video_ends_at'] as String).toLocal();
-          final messagesEndAt =
-              DateTime.parse(newMessage['messages_end_at'] as String).toLocal();
-          if (mounted) {
-            setState(() {
-              _consultationHasStarted = true;
-              _videoEndsAt = videoEndsAt;
-              _messagesEndAt = messagesEndAt;
-            });
-          }
-          _scheduleConsultationTiming(
-            videoEndsAt: videoEndsAt,
-            messagesEndAt: messagesEndAt,
-          );
-          return;
-        }
-
-        if (newMessage['type'] == 'consultation_closed') {
-          if (mounted) {
-            setState(() {
-              _isConsultationClosed = true;
-              _isMessageGracePeriod = false;
-            });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(newMessage['message'] as String)),
-            );
-          }
-          return;
-        }
-
-        if (newMessage['type'] == 'call_signal' &&
-            newMessage['user_id'] != _myUserId) {
-          if (mounted) {
-            final mediaType =
-                newMessage['media'] == 'video' ? 'Video' : 'Voice';
-            showDialog(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                title: Text("Incoming $mediaType Call"),
-                content:
-                    Text("The doctor is inviting you to a $mediaType call."),
-                actions: [
-                  TextButton(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _supabaseChannel?.sendBroadcastMessage(
-                        event: 'call_waiting',
-                        payload: {'type': 'cancel', 'user_id': _myUserId},
-                      );
-                    },
-                    child: const Text("Decline"),
-                  ),
-                  FilledButton(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _supabaseChannel?.sendBroadcastMessage(
-                        event: 'call_waiting',
-                        payload: {'type': 'cancel', 'user_id': _myUserId},
-                      );
-                      // TODO: Navigate to WebRTC room
-                    },
-                    child: const Text("Join Call"),
-                  ),
-                ],
-              ),
-            );
-          }
-          return;
-        }
-
-        if (mounted) {
-          setState(() {
-            final msgIndex = _messages.indexWhere((m) =>
-                m['isSending'] == true &&
-                m['content'] == newMessage['content']);
-            if (msgIndex != -1) {
-              _messages[msgIndex] = newMessage;
-            } else {
-              _messages.insert(0, newMessage);
-
-              if (newMessage['sender_id'] != _myUserId) {
-                HapticFeedback.vibrate();
-                SystemSound.play(SystemSoundType.click);
-              }
-            }
-          });
-        }
-      }, onError: (_) {
-        if (mounted) setState(() => _isPeerOnline = false);
-      });
-
-      // Setup Supabase Realtime Presence & Broadcast
-      _supabaseChannel =
-          Supabase.instance.client.channel('chat_room_${widget.appointmentId}');
-      _supabaseChannel!
-        ..onPresenceSync((payload) {
-          final state = _supabaseChannel!.presenceState();
-          bool peerOnline = false;
-          for (final singleState in state) {
-            for (final presence in singleState.presences) {
-              final payload = presence.payload;
-              if (payload['user_id'] != _myUserId) {
-                peerOnline = true;
-              }
-            }
-          }
-          if (mounted) {
-            setState(() {
-              _isPeerOnline = peerOnline;
-            });
-          }
-        })
-        ..onPresenceJoin((payload) {
-          if (mounted) setState(() {});
-        })
-        ..onPresenceLeave((payload) {
-          if (mounted) setState(() {});
-        })
-        ..onBroadcast(
-            event: 'call_waiting',
-            callback: (payload) {
-              final callPayload = payload['payload'] is Map
-                  ? Map<String, dynamic>.from(payload['payload'] as Map)
-                  : payload;
-
-              if (callPayload['user_id'] != _myUserId) {
-                if (mounted) {
-                  setState(() {
-                    if (callPayload['type'] == 'video_waiting') {
-                      _isPeerWaitingOnVideo = true;
-                    } else if (callPayload['type'] == 'voice_waiting') {
-                      _isPeerWaitingOnVoice = true;
-                    } else if (callPayload['type'] == 'cancel') {
-                      _isPeerWaitingOnVideo = false;
-                      _isPeerWaitingOnVoice = false;
-                    }
-                  });
-                }
-              }
-            })
-        ..subscribe((status, [error]) {
-          if (status == RealtimeSubscribeStatus.subscribed) {
-            _supabaseChannel!.track({
-              'user_id': _myUserId,
-              'online_at': DateTime.now().toIso8601String()
-            });
-          }
-        });
-    } catch (_) {
-      if (mounted) setState(() => _isPeerOnline = false);
+  void _handleScroll() {
+    if (!_scrollController.hasClients) return;
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
+      unawaited(_session.fetchMoreMessages());
     }
   }
 
-  void _scheduleConsultationTiming({
-    required DateTime videoEndsAt,
-    required DateTime messagesEndAt,
-  }) {
-    _videoEndTimer?.cancel();
-    _messageEndTimer?.cancel();
-    final now = DateTime.now();
-
-    void startGracePeriod() {
-      if (!mounted || _isConsultationClosed) return;
-      setState(() => _isMessageGracePeriod = true);
-    }
-
-    if (!now.isBefore(messagesEndAt)) {
-      if (mounted) {
-        setState(() {
-          _isConsultationClosed = true;
-          _isMessageGracePeriod = false;
-        });
-      }
+  void _sendMessage() {
+    final text = _messageController.text.trim();
+    if (text.isEmpty) return;
+    if (_session.sendText(text)) {
+      _messageController.clear();
       return;
     }
-
-    if (!now.isBefore(videoEndsAt)) {
-      startGracePeriod();
-    } else {
-      _videoEndTimer = Timer(videoEndsAt.difference(now), startGracePeriod);
-    }
-
-    _messageEndTimer = Timer(messagesEndAt.difference(now), () {
-      if (!mounted) return;
-      setState(() {
-        _isConsultationClosed = true;
-        _isMessageGracePeriod = false;
-      });
-      _channel?.sink.close();
-    });
-  }
-
-  bool get _canStartCall =>
-      _consultationHasStarted &&
-      !_isMessageGracePeriod &&
-      !_isConsultationClosed &&
-      !widget.isCompleted;
-
-  void _sendMessage({String? content, String? tempId}) {
-    final textToSend = content ?? _msgController.text.trim();
-    if (textToSend.isEmpty) return;
-    if (_channel == null) return;
-
-    if (tempId == null) {
-      tempId = "temp_${DateTime.now().millisecondsSinceEpoch}";
-      final tempMessage = {
-        'id': tempId,
-        'sender_id': _myUserId,
-        'content': textToSend,
-        'isSending': true,
-      };
-      setState(() {
-        _messages.insert(0, tempMessage);
-      });
-    }
-
-    try {
-      _channel!.sink.add(textToSend);
-      if (content == null) {
-        _msgController.clear();
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text("Failed to send")));
-    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Chat is reconnecting. Try again shortly.')),
+    );
   }
 
   Future<void> _handleImageUpload() async {
     final picker = ImagePicker();
-    final XFile? image = await picker.pickImage(
+    final image = await picker.pickImage(
       source: ImageSource.gallery,
       imageQuality: 90,
       maxWidth: 1920,
@@ -448,53 +92,54 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
     if (image == null) return;
 
-    final tempId = "temp_${DateTime.now().millisecondsSinceEpoch}";
-    final tempMessage = {
-      'id': tempId,
-      'sender_id': _myUserId,
-      'content': "FILE:${image.path}",
-      'isSending': true,
-    };
-    setState(() {
-      _messages.insert(0, tempMessage);
-    });
-
+    final optimisticId = _session.addOptimisticMessage('FILE:${image.path}');
     final url = await ref.read(imageUploadServiceProvider).uploadFile(image);
-    if (url != null) {
-      setState(() {
-        final idx = _messages.indexWhere((m) => m['id'] == tempId);
-        if (idx != -1) {
-          _messages[idx]['content'] = url;
-        }
-      });
-      _sendMessage(content: url, tempId: tempId);
-    } else {
-      setState(() {
-        _messages.removeWhere((m) => m['id'] == tempId);
-      });
+    if (url == null) {
+      _session.removeOptimisticMessage(optimisticId);
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text("Image upload failed")));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Image upload failed')),
+        );
       }
+      return;
     }
+    _session.updateOptimisticMessage(optimisticId, url);
+    if (!_session.sendText(url, optimisticId: optimisticId) && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to send image')),
+      );
+    }
+  }
+
+  Future<void> _openVideo({bool voice = false}) async {
+    _session.sendCallSignal(voice ? 'audio' : 'video');
+    _session.setChatSurfaceVisible(false);
+    _session.beginVideoTransition();
+    await context.push(
+      voice ? '/video_call?type=voice' : '/video_call',
+      extra: widget.appointmentId,
+    );
+    if (!mounted) return;
+    _session.leaveVideo(returningToChat: true);
+    _session.setChatSurfaceVisible(true);
   }
 
   @override
   void dispose() {
-    _videoEndTimer?.cancel();
-    _messageEndTimer?.cancel();
-    _supabaseChannel?.unsubscribe();
-    _channel?.sink.close();
-    _msgController.dispose();
-    _scrollController.dispose();
+    _session.detachChatSurface();
+    _messageController.dispose();
+    _scrollController
+      ..removeListener(_handleScroll)
+      ..dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final session =
+        ref.watch(consultationSessionProvider(widget.appointmentId));
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-
     final baseUrl = ref.watch(dioProvider).options.baseUrl;
     final cleanBaseUrl = baseUrl.endsWith('/')
         ? baseUrl.substring(0, baseUrl.length - 1)
@@ -504,11 +149,478 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       backgroundColor: theme.colorScheme.surface,
       body: Column(
         children: [
-          SafeArea(
-            bottom: false,
+          _ChatHeader(
+            title: widget.title,
+            mdcnNumber: _mdcnNumber,
+            session: session,
+            onBack: context.pop,
+            onVoice:
+                session.canStartCall ? () => _openVideo(voice: true) : null,
+            onVideo: session.canStartCall ? _openVideo : null,
+          ),
+          if (session.peerMode == ConsultationMode.videoWaiting)
+            _JoinVideoBanner(
+              participant: session.peerParticipantLabel,
+              onJoin: session.canStartCall ? _openVideo : null,
+            ),
+          Expanded(
+            child: session.initializationError != null
+                ? AuthenticatedProfileRecoveryView(
+                    error: session.initializationError,
+                    onRetry: () {
+                      ref.invalidate(userProvider);
+                      unawaited(session.retry());
+                    },
+                  )
+                : session.isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : ListView.builder(
+                        controller: _scrollController,
+                        reverse: true,
+                        padding: const EdgeInsets.all(16),
+                        itemCount: session.messages.length +
+                            (session.isLoadingMore ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (index == session.messages.length) {
+                            return const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 16),
+                              child: Center(child: CircularProgressIndicator()),
+                            );
+                          }
+                          return _FullChatMessageBubble(
+                            message: session.messages[index],
+                            myUserId: session.myUserId,
+                            cleanBaseUrl: cleanBaseUrl,
+                            theme: theme,
+                          );
+                        },
+                      ),
+          ),
+          if (widget.isCompleted || session.isConsultationClosed)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              color: theme.cardTheme.color,
+              width: double.infinity,
+              child: const SafeArea(
+                child: Text(
+                  'This consultation has ended.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold, color: Colors.grey),
+                ),
+              ),
+            )
+          else
+            _ChatComposerArea(
+              session: session,
+              isDark: isDark,
+              controller: _messageController,
+              onAttach: _handleImageUpload,
+              onSend: _sendMessage,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChatHeader extends StatelessWidget {
+  const _ChatHeader({
+    required this.title,
+    required this.mdcnNumber,
+    required this.session,
+    required this.onBack,
+    required this.onVoice,
+    required this.onVideo,
+  });
+
+  final String title;
+  final String? mdcnNumber;
+  final ConsultationSessionController session;
+  final VoidCallback onBack;
+  final VoidCallback? onVoice;
+  final VoidCallback? onVideo;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final active = session.peerMode != null;
+    return SafeArea(
+      bottom: false,
+      child: Container(
+        margin: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        decoration: BoxDecoration(
+          color:
+              isDark ? Colors.white.withValues(alpha: 0.05) : Colors.grey[200],
+          borderRadius: BorderRadius.circular(30),
+        ),
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Back',
+              icon: const Icon(Icons.arrow_back),
+              onPressed: onBack,
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  if (mdcnNumber?.isNotEmpty == true)
+                    Text(
+                      'MDCN: $mdcnNumber',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  Row(
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: active ? Colors.green : Colors.grey,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          session.peerPresenceLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: active ? Colors.green : Colors.grey,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (session.consultationHasStarted ||
+                      session.isMessageGracePeriod ||
+                      session.isConsultationClosed) ...[
+                    const SizedBox(height: 5),
+                    ConsultationCountdownBadge(
+                      videoEndsAt: session.videoEndsAt,
+                      messagesEndAt: session.messagesEndAt,
+                      consultationStarted: session.consultationHasStarted,
+                      isClosed: session.isConsultationClosed,
+                      compact: true,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            _HeaderCallButton(
+              tooltip: 'Voice call',
+              icon: Icons.phone_outlined,
+              enabled: onVoice != null,
+              onPressed: onVoice,
+            ),
+            _HeaderCallButton(
+              tooltip: session.peerMode == ConsultationMode.videoWaiting
+                  ? 'Join video'
+                  : 'Video call',
+              icon: Icons.videocam_outlined,
+              enabled: onVideo != null,
+              showWaitingDot: session.peerMode == ConsultationMode.videoWaiting,
+              onPressed: onVideo,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HeaderCallButton extends StatelessWidget {
+  const _HeaderCallButton({
+    required this.tooltip,
+    required this.icon,
+    required this.enabled,
+    required this.onPressed,
+    this.showWaitingDot = false,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final bool enabled;
+  final VoidCallback? onPressed;
+  final bool showWaitingDot;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 2),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary.withValues(alpha: 0.1),
+        shape: BoxShape.circle,
+      ),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          IconButton(
+            tooltip: tooltip,
+            icon: Icon(
+              icon,
+              color: enabled ? theme.colorScheme.primary : Colors.grey,
+              size: 20,
+            ),
+            onPressed: onPressed,
+          ),
+          if (showWaitingDot)
+            const Positioned(
+              top: 4,
+              right: 4,
+              child: DecoratedBox(
+                decoration:
+                    BoxDecoration(color: Colors.green, shape: BoxShape.circle),
+                child: SizedBox(width: 9, height: 9),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _JoinVideoBanner extends StatelessWidget {
+  const _JoinVideoBanner({required this.participant, required this.onJoin});
+
+  final String participant;
+  final VoidCallback? onJoin;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: colors.primaryContainer,
+      child: Row(
+        children: [
+          const Icon(Icons.video_call_outlined),
+          const SizedBox(width: 8),
+          Expanded(child: Text('$participant is waiting in video')),
+          TextButton.icon(
+            onPressed: onJoin,
+            icon: const Icon(Icons.videocam),
+            label: const Text('Join video'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FullChatMessageBubble extends StatelessWidget {
+  const _FullChatMessageBubble({
+    required this.message,
+    required this.myUserId,
+    required this.cleanBaseUrl,
+    required this.theme,
+  });
+
+  final Map<String, dynamic> message;
+  final int? myUserId;
+  final String cleanBaseUrl;
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    final senderId = int.tryParse(message['sender_id'].toString());
+    final isMe = senderId == myUserId;
+    final content = message['content']?.toString() ?? '';
+    final isSending = message['isSending'] == true;
+    if (content.contains('"type":"call_signal"')) {
+      return const SizedBox.shrink();
+    }
+    final isImage = content.startsWith('/static/') ||
+        content.startsWith('http') ||
+        content.startsWith('FILE:');
+
+    return Align(
+      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        constraints:
+            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        decoration: BoxDecoration(
+          color: isMe ? Colors.blueAccent : theme.cardTheme.color,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: isImage
+            ? GestureDetector(
+                onTap: () => _openImage(context, content),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: content.startsWith('FILE:')
+                          ? Image.file(
+                              File(content.substring(5)),
+                              height: 200,
+                              width: 200,
+                              fit: BoxFit.cover,
+                            )
+                          : Image.network(
+                              content.startsWith('http')
+                                  ? content
+                                  : '$cleanBaseUrl$content',
+                              height: 200,
+                              width: 200,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                  Icons.broken_image,
+                                  color: Colors.white),
+                            ),
+                    ),
+                    if (isSending)
+                      const Positioned.fill(
+                        child: ColoredBox(
+                          color: Colors.black45,
+                          child: Center(
+                            child:
+                                CircularProgressIndicator(color: Colors.white),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              )
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Flexible(
+                    child: Text(
+                      content,
+                      style: TextStyle(
+                        color:
+                            isMe ? Colors.white : theme.colorScheme.onSurface,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                  if (isMe)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: isSending
+                          ? const SizedBox(
+                              width: 12,
+                              height: 12,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white70,
+                              ),
+                            )
+                          : const Icon(Icons.check,
+                              size: 14, color: Colors.white70),
+                    ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  void _openImage(BuildContext context, String content) {
+    if (content.startsWith('FILE:')) return;
+    final url = content.startsWith('http') ? content : '$cleanBaseUrl$content';
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            iconTheme: const IconThemeData(color: Colors.white),
+          ),
+          body: Center(child: InteractiveViewer(child: Image.network(url))),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatComposerArea extends StatelessWidget {
+  const _ChatComposerArea({
+    required this.session,
+    required this.isDark,
+    required this.controller,
+    required this.onAttach,
+    required this.onSend,
+  });
+
+  final ConsultationSessionController session;
+  final bool isDark;
+  final TextEditingController controller;
+  final VoidCallback onAttach;
+  final VoidCallback onSend;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (session.isMessageGracePeriod)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: const Color(0xFFF0F7FF),
+            child: const Text(
+              'Video has ended. Messaging remains open briefly to wrap up.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: Color(0xFF1D4ED8), fontWeight: FontWeight.w600),
+            ),
+          ),
+        if (!session.consultationHasStarted && !session.isConsultationClosed)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: theme.colorScheme.primary.withValues(alpha: 0.08),
+            child: const Text(
+              'Waiting for the other participant. Calls unlock when both participants have joined.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+        if (session.connectionState != ConsultationConnectionState.connected)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            color: theme.colorScheme.errorContainer,
+            child: Text(
+              session.connectionState ==
+                      ConsultationConnectionState.reconnecting
+                  ? 'Chat is reconnecting'
+                  : 'Chat is temporarily unavailable',
+              textAlign: TextAlign.center,
+            ),
+          ),
+        Container(
+          padding:
+              const EdgeInsets.only(left: 16, right: 16, bottom: 24, top: 12),
+          color: theme.colorScheme.surface,
+          child: SafeArea(
             child: Container(
-              margin: const EdgeInsets.all(12),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
               decoration: BoxDecoration(
                 color: isDark
                     ? Colors.white.withValues(alpha: 0.05)
@@ -518,502 +630,40 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               child: Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.arrow_back),
-                    onPressed: () => context.pop(),
+                    tooltip: 'Attach image',
+                    icon: Icon(
+                      Icons.add_photo_alternate,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    onPressed: onAttach,
                   ),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(widget.title,
-                            style: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold)),
-                        if (_mdcnNumber != null && _mdcnNumber!.isNotEmpty)
-                          Text("MDCN: $_mdcnNumber",
-                              style: const TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.blue,
-                                  fontWeight: FontWeight.bold)),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: _isPeerOnline
-                                    ? Colors.greenAccent
-                                    : Colors.grey,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              _isPeerOnline ? 'Online' : 'Offline',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: _isPeerOnline
-                                    ? Colors.greenAccent
-                                    : Colors.grey,
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (_consultationHasStarted ||
-                            _isMessageGracePeriod ||
-                            _isConsultationClosed) ...[
-                          const SizedBox(height: 5),
-                          ConsultationCountdownBadge(
-                            videoEndsAt: _videoEndsAt,
-                            messagesEndAt: _messagesEndAt,
-                            consultationStarted: _consultationHasStarted,
-                            isClosed: _isConsultationClosed,
-                            compact: true,
-                          ),
-                        ],
-                      ],
+                    child: TextField(
+                      controller: controller,
+                      minLines: 1,
+                      maxLines: 5,
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      decoration: const InputDecoration(
+                        hintText: 'Type a message...',
+                        border: InputBorder.none,
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                      ),
                     ),
                   ),
-                  Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 4),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        IconButton(
-                          icon: Icon(Icons.phone_outlined,
-                              color: _canStartCall
-                                  ? theme.colorScheme.primary
-                                  : Colors.grey,
-                              size: 20),
-                          onPressed: _canStartCall
-                              ? () {
-                                  if (_channel != null && _myUserId != null) {
-                                    _channel!.sink.add(jsonEncode({
-                                      "type": "call_signal",
-                                      "media": "audio",
-                                      "status": "initiated",
-                                      "user_id": _myUserId
-                                    }));
-                                  }
-                                  _supabaseChannel?.sendBroadcastMessage(
-                                    event: 'call_waiting',
-                                    payload: {
-                                      'type': 'voice_waiting',
-                                      'user_id': _myUserId
-                                    },
-                                  );
-                                  context
-                                      .push('/video_call?type=voice',
-                                          extra: widget.appointmentId)
-                                      .then((_) {
-                                    _supabaseChannel?.sendBroadcastMessage(
-                                      event: 'call_waiting',
-                                      payload: {
-                                        'type': 'cancel',
-                                        'user_id': _myUserId
-                                      },
-                                    );
-                                  });
-                                }
-                              : null,
-                        ),
-                        if (_isPeerWaitingOnVoice)
-                          const Positioned(
-                            top: 4,
-                            right: 4,
-                            child: _BlinkingDot(color: Colors.green),
-                          ),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    margin: const EdgeInsets.only(left: 4, right: 8),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        IconButton(
-                          icon: Icon(Icons.videocam_outlined,
-                              color: _canStartCall
-                                  ? theme.colorScheme.primary
-                                  : Colors.grey,
-                              size: 20),
-                          onPressed: _canStartCall
-                              ? () {
-                                  if (_channel != null && _myUserId != null) {
-                                    _channel!.sink.add(jsonEncode({
-                                      "type": "call_signal",
-                                      "media": "video",
-                                      "status": "initiated",
-                                      "user_id": _myUserId
-                                    }));
-                                  }
-                                  _supabaseChannel?.sendBroadcastMessage(
-                                    event: 'call_waiting',
-                                    payload: {
-                                      'type': 'video_waiting',
-                                      'user_id': _myUserId
-                                    },
-                                  );
-                                  context
-                                      .push('/video_call',
-                                          extra: widget.appointmentId)
-                                      .then((_) {
-                                    _supabaseChannel?.sendBroadcastMessage(
-                                      event: 'call_waiting',
-                                      payload: {
-                                        'type': 'cancel',
-                                        'user_id': _myUserId
-                                      },
-                                    );
-                                  });
-                                }
-                              : null,
-                        ),
-                        if (_isPeerWaitingOnVideo)
-                          const Positioned(
-                            top: 4,
-                            right: 4,
-                            child: _BlinkingDot(color: Colors.green),
-                          ),
-                      ],
-                    ),
+                  const SizedBox(width: 8),
+                  IconButton.filled(
+                    tooltip: 'Send message',
+                    onPressed: session.canSend ? onSend : null,
+                    icon: const Icon(Icons.arrow_upward, size: 20),
                   ),
                 ],
               ),
             ),
           ),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : ListView.builder(
-                    controller: _scrollController,
-                    reverse:
-                        true, // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Native chat layout (index 0 is bottom)
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _messages.length + (_isLoadingMore ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      // Show loader at the end of the list (top of screen due to reverse)
-                      if (index == _messages.length) {
-                        return const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 16.0),
-                          child: Center(child: CircularProgressIndicator()),
-                        );
-                      }
-
-                      final msg = _messages[index];
-                      final senderId =
-                          int.tryParse(msg['sender_id'].toString());
-                      final isMe = senderId == _myUserId;
-                      final content = msg['content'] ?? '';
-                      final isSending = msg['isSending'] == true;
-
-                      if (content.toString().contains('"type":"call_signal"')) {
-                        return const SizedBox.shrink();
-                      }
-
-                      final isImage =
-                          content.toString().startsWith('/static/') ||
-                              content.toString().startsWith('http') ||
-                              content.toString().startsWith('FILE:');
-
-                      return Align(
-                        alignment:
-                            isMe ? Alignment.centerRight : Alignment.centerLeft,
-                        child: Container(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
-                          constraints: BoxConstraints(
-                              maxWidth:
-                                  MediaQuery.of(context).size.width * 0.75),
-                          decoration: BoxDecoration(
-                            color: isMe
-                                ? Colors.blueAccent
-                                : theme.cardTheme.color,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: isImage
-                              ? GestureDetector(
-                                  onTap: () {
-                                    if (content
-                                        .toString()
-                                        .startsWith('FILE:')) {
-                                      return;
-                                    }
-                                    final fullUrl = content.startsWith('http')
-                                        ? content
-                                        : "$cleanBaseUrl$content";
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => Scaffold(
-                                          backgroundColor: Colors.black,
-                                          appBar: AppBar(
-                                            backgroundColor: Colors.black,
-                                            iconTheme: const IconThemeData(
-                                                color: Colors.white),
-                                          ),
-                                          body: Center(
-                                            child: InteractiveViewer(
-                                              child: Image.network(fullUrl),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  child: Stack(
-                                    alignment: Alignment.center,
-                                    children: [
-                                      ClipRRect(
-                                        borderRadius: BorderRadius.circular(8),
-                                        child: content
-                                                .toString()
-                                                .startsWith('FILE:')
-                                            ? Image.file(
-                                                File(content
-                                                    .toString()
-                                                    .substring(5)),
-                                                height: 200,
-                                                width: 200,
-                                                fit: BoxFit.cover,
-                                              )
-                                            : Image.network(
-                                                content.startsWith('http')
-                                                    ? content
-                                                    : "$cleanBaseUrl$content",
-                                                height: 200,
-                                                width: 200,
-                                                fit: BoxFit.cover,
-                                                errorBuilder: (c, e, s) =>
-                                                    const Icon(
-                                                        Icons.broken_image,
-                                                        color: Colors.white),
-                                              ),
-                                      ),
-                                      if (isSending)
-                                        Positioned.fill(
-                                          child: Container(
-                                            decoration: BoxDecoration(
-                                              color: Colors.black45,
-                                              borderRadius:
-                                                  BorderRadius.circular(8),
-                                            ),
-                                            child: const Center(
-                                              child: CircularProgressIndicator(
-                                                  color: Colors.white),
-                                            ),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                )
-                              : Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    Flexible(
-                                      child: Text(
-                                        content,
-                                        style: TextStyle(
-                                          color: isMe
-                                              ? Colors.white
-                                              : theme.colorScheme.onSurface,
-                                          fontSize: 16,
-                                        ),
-                                      ),
-                                    ),
-                                    if (isMe)
-                                      Padding(
-                                        padding:
-                                            const EdgeInsets.only(left: 4.0),
-                                        child: isSending
-                                            ? const SizedBox(
-                                                width: 12,
-                                                height: 12,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                        strokeWidth: 2,
-                                                        color: Colors.white70),
-                                              )
-                                            : const Icon(Icons.check,
-                                                size: 14,
-                                                color: Colors.white70),
-                                      ),
-                                  ],
-                                ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          widget.isCompleted || _isConsultationClosed
-              ? Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                  color: theme.cardTheme.color,
-                  width: double.infinity,
-                  child: const SafeArea(
-                    child: Text(
-                      "This consultation has ended.",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                          fontWeight: FontWeight.bold, color: Colors.grey),
-                    ),
-                  ),
-                )
-              : Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_isMessageGracePeriod)
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        color: const Color(0xFFF0F7FF),
-                        child: const Text(
-                          "Video has ended. Messaging remains open briefly to wrap up.",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Color(0xFF1D4ED8),
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    if (!_consultationHasStarted && !_isConsultationClosed)
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        color:
-                            theme.colorScheme.primary.withValues(alpha: 0.08),
-                        child: const Text(
-                          "Waiting for the other participant. Calls unlock when both participants have joined.",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    Container(
-                      padding: const EdgeInsets.only(
-                          left: 16, right: 16, bottom: 24, top: 12),
-                      color: theme.colorScheme.surface,
-                      child: SafeArea(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: isDark
-                                ? Colors.white.withValues(alpha: 0.05)
-                                : Colors.grey[200],
-                            borderRadius: BorderRadius.circular(30),
-                            border: Border.all(
-                                color: isDark
-                                    ? Colors.white.withValues(alpha: 0.05)
-                                    : Colors.transparent),
-                          ),
-                          child: Row(
-                            children: [
-                              IconButton(
-                                icon: Icon(Icons.add_photo_alternate,
-                                    color: theme.colorScheme.onSurfaceVariant),
-                                onPressed: _handleImageUpload,
-                              ),
-                              Expanded(
-                                child: TextField(
-                                  controller: _msgController,
-                                  style: TextStyle(
-                                      color:
-                                          theme.colorScheme.onSurfaceVariant),
-                                  minLines: 1,
-                                  maxLines: 5,
-                                  keyboardType: TextInputType.multiline,
-                                  textInputAction: TextInputAction.newline,
-                                  decoration: InputDecoration(
-                                    hintText: "Type a message...",
-                                    hintStyle: TextStyle(
-                                        color: theme
-                                            .colorScheme.onSurfaceVariant
-                                            .withValues(alpha: 0.6)),
-                                    border: InputBorder.none,
-                                    contentPadding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 12),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: theme.colorScheme.primary,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: IconButton(
-                                  onPressed: () => _sendMessage(),
-                                  icon: Icon(Icons.arrow_upward,
-                                      color: theme.colorScheme.onPrimary,
-                                      size: 20),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-        ],
-      ),
-    );
-  }
-}
-
-class _BlinkingDot extends StatefulWidget {
-  final Color color;
-  const _BlinkingDot({required this.color});
-
-  @override
-  State<_BlinkingDot> createState() => _BlinkingDotState();
-}
-
-class _BlinkingDotState extends State<_BlinkingDot>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 800))
-      ..repeat(reverse: true);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: _controller,
-      child: Container(
-        width: 10,
-        height: 10,
-        decoration: BoxDecoration(color: widget.color, shape: BoxShape.circle),
-      ),
+        ),
+      ],
     );
   }
 }

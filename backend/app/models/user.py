@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, ForeignKey, Uuid
 from sqlalchemy.orm import relationship, backref
 from sqlalchemy import func
 from app.core.database import Base
@@ -8,6 +8,8 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Stable bridge to the authenticated Supabase identity used by Realtime RLS.
+    supabase_auth_id = Column(Uuid(as_uuid=True), nullable=True, unique=True, index=True)
     
     # --- BASIC PROFILE ---
     first_name = Column(String, index=True)
@@ -88,6 +90,12 @@ class User(Base):
     rolling_audio_window_start = Column(DateTime, nullable=True)
     last_audio_month_reset = Column(DateTime, nullable=True)
 
+    # Voice input / STT Limits
+    # Separate from chat usage: one unit is consumed only after a validated
+    # recording produces a non-empty usable provider transcript.
+    monthly_stt_count = Column(Integer, default=0, nullable=False)
+    last_stt_month_reset = Column(Date, nullable=True)
+
     # --- 👨‍👩‍👧 FAMILY PLAN ---
     # Self-referential FK. NULL → this user is a primary account holder.
     # Non-null → this user is a dependent linked to the given primary user ID.
@@ -124,6 +132,7 @@ class User(Base):
     # Rate-limiting / quota tracking for NOK SMS
     last_emergency_trigger = Column(DateTime(timezone=True), nullable=True)
     emergency_sms_count = Column(Integer, default=0, nullable=False)
+    emergency_sms_month_reset = Column(Date, nullable=True)
 
     # --- 💳 PAYSTACK BILLING ---
     # Populated by the webhook when a recurring subscription is created.
@@ -132,6 +141,21 @@ class User(Base):
     paystack_email_token = Column(String, nullable=True)         # e.g. "d7gofp6yppn3qz7"
 
     # --- 📲 PUSH NOTIFICATIONS ---
+    # Stable identifiers and minimal billing state used to reconcile automatic
+    # renewals. Existing rows remain nullable until a verified event supplies
+    # the real provider value.
+    paystack_customer_code = Column(String, nullable=True, index=True)
+    paystack_plan_code = Column(String, nullable=True)
+    paystack_environment = Column(String, nullable=True)
+    paystack_subscription_status = Column(String, nullable=True)
+    paystack_last_payment_reference = Column(String, nullable=True, index=True)
+    paystack_latest_invoice_code = Column(String, nullable=True, index=True)
+    paystack_current_period_start = Column(DateTime, nullable=True)
+    paystack_current_period_end = Column(DateTime, nullable=True)
+    paystack_next_payment_date = Column(DateTime, nullable=True)
+    paystack_last_successful_payment_at = Column(DateTime, nullable=True)
+
+    # Deprecated compatibility column. Delivery uses notification_device_tokens.
     fcm_token = Column(String, nullable=True)
 
     # --- ⚖️ NDPA 30-DAY LEGAL HOLD ---

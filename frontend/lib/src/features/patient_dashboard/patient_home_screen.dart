@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:mediq_app/src/core/constants/mdq_ai_assets.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:mediq_app/src/features/auth/presentation/profile_recovery_view.dart';
 import 'package:mediq_app/src/features/patient_dashboard/presentation/widgets/home_widgets.dart';
 import 'package:mediq_app/src/features/patient_dashboard/presentation/widgets/health_tips_sheet.dart';
 import 'package:mediq_app/src/features/appointments/presentation/schedule_screen.dart';
@@ -101,7 +103,9 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
     return userAsync.when(
       data: (user) {
         if (user == null) {
-          return const SizedBox.shrink();
+          return AuthenticatedProfileRecoveryView(
+            error: StateError('Authenticated profile was unavailable.'),
+          );
         }
 
         return Stack(
@@ -125,7 +129,9 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
                     const SizedBox(height: 32),
                     const AppointmentCard(),
                     const SizedBox(height: 24),
-                    _buildAICard(theme),
+                    AiSymptomCheckerCard(
+                      onTap: () => context.pushNamed('aiChat'),
+                    ),
                     const SizedBox(height: 24),
                     Text(
                       "Quick Actions",
@@ -172,16 +178,28 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
           ],
         );
       },
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => const SizedBox.shrink(),
+      loading: () => const AuthenticatedProfileRecoveryView(),
+      error: (e, _) => AuthenticatedProfileRecoveryView(error: e),
     );
   }
+}
 
-  Widget _buildAICard(ThemeData theme) {
+class AiSymptomCheckerCard extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const AiSymptomCheckerCard({
+    super.key,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: () => context.pushNamed('aiChat'),
+        onTap: onTap,
         borderRadius: BorderRadius.circular(16),
         child: Container(
           padding: const EdgeInsets.all(16),
@@ -199,13 +217,19 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
           child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(10),
+                padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.2),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.auto_awesome,
-                    color: Colors.white, size: 24),
+                child: Image.asset(
+                  MdqAiAssets.lens,
+                  key: const ValueKey('mdq-ai-lens'),
+                  width: 28,
+                  height: 28,
+                  fit: BoxFit.contain,
+                  excludeFromSemantics: true,
+                ),
               ),
               const SizedBox(width: 16),
               const Expanded(

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String
 
 from app.core.database import Base
 
@@ -13,6 +13,8 @@ class Notification(Base):
     title = Column(String, nullable=False)
     body = Column(String, nullable=False)
     type = Column(String, nullable=True, index=True)
+    navigation_data = Column(JSON, default=dict, nullable=False)
+    event_key = Column(String(255), nullable=True, unique=True, index=True)
     is_read = Column(Boolean, default=False, nullable=False)
     created_at = Column(
         DateTime(timezone=True),

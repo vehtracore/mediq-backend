@@ -8,12 +8,25 @@ import 'package:mediq_app/src/core/api/app_exception.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
+import 'package:mediq_app/src/features/auth/data/profile_exception.dart';
 import 'package:mediq_app/src/features/doctors/data/doctor_model.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as supabase;
 
 final authRepositoryProvider = Provider((ref) {
   return AuthRepository(ref.watch(dioProvider));
 });
+
+class SupportSubmissionResult {
+  const SupportSubmissionResult({
+    required this.requestId,
+    required this.status,
+  });
+
+  final String requestId;
+  final String status;
+
+  bool get isSent => status == 'sent';
+}
 
 class AuthRepository {
   final Dio _dio;
@@ -116,6 +129,9 @@ class AuthRepository {
     await _clearStoredSession();
   }
 
+  Future<void> clearRedundantSessionCopiesAfterLogout() =>
+      _clearStoredSession();
+
   // --- USER DATA ---
 
   Future<User?> getUserProfile() async {
@@ -126,14 +142,63 @@ class AuthRepository {
     return getCurrentUser();
   }
 
-  Future<User?> getCurrentUser() async {
+  Future<User> getCurrentUser() async {
     try {
       final response = await _dio.get('/api/v1/auth/me');
-      return User.fromJson(response.data);
-    } catch (e, stacktrace) {
-      debugPrint('⚠️ ERROR PARSING USER JSON: $e');
-      debugPrint(stacktrace.toString());
-      return null;
+      final data = response.data;
+      if (data is! Map<String, dynamic>) {
+        throw const FormatException('Profile response is not an object.');
+      }
+
+      final user = User.fromJson(data);
+      final displayName = '${user.firstName} ${user.lastName}'.trim();
+      const validRoles = {'patient', 'doctor', 'admin'};
+      final rawRole = data['role'];
+      if (user.id.isEmpty ||
+          displayName.isEmpty ||
+          user.firstName.trim().isEmpty ||
+          user.lastName.trim().isEmpty ||
+          rawRole is! String ||
+          !validRoles.contains(rawRole) ||
+          !validRoles.contains(user.role)) {
+        throw const ProfileAuthoritativeException(
+          'Your MDQ+ profile is incomplete or invalid.',
+        );
+      }
+      if (kDebugMode) debugPrint('[PROFILE] load succeeded');
+      return user;
+    } on ProfileAuthoritativeException {
+      if (kDebugMode) debugPrint('[PROFILE] authoritative load failure');
+      rethrow;
+    } on DioException catch (error) {
+      final statusCode = error.response?.statusCode;
+      if (statusCode == 401 || statusCode == 403 || statusCode == 404) {
+        if (kDebugMode) debugPrint('[PROFILE] authoritative load failure');
+        throw ProfileAuthoritativeException(
+          'Your account profile could not be verified. Please try again.',
+          cause: error,
+        );
+      }
+
+      if (kDebugMode) debugPrint('[PROFILE] temporary load failure');
+      throw ProfileTemporaryException(
+        statusCode != null && statusCode >= 500
+            ? 'Your profile is temporarily unavailable. Please try again.'
+            : 'Check your connection and try loading your profile again.',
+        cause: error,
+      );
+    } on FormatException catch (error) {
+      if (kDebugMode) debugPrint('[PROFILE] invalid profile response');
+      throw ProfileTemporaryException(
+        'Your profile could not be displayed yet. Please try again.',
+        cause: error,
+      );
+    } catch (error) {
+      if (kDebugMode) debugPrint('[PROFILE] temporary load failure');
+      throw ProfileTemporaryException(
+        'Your profile is temporarily unavailable. Please try again.',
+        cause: error,
+      );
     }
   }
 
@@ -189,14 +254,24 @@ class AuthRepository {
     }
   }
 
-  Future<void> updateDeviceToken(String fcmToken) async {
-    try {
-      await _dio.patch('/api/v1/auth/me/device-token', data: {
-        'fcm_token': fcmToken,
-      });
-    } catch (e) {
-      debugPrint("Failed to sync FCM token: $e");
-    }
+  Future<void> registerDeviceToken({
+    required String fcmToken,
+    required String installationId,
+    required String platform,
+  }) async {
+    await _dio.put('/api/v1/auth/me/device-token', data: {
+      'fcm_token': fcmToken,
+      'installation_id': installationId,
+      'platform': platform,
+    });
+  }
+
+  Future<void> unregisterDeviceToken({
+    required String installationId,
+  }) async {
+    await _dio.delete('/api/v1/auth/me/device-token', data: {
+      'installation_id': installationId,
+    });
   }
 
   // --- DOCTOR FEATURES ---
@@ -400,16 +475,34 @@ class AuthRepository {
 
   // --- SUPPORT ---
 
-  Future<void> sendSupportMessage(
-      {required String subject, required String message}) async {
+  Future<SupportSubmissionResult> sendSupportMessage({
+    required String requestId,
+    required String subject,
+    required String message,
+  }) async {
     try {
-      await _dio.post('/api/v1/support/contact', data: {
+      final response = await _dio.post('/api/v1/support/contact', data: {
+        'request_id': requestId,
         'subject': subject,
         'message': message,
       });
+      final data = response.data;
+      final responseRequestId =
+          data is Map ? data['request_id']?.toString() : null;
+      final status = data is Map ? data['status']?.toString() : null;
+      if (responseRequestId != requestId || status != 'sent') {
+        throw AppException(
+          "We couldn't confirm that your message was sent. Please try again.",
+        );
+      }
+      return SupportSubmissionResult(
+        requestId: responseRequestId!,
+        status: status!,
+      );
     } catch (e) {
+      if (e is AppException) rethrow;
       throw AppException(
-        UIErrorFormatter.getMessage(e),
+        "We couldn't send your message right now. Your message hasn't been marked as sent. Please try again.",
         originalException: e,
       );
     }

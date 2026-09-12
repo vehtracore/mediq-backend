@@ -1,16 +1,21 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
+import 'package:mediq_app/src/features/auth/data/auth_state_provider.dart';
+import 'package:mediq_app/src/features/auth/data/shell_identity.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 
 final userProvider = FutureProvider<User?>((ref) async {
   final repo = ref.watch(authRepositoryProvider);
-
-  if (Supabase.instance.client.auth.currentSession == null) {
-    return null;
-  }
+  final userId = ref.watch(authUserIdProvider);
+  if (userId == null) return null;
 
   final User? remote = await repo.getUserProfile();
+  if (remote != null) {
+    await ref
+        .read(shellIdentityStoreProvider)
+        .write(ShellIdentity.fromUser(userId, remote));
+    ref.invalidate(activeShellIdentityProvider);
+  }
   return remote;
 });
 

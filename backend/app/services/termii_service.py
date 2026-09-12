@@ -98,11 +98,7 @@ class TermiiService:
         """
         # ── Sanitize ──────────────────────────────────────────────────────────
         sanitized = _sanitize_phone(to)
-        logger.info(
-            "[TERMII] 🔢 Phone sanitization | raw=%r → sanitized=%r",
-            to,
-            sanitized,
-        )
+        logger.info("[TERMII] Phone number normalized for provider request")
 
         endpoint = f"{TERMII_BASE_URL}/api/sms/send"
         payload = {
@@ -115,9 +111,7 @@ class TermiiService:
         }
 
         logger.info(
-            "[TERMII] 📤 Sending SMS | to=%s | sender_id=%s | message_length=%d",
-            sanitized,
-            self.sender_id,
+            "[TERMII] Sending SMS | message_length=%d",
             len(message),
         )
 
@@ -125,11 +119,9 @@ class TermiiService:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.post(endpoint, json=payload)
 
-                # ── Log full response regardless of status ─────────────────
                 logger.info(
-                    "[TERMII] 📥 Response received | status=%s | body=%s",
-                    response.status_code,
-                    response.text,
+                    "[TERMII] Response received | http_class=%sxx",
+                    response.status_code // 100,
                 )
 
                 response.raise_for_status()
@@ -142,25 +134,19 @@ class TermiiService:
 
         except httpx.HTTPStatusError as exc:
             logger.error(
-                "[TERMII] ❌ SMS HTTP error | status=%s | body=%s",
-                exc.response.status_code,
-                exc.response.text,
-                exc_info=True,
+                "[TERMII] SMS HTTP error | http_class=%sxx",
+                exc.response.status_code // 100,
             )
         except httpx.RequestError as exc:
             # Network-level failure (DNS, timeout, connection refused, etc.)
             logger.error(
-                "[TERMII] ❌ SMS network error | type=%s | detail=%s",
+                "[TERMII] SMS network error | type=%s",
                 type(exc).__name__,
-                exc,
-                exc_info=True,
             )
         except Exception as exc:
             logger.error(
-                "[TERMII] ❌ SMS unexpected error | %s: %s",
+                "[TERMII] SMS unexpected error | type=%s",
                 type(exc).__name__,
-                exc,
-                exc_info=True,
             )
 
         return False

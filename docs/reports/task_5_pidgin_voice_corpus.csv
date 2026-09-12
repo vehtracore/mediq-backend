@@ -1,0 +1,16 @@
+id,category,expected_transcript,critical_tokens,pause_after
+P01,symptoms,My body dey hot and my head dey pain me,hot|head|pain,
+P02,negation,I no get chest pain,no|chest pain,no
+P03,duration,This cough don dey for three days,cough|three days,cough
+P04,medicine,I dey take amoxicillin 500 milligram,amoxicillin|500 milligram,take
+P05,dosage_frequency,I take two tablets three times every day,two tablets|three times|every day,tablets
+P06,numbers,My sugar reading na 12.4,12.4|sugar reading,na
+P07,body_part,The pain dey my left lower belly,left|lower belly,pain
+P08,allergy,I dey allergic to penicillin,allergic|penicillin,dey
+P09,allergy_negation,I no dey allergic to aspirin,no|allergic|aspirin,dey
+P10,pregnancy,I dey pregnant,pregnant,dey
+P11,pregnancy_negation,I no dey pregnant,no|pregnant,dey
+P12,code_switching,Since yesterday I dey feel dizzy when I stand up,Since yesterday|dizzy|stand up,dey
+P13,symptom_negation,The headache strong but I no vomit,headache|no|vomit,but
+P14,duration_number,The pain start about 6 hours ago,6 hours ago|pain,about
+P15,medicine_frequency,I use Ventolin inhaler two times today,Ventolin|inhaler|two times|today,inhaler

@@ -1,15 +1,13 @@
 import 'dart:async';
 
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart';
 
-import '../../../core/api/api_constants.dart';
-import '../../../core/api/dio_client.dart';
+import '../data/emergency_api.dart';
+import '../data/emergency_location_service.dart';
 
 // ─── Hardcoded fallback services ─────────────────────────────────────────────
 // Shown when the API fails, times out, or returns an empty list.
@@ -41,19 +39,32 @@ class _ServiceEntry {
   final String number;
   final IconData icon;
   final Color color;
+  final String category;
 
   const _ServiceEntry({
     required this.label,
     required this.number,
     required this.icon,
     required this.color,
+    this.category = 'fallback',
   });
+}
+
+enum _NearbySearchState {
+  waiting,
+  loading,
+  live,
+  unavailable,
+  empty,
+  locationUnavailable,
 }
 
 // ─── Widget ───────────────────────────────────────────────────────────────────
 
 class EmergencyScreen extends ConsumerStatefulWidget {
-  const EmergencyScreen({super.key});
+  final String? emergencyRequestId;
+
+  const EmergencyScreen({super.key, this.emergencyRequestId});
 
   @override
   ConsumerState<EmergencyScreen> createState() => _EmergencyScreenState();
@@ -78,238 +89,195 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
 
   /// True while the /local-services HTTP call is in-flight.
   bool _servicesLoading = false;
+  _NearbySearchState _searchState = _NearbySearchState.waiting;
+  bool _alertAttempted = false;
 
   @override
   void initState() {
     super.initState();
-    _determinePosition();
+    _determinePosition(triggerAlert: widget.emergencyRequestId != null);
   }
 
   // ── Precision GPS fetch ─────────────────────────────────────────────────────
-  Future<void> _determinePosition() async {
+  Future<void> _determinePosition({required bool triggerAlert}) async {
+    if (mounted) {
+      setState(() {
+        _gpsLoading = true;
+        _servicesLoading = false;
+        _dynamicServices = null;
+        _searchState = _NearbySearchState.waiting;
+        _locationMessage = 'Detecting location…';
+      });
+    }
     try {
+      final locationService = ref.read(emergencyLocationProvider);
       // 1. Check location services are enabled on device
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      final serviceEnabled = await locationService.isServiceEnabled();
       if (!serviceEnabled) {
-        if (mounted) {
-          setState(() {
-            _locationMessage = 'Location services are disabled. Enable GPS and retry.';
-            _gpsLoading = false;
-          });
-        }
+        _setLocationUnavailable(
+            'Location services are disabled. Enable GPS and retry.');
         return;
       }
 
       // 2. Request / check permission
-      LocationPermission permission = await Geolocator.checkPermission();
+      LocationPermission permission = await locationService.checkPermission();
       if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
+        permission = await locationService.requestPermission();
         if (permission == LocationPermission.denied) {
-          if (mounted) {
-            setState(() {
-              _locationMessage = 'Location permission denied. Enable it in Settings.';
-              _gpsLoading = false;
-            });
-          }
+          _setLocationUnavailable(
+              'Location permission denied. Enable it in Settings.');
           return;
         }
       }
       if (permission == LocationPermission.deniedForever) {
-        if (mounted) {
-          setState(() {
-            _locationMessage = 'Location permission permanently denied. Open Settings to enable.';
-            _gpsLoading = false;
-          });
-        }
-        await Geolocator.openAppSettings();
+        _setLocationUnavailable(
+          'Location permission permanently denied. Open Settings to enable.',
+        );
+        await locationService.openAppSettings();
         return;
       }
 
       // 3. Fetch a FRESH position from the hardware GPS chipset.
       //    • bestForNavigation = highest accuracy available
       //    • timeLimit: 15 s  → never blocks the UI indefinitely
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.bestForNavigation,
+      final position = await locationService.currentPosition(
+        accuracy: LocationAccuracy.bestForNavigation,
         timeLimit: const Duration(seconds: 15),
       );
 
-      _latitude  = position.latitude;
-      _longitude = position.longitude;
-
-      // 4. Reverse-geocode to a human-readable address (best-effort)
-      String addressLabel =
-          '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}';
-      try {
-        final placemarks = await placemarkFromCoordinates(
-          position.latitude, position.longitude,
-        );
-        if (placemarks.isNotEmpty) {
-          final p = placemarks.first;
-          final parts = [p.subLocality, p.locality, p.administrativeArea]
-              .where((s) => s != null && s.isNotEmpty)
-              .toList();
-          if (parts.isNotEmpty) addressLabel = parts.join(', ');
-        }
-      } catch (_) {
-        // Geocoding failure is non-fatal — coordinates are still captured
-      }
-
-      if (mounted) {
-        setState(() {
-          _locationMessage = addressLabel;
-          _gpsLoading = false;
-        });
-      }
-
-      // 5. Fire backend SOS trigger silently (Next of Kin SMS / push)
-      _sendEmergencyAlert(lat: position.latitude, lon: position.longitude);
-
-      // 6. Fetch dynamic local services now that we have coordinates
-      await _fetchLocalServices(
-        lat: position.latitude,
-        lon: position.longitude,
+      _onPositionResolved(
+        position,
+        approximate: false,
+        triggerAlert: triggerAlert,
       );
-
     } on TimeoutException {
       // ── GPS Fallback Tier ────────────────────────────────────────────────
       // bestForNavigation timed out (common indoors). Retry with high accuracy
       // using Wi-Fi / cell towers for an approximate fix.
-      debugPrint('[GPS] bestForNavigation timed out — falling back to high accuracy');
+      debugPrint(
+          '[GPS] bestForNavigation timed out — falling back to high accuracy');
       try {
-        final fallbackPosition = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-        );
-        _latitude  = fallbackPosition.latitude;
-        _longitude = fallbackPosition.longitude;
-
-        String addressLabel =
-            '${fallbackPosition.latitude.toStringAsFixed(4)}, '
-            '${fallbackPosition.longitude.toStringAsFixed(4)}';
-        try {
-          final placemarks = await placemarkFromCoordinates(
-            fallbackPosition.latitude, fallbackPosition.longitude,
-          );
-          if (placemarks.isNotEmpty) {
-            final p = placemarks.first;
-            final parts = [p.subLocality, p.locality, p.administrativeArea]
-                .where((s) => s != null && s.isNotEmpty)
-                .toList();
-            if (parts.isNotEmpty) addressLabel = parts.join(', ');
-          }
-        } catch (_) {}
-
-        if (mounted) {
-          setState(() {
-            _locationMessage = '$addressLabel (approx.)';
-            _gpsLoading = false;
-          });
-        }
-
-        _sendEmergencyAlert(
-            lat: fallbackPosition.latitude, lon: fallbackPosition.longitude);
-
-        await _fetchLocalServices(
-          lat: fallbackPosition.latitude,
-          lon: fallbackPosition.longitude,
+        final fallbackPosition =
+            await ref.read(emergencyLocationProvider).currentPosition(
+                  accuracy: LocationAccuracy.high,
+                  timeLimit: const Duration(seconds: 10),
+                );
+        _onPositionResolved(
+          fallbackPosition,
+          approximate: true,
+          triggerAlert: triggerAlert,
         );
       } catch (fallbackError) {
-        if (mounted) {
-          setState(() {
-            _locationMessage = 'Location unavailable. Emergency buttons still work.';
-            _gpsLoading = false;
-            // No coordinates → show fallback buttons immediately
-            _dynamicServices = [];
-          });
-        }
+        _setLocationUnavailable(
+            'Location unavailable. Emergency contacts are shown.');
       }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _locationMessage = 'Could not get location: ${e.toString()}';
-          _gpsLoading = false;
-          _dynamicServices = [];
-        });
-      }
+      _setLocationUnavailable(
+          'Location unavailable. Emergency contacts are shown.');
     }
   }
 
+  void _setLocationUnavailable(String message) {
+    if (!mounted) return;
+    setState(() {
+      _locationMessage = message;
+      _gpsLoading = false;
+      _servicesLoading = false;
+      _dynamicServices = [];
+      _searchState = _NearbySearchState.locationUnavailable;
+    });
+  }
+
+  void _onPositionResolved(
+    Position position, {
+    required bool approximate,
+    required bool triggerAlert,
+  }) {
+    _latitude = position.latitude;
+    _longitude = position.longitude;
+    final coordinateLabel =
+        '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}';
+    if (mounted) {
+      setState(() {
+        _locationMessage =
+            approximate ? '$coordinateLabel (approx.)' : coordinateLabel;
+        _gpsLoading = false;
+      });
+    }
+
+    final addressFuture = _resolveAddress(position).timeout(
+      const Duration(seconds: 5),
+      onTimeout: () => null,
+    );
+    unawaited(_applyResolvedAddress(addressFuture, approximate: approximate));
+    unawaited(
+        _fetchLocalServices(lat: position.latitude, lon: position.longitude));
+
+    if (triggerAlert && !_alertAttempted && widget.emergencyRequestId != null) {
+      _alertAttempted = true;
+      unawaited(_sendEmergencyAlert(
+        lat: position.latitude,
+        lon: position.longitude,
+        addressFuture: addressFuture,
+        requestId: widget.emergencyRequestId!,
+      ));
+    }
+  }
+
+  Future<String?> _resolveAddress(Position position) async {
+    return ref.read(emergencyLocationProvider).resolveAddress(position);
+  }
+
+  Future<void> _applyResolvedAddress(
+    Future<String?> addressFuture, {
+    required bool approximate,
+  }) async {
+    final address = await addressFuture;
+    if (!mounted || address == null) return;
+    setState(() {
+      _locationMessage = approximate ? '$address (approx.)' : address;
+    });
+  }
+
   // ── Dynamic local-services fetch ────────────────────────────────────────────
-  /// Calls GET /api/v1/emergency/local-services?lat=&lon= via a bare Dio
-  /// instance (no auth interceptor — this is a public key-proxy endpoint).
-  ///
-  /// On ANY failure the method sets [_dynamicServices] to [] which causes
-  /// the UI to render the hardcoded fallback buttons.
+  /// Calls the authenticated backend proxy and keeps failure states distinct.
   Future<void> _fetchLocalServices({
     required double lat,
     required double lon,
   }) async {
     if (!mounted) return;
-    setState(() => _servicesLoading = true);
+    setState(() {
+      _servicesLoading = true;
+      _searchState = _NearbySearchState.loading;
+    });
 
-    try {
-      final dio = Dio(
-        BaseOptions(
-          baseUrl: ApiConstants.baseUrl,
-          connectTimeout: const Duration(seconds: 8),
-          receiveTimeout: const Duration(seconds: 10),
-        ),
+    final result = await ref.read(emergencyApiProvider).searchNearby(
+          latitude: lat,
+          longitude: lon,
+        );
+    if (!mounted) return;
+
+    final services = result.services.map((item) {
+      final isHospital = item.category == 'hospital';
+      return _ServiceEntry(
+        label: item.name,
+        number: item.phoneNumber,
+        category: item.category,
+        icon: isHospital ? Icons.local_hospital : Icons.local_police,
+        color: isHospital ? const Color(0xFFD32F2F) : const Color(0xFF1565C0),
       );
+    }).toList(growable: false);
 
-      final response = await dio.get(
-        '/api/v1/emergency/local-services',
-        queryParameters: {'lat': lat, 'lon': lon},
-      );
-
-      // Backend always returns 200 with a list (possibly empty)
-      final raw = response.data;
-      if (raw is List && raw.isNotEmpty) {
-        // Map the JSON objects to _ServiceEntry, cycling through icon/color
-        // variants so buttons look visually distinct.
-        final icons  = [Icons.local_hospital, Icons.local_police, Icons.medical_services, Icons.healing];
-        final colors = [
-          const Color(0xFFD32F2F), // red
-          const Color(0xFF1565C0), // blue
-          const Color(0xFF2E7D32), // green
-          const Color(0xFF6A1B9A), // purple
-          const Color(0xFFE65100), // orange
-        ];
-
-        final services = raw.asMap().entries.map((entry) {
-          final i    = entry.key;
-          final item = entry.value as Map<String, dynamic>;
-          return _ServiceEntry(
-            label:  (item['name'] as String? ?? 'Emergency Service').trim(),
-            number: (item['phone_number'] as String? ?? '112').trim(),
-            icon:   icons[i % icons.length],
-            color:  colors[i % colors.length],
-          );
-        }).toList();
-
-        if (mounted) {
-          setState(() {
-            _dynamicServices = services;
-            _servicesLoading = false;
-          });
-        }
-        debugPrint('[LOCAL-SERVICES] ✅ ${services.length} services loaded from API.');
-        return;
-      }
-
-      // Empty list from API → fall through to fallback
-      debugPrint('[LOCAL-SERVICES] ℹ️ API returned empty list — using fallback buttons.');
-    } on DioException catch (e) {
-      debugPrint('[LOCAL-SERVICES] ❌ Dio error: ${e.message} — using fallback buttons.');
-    } catch (e) {
-      debugPrint('[LOCAL-SERVICES] ❌ Unexpected error: $e — using fallback buttons.');
-    }
-
-    // Any failure path lands here
-    if (mounted) {
-      setState(() {
-        _dynamicServices = []; // empty → _resolvedServices returns _kFallbackServices
-        _servicesLoading = false;
-      });
-    }
+    setState(() {
+      _dynamicServices = services;
+      _servicesLoading = false;
+      _searchState = switch (result.status) {
+        NearbySearchStatus.success when services.isNotEmpty =>
+          _NearbySearchState.live,
+        NearbySearchStatus.empty => _NearbySearchState.empty,
+        _ => _NearbySearchState.unavailable,
+      };
+    });
   }
 
   /// Returns the list that the UI should render.
@@ -323,36 +291,35 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
 
   // ── SOS backend trigger ─────────────────────────────────────────────────────
   /// Fires POST /api/v1/emergency/trigger.
-  /// Backend handles Next of Kin SMS + push; we never block on the result.
+  /// Backend handles the Next of Kin SMS; nearby search never awaits it.
   Future<void> _sendEmergencyAlert({
     required double lat,
     required double lon,
+    required Future<String?> addressFuture,
+    required String requestId,
   }) async {
     try {
-      final dio = ref.read(dioProvider);
+      final address = await addressFuture;
+      await ref.read(emergencyApiProvider).requestNextOfKinAlert(
+            latitude: lat,
+            longitude: lon,
+            address: address,
+            requestId: requestId,
+          );
+      debugPrint('[SOS] Next-of-kin alert request accepted.');
+    } catch (_) {
+      debugPrint('[SOS] Next-of-kin alert request failed (non-fatal).');
+    }
+  }
 
-      // Only forward a human-readable address — skip the loading placeholder
-      // and generic error strings that are not meaningful to the backend.
-      const _nonAddressStrings = {
-        'Detecting location…',
-        'Location unavailable. Emergency buttons still work.',
-      };
-      final String? addressToSend =
-          (!_gpsLoading && !_nonAddressStrings.contains(_locationMessage))
-              ? _locationMessage
-              : null;
-
-      await dio.post(
-        '/api/v1/emergency/trigger',
-        data: {
-          'latitude': lat,
-          'longitude': lon,
-          if (addressToSend != null) 'address': addressToSend,
-        },
-      );
-      debugPrint('[SOS] ✅ Alert fired — lat=$lat, lon=$lon, address=$addressToSend');
-    } catch (e) {
-      debugPrint('[SOS] ❌ Alert failed (non-fatal): $e');
+  void _retryNearbySearch() {
+    if (_servicesLoading) return;
+    final lat = _latitude;
+    final lon = _longitude;
+    if (lat != null && lon != null) {
+      unawaited(_fetchLocalServices(lat: lat, lon: lon));
+    } else {
+      unawaited(_determinePosition(triggerAlert: false));
     }
   }
 
@@ -368,7 +335,8 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Could not open dialler for $number. Please dial manually.'),
+            content: Text(
+                'Could not open dialler for $number. Please dial manually.'),
             backgroundColor: Colors.red[700],
             behavior: SnackBarBehavior.floating,
           ),
@@ -447,7 +415,14 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
     }
 
     final services = _resolvedServices ?? _kFallbackServices;
-    final isDynamic = _dynamicServices != null && _dynamicServices!.isNotEmpty;
+    final isDynamic = _searchState == _NearbySearchState.live;
+    final fallbackMessage = switch (_searchState) {
+      _NearbySearchState.empty =>
+        'No nearby services found within 5 km. Showing emergency contacts.',
+      _NearbySearchState.locationUnavailable =>
+        'Location unavailable. Showing emergency contacts.',
+      _ => 'Nearby search unavailable. Showing emergency contacts.',
+    };
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -456,6 +431,14 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
           const Padding(
             padding: EdgeInsets.only(bottom: 12),
             child: _NearbyFoundBadge(),
+          ),
+        if (!isDynamic)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _FallbackNotice(
+              message: fallbackMessage,
+              onRetry: _retryNearbySearch,
+            ),
           ),
         ...services.asMap().entries.map((entry) {
           final service = entry.value;
@@ -502,9 +485,9 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
         child: Row(
           children: [
             Container(
-               padding: const EdgeInsets.all(12),
-               decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-               child: Icon(icon, color: Colors.white, size: 24),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              child: Icon(icon, color: Colors.white, size: 24),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -683,6 +666,37 @@ class _NearbyFoundBadge extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FallbackNotice extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const _FallbackNotice({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, size: 18, color: Colors.orange),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(message, style: theme.textTheme.bodySmall),
+          ),
+          TextButton(onPressed: onRetry, child: const Text('Retry')),
         ],
       ),
     );

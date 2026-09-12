@@ -142,11 +142,13 @@ async def _verify_and_update(
                 _apply_db_update,
                 _parse_reference,
                 _validate_consultation_payment,
+                _validate_successful_consultation_charge,
             )
 
             transaction_type, ref_appointment_id, ref_user_id = _parse_reference(
                 reference
             )
+            _validate_successful_consultation_charge(tx_data)
             _validate_consultation_payment(
                 transaction_type=transaction_type,
                 ref_appointment_id=ref_appointment_id,

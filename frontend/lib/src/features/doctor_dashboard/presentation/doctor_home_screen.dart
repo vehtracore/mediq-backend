@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:mediq_app/src/features/notifications/presentation/notification_bell_icon.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:mediq_app/src/features/auth/presentation/profile_recovery_view.dart';
 import 'package:mediq_app/src/features/doctor_dashboard/presentation/doctor_requests_screen.dart';
 import 'package:mediq_app/src/features/doctor_dashboard/presentation/doctor_profile_screen.dart';
 import 'package:mediq_app/src/features/doctor_dashboard/presentation/doctor_schedule_screen.dart';
@@ -9,15 +11,15 @@ import 'package:mediq_app/src/features/doctor_dashboard/presentation/requests_co
 import 'package:mediq_app/src/features/doctors/data/doctor_repository.dart';
 import '../../../../presentation/widgets/global_error_widget.dart';
 
-/// Purpose: Drives the overview statistics (Earnings, Rating) on the Doctor Dashboard 
+/// Purpose: Drives the overview statistics (Earnings, Rating) on the Doctor Dashboard
 /// to give medical professionals a quick summary of their performance and revenue.
 ///
 /// Data Source: Communicates with `doctorRepositoryProvider` (`getDoctorStats()` API endpoint).
 ///
-/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(doctorStatsProvider)` 
+/// Invalidation Strategy: Should be explicitly invalidated via `ref.invalidate(doctorStatsProvider)`
 /// on dashboard pull-to-refresh, retry taps, or after a consultation is marked complete and paid.
 ///
-/// Error & Loading Annotations: Exceptions thrown by the API are caught by Riverpod 
+/// Error & Loading Annotations: Exceptions thrown by the API are caught by Riverpod
 /// and translated into clean localized strings by the `GlobalErrorWidget` wrapped around this provider's `error` state.
 final doctorStatsProvider = FutureProvider.autoDispose((ref) async {
   return await ref.watch(doctorRepositoryProvider).getDoctorStats();
@@ -51,8 +53,8 @@ class _DoctorHomeScreenState extends ConsumerState<DoctorHomeScreen> {
         type: BottomNavigationBarType.fixed,
         backgroundColor: theme.cardTheme.color, // ✅ Dynamic Nav Bar
         selectedItemColor: const Color(0xFF4A90E2),
-        unselectedItemColor:
-            theme.iconTheme.color?.withValues(alpha: 0.5), // ✅ Dynamic Icon Color
+        unselectedItemColor: theme.iconTheme.color
+            ?.withValues(alpha: 0.5), // ✅ Dynamic Icon Color
         items: const [
           BottomNavigationBarItem(
               icon: Icon(Icons.dashboard_outlined), label: 'Overview'),
@@ -84,36 +86,44 @@ class _DoctorDashboardTab extends ConsumerWidget {
       padding: const EdgeInsets.all(24),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         userAsync.when(
-            data: (user) => Row(
+            data: (user) => user == null
+                ? AuthenticatedProfileRecoveryView(
+                    compact: true,
+                    error: StateError('Authenticated profile was unavailable.'),
+                  )
+                : Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Expanded(
-                        child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text("Welcome back,",
-                                  style: theme
-                                      .textTheme.bodyMedium), // ✅ Dynamic Text
-                              Text("Dr. ${user?.lastName ?? ''}",
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: theme.textTheme.headlineSmall?.copyWith(
-                                      fontWeight:
-                                          FontWeight.bold)) // ✅ Dynamic Text
-                            ]),
-                      ),
-                      IconButton(
-                          icon: CircleAvatar(
-                              backgroundColor:
-                                  theme.brightness == Brightness.dark
-                                      ? Colors.grey[800]
-                                      : Colors.grey[200],
-                              child: Icon(Icons.notifications,
-                                  color: theme.iconTheme.color)),
-                          onPressed: () => context.push('/notifications'))
-                    ]),
-            loading: () => const SizedBox(),
-            error: (e, s) => const SizedBox()),
+                        Expanded(
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text("Welcome back,",
+                                    style: theme.textTheme
+                                        .bodyMedium), // ✅ Dynamic Text
+                                Text("Dr. ${user.lastName}",
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.headlineSmall
+                                        ?.copyWith(
+                                            fontWeight: FontWeight
+                                                .bold)) // ✅ Dynamic Text
+                              ]),
+                        ),
+                        IconButton(
+                            icon: CircleAvatar(
+                                backgroundColor:
+                                    theme.brightness == Brightness.dark
+                                        ? Colors.grey[800]
+                                        : Colors.grey[200],
+                                child: NotificationBellIcon(
+                                    color: theme.iconTheme.color, size: 22)),
+                            onPressed: () => context.push('/notifications'))
+                      ]),
+            loading: () =>
+                const AuthenticatedProfileRecoveryView(compact: true),
+            error: (e, s) =>
+                AuthenticatedProfileRecoveryView(error: e, compact: true)),
         const SizedBox(height: 32),
         Row(children: [
           Expanded(
@@ -144,8 +154,8 @@ class _DoctorDashboardTab extends ConsumerWidget {
                       context, totalPaid, pendingSettlement)),
               const SizedBox(width: 16),
               Expanded(
-                  child: _buildStatCard(context, "Rating",
-                      "${stats['rating']}", Icons.star, Colors.purple)),
+                  child: _buildStatCard(context, "Rating", "${stats['rating']}",
+                      Icons.star, Colors.purple)),
             ]);
           },
           loading: () => const LinearProgressIndicator(),
@@ -218,7 +228,8 @@ class _DoctorDashboardTab extends ConsumerWidget {
                 ? [] // No shadow in dark mode
                 : [
                     BoxShadow(
-                        color: Colors.grey.withValues(alpha: 0.1), blurRadius: 10)
+                        color: Colors.grey.withValues(alpha: 0.1),
+                        blurRadius: 10)
                   ]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Icon(icon, color: color, size: 24),

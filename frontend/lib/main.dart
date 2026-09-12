@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +7,13 @@ import 'src/core/router/app_router.dart';
 import 'src/core/theme/app_theme.dart';
 import 'src/features/auth/presentation/user_controller.dart';
 import 'src/features/auth/data/user_model.dart';
+import 'src/features/auth/data/auth_session_coordinator.dart';
+import 'src/features/auth/presentation/auth_session_lifecycle.dart';
+import 'src/features/chat/presentation/consultation_session_controller.dart';
+import 'src/core/services/notification_service.dart';
+import 'src/features/notifications/data/notification_repository.dart';
+import 'src/features/notifications/navigation/notification_intent.dart';
+import 'src/features/notifications/navigation/notification_navigation_coordinator.dart';
 import 'src/shared/presentation/widgets/global_error_widget.dart';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -15,93 +24,267 @@ import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 
 // 🔭 Observability — Sentry (crash reporting) & PostHog (analytics)
 import 'package:sentry_flutter/sentry_flutter.dart';
-import 'package:posthog_flutter/posthog_flutter.dart'; // PostHog: native config in AndroidManifest/Info.plist
 
-void main() async {
-  // ---------------------------------------------------------------------------
-  // 🔭 Sentry — wraps the entire app so crashes anywhere are captured.
-  // Set SENTRY_DSN in your .env / CI secrets. Empty string = silent no-op.
-  // ---------------------------------------------------------------------------
-  await SentryFlutter.init(
-    (options) {
-      options.dsn = const String.fromEnvironment(
-        'SENTRY_DSN',
-        defaultValue: '', // Fails open — no data sent when DSN is absent
-      );
-      final sampleRate = kDebugMode ? 1.0 : 0.1;
-      options.tracesSampleRate = sampleRate;
-      options.profilesSampleRate = sampleRate;
-      options.debug = kDebugMode;       // Verbose Sentry logs only in debug builds
-    },
-    appRunner: () async {
-      WidgetsFlutterBinding.ensureInitialized();
+const _sentryDsn = String.fromEnvironment('SENTRY_DSN', defaultValue: '');
+bool _firebaseReady = false;
 
-      await dotenv.load(fileName: ".env");
-      await Supabase.initialize(
-        url: dotenv.env['SUPABASE_URL']!,
-        anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
-        // Tells the Supabase SDK to intercept deep links on this scheme and
-        // automatically exchange the token before firing onAuthStateChange.
-        // Must match AndroidManifest.xml android:scheme value.
-        authOptions: const FlutterAuthClientOptions(
-          authFlowType: AuthFlowType.pkce,
-        ),
-      );
+Future<void> main() async {
+  if (_sentryDsn.trim().isEmpty) {
+    await _bootstrapApplication();
+    return;
+  }
 
-      // --- 🔥 Firebase Initialization ---
-      try {
-        await Firebase.initializeApp(
-          options: DefaultFirebaseOptions.currentPlatform, // Fix for Flutter Web
-        );
+  if (!_isValidSentryDsn(_sentryDsn)) {
+    if (kDebugMode) {
+      debugPrint('Sentry disabled: invalid DSN configuration.');
+    }
+    await _bootstrapApplication();
+    return;
+  }
 
-        // 🛑 FIX: Removed await NotificationService().init() from the boot sequence.
-        // Browsers block notification requests on load without user interaction,
-        // which caused the infinite white screen. We will call this post-login instead.
-      } catch (e) {
-        debugPrint("Firebase init failed: $e");
-      }
+  var bootstrapStarted = false;
+  var bootstrapCompleted = false;
+  Future<void>? bootstrapFuture;
 
-      // --- 🛡️ Error Boundaries ---
-      // 1. Catch synchronous UI rendering errors (Grey Screen of Death)
-      ErrorWidget.builder = (FlutterErrorDetails details) {
-        // Only return the custom widget in release mode or if we want it in debug too.
-        // We already handle kDebugMode inside GlobalErrorWidget to show the stack trace.
-        return GlobalErrorWidget(details: details);
-      };
+  Future<void> bootstrapOnce() {
+    return bootstrapFuture ??= (() async {
+      bootstrapStarted = true;
+      await _bootstrapApplication();
+      bootstrapCompleted = true;
+    })();
+  }
 
-      // 2. Catch asynchronous Dart exceptions — forwarded to Sentry before
-      //    returning true (fail-open: the app never crashes from this handler).
-      PlatformDispatcher.instance.onError = (error, stack) {
-        if (kDebugMode) {
-          debugPrint('🐛 [PlatformDispatcher] Asynchronous Error Caught: $error');
-          debugPrint('🐛 StackTrace: $stack');
-        }
-        // Forward to Sentry — no-op when DSN is empty (local dev)
-        Sentry.captureException(error, stackTrace: stack);
-        return true; // Return true to prevent the app from crashing entirely
-      };
-      // ---------------------------
+  try {
+    await SentryFlutter.init(
+      (options) {
+        options.dsn = _sentryDsn;
+        const sampleRate = kDebugMode ? 1.0 : 0.1;
+        options.tracesSampleRate = sampleRate;
+        options.profilesSampleRate = sampleRate;
+        options.debug = kDebugMode;
+      },
+      appRunner: bootstrapOnce,
+    );
+  } catch (error, stackTrace) {
+    // If appRunner started but did not complete, the exception came from the
+    // application bootstrap itself. Preserve that failure instead of retrying
+    // initialization and potentially calling runApp twice.
+    if (bootstrapStarted && !bootstrapCompleted) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
 
-      runApp(const ProviderScope(child: MDQApp()));
-    },
-  );
+    if (kDebugMode) {
+      debugPrint('Sentry disabled: initialization failed.');
+    }
+
+    // Sentry failed before invoking appRunner. Start MDQ+ exactly once without
+    // observability. If bootstrap already completed, the app is already live.
+    if (!bootstrapStarted) {
+      await bootstrapOnce();
+    }
+  }
 }
 
-class MDQApp extends ConsumerWidget {
+bool _isValidSentryDsn(String value) {
+  try {
+    final dsn = Dsn.parse(value);
+    final uri = dsn.uri;
+    return uri != null &&
+        (uri.scheme == 'https' || uri.scheme == 'http') &&
+        uri.host.isNotEmpty &&
+        dsn.publicKey.isNotEmpty &&
+        dsn.projectId.isNotEmpty;
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<void> _bootstrapApplication() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await dotenv.load(fileName: ".env");
+  await Supabase.initialize(
+    url: dotenv.env['SUPABASE_URL']!,
+    anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
+    // Tells the Supabase SDK to intercept deep links on this scheme and
+    // automatically exchange the token before firing onAuthStateChange.
+    // Must match AndroidManifest.xml android:scheme value.
+    authOptions: const FlutterAuthClientOptions(
+      authFlowType: AuthFlowType.pkce,
+    ),
+  );
+
+  // --- 🔥 Firebase Initialization ---
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform, // Fix for Flutter Web
+    );
+    _firebaseReady = true;
+  } catch (e) {
+    debugPrint("Firebase init failed: $e");
+  }
+
+  // --- 🛡️ Error Boundaries ---
+  // 1. Catch synchronous UI rendering errors (Grey Screen of Death)
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    // Only return the custom widget in release mode or if we want it in debug too.
+    // We already handle kDebugMode inside GlobalErrorWidget to show the stack trace.
+    return GlobalErrorWidget(details: details);
+  };
+
+  // 2. Catch asynchronous Dart exceptions — forwarded to Sentry before
+  //    returning true (fail-open: the app never crashes from this handler).
+  PlatformDispatcher.instance.onError = (error, stack) {
+    if (kDebugMode) {
+      debugPrint('🐛 [PlatformDispatcher] Asynchronous Error Caught: $error');
+      debugPrint('🐛 StackTrace: $stack');
+    }
+    // Forward to Sentry — no-op when DSN is empty (local dev)
+    Sentry.captureException(error, stackTrace: stack);
+    return true; // Return true to prevent the app from crashing entirely
+  };
+  // ---------------------------
+
+  runApp(const ProviderScope(child: MDQApp()));
+}
+
+class MDQApp extends ConsumerStatefulWidget {
   const MDQApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MDQApp> createState() => _MDQAppState();
+}
+
+class _MDQAppState extends ConsumerState<MDQApp> with WidgetsBindingObserver {
+  String? _registeredNotificationAccount;
+  bool? _registeredPushPreference;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    ref
+        .read(consultationSessionRegistryProvider)
+        .handleAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      _registeredNotificationAccount = null;
+      _registeredPushPreference = null;
+      unawaited(_restoreAuthenticatedProfile());
+    }
+  }
+
+  Future<void> _restoreAuthenticatedProfile() async {
+    try {
+      final token = await ref
+          .read(authSessionCoordinatorProvider)
+          .accessTokenIfAvailable();
+      if (token != null && mounted) {
+        ref.invalidate(userProvider);
+      }
+    } on TransientSessionRefreshException {
+      // Preserve both the Supabase session and any last-known shell identity.
+    } on TerminalSessionRefreshException {
+      // The coordinator/Supabase auth event performs authoritative teardown.
+    }
+  }
+
+  Future<void> _syncNotificationSession(
+    String accountKey,
+    bool pushEnabled,
+  ) async {
+    if (!_firebaseReady) return;
+    try {
+      await ref.read(notificationServiceProvider).authenticatedSessionStarted(
+            accountKey: accountKey,
+            pushEnabled: pushEnabled,
+          );
+    } catch (error) {
+      if (kDebugMode) debugPrint('Notification lifecycle unavailable: $error');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.watch(authSessionLifecycleProvider);
     final goRouter = ref.watch(goRouterProvider);
 
     // 1. Listen to the active user state (updates when you toggle settings)
     final activeUser = ref.watch(userControllerProvider).value;
 
     // 2. Listen to the database fetch (updates when app restarts)
-    final fetchedUser = ref.watch(userProvider).value;
+    final fetchedUserState = ref.watch(userProvider);
+    final fetchedUser = fetchedUserState.value;
 
     // 3. Merge them (Active takes priority)
     final User? currentUser = activeUser ?? fetchedUser;
+    final session = Supabase.instance.client.auth.currentSession;
+    final notificationNavigation =
+        ref.read(notificationNavigationCoordinatorProvider);
+    final notificationSessionReady =
+        session != null && fetchedUser != null && !fetchedUserState.isLoading;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      notificationNavigation.attachNavigator(goRouter.go);
+      notificationNavigation.updateSessionReady(notificationSessionReady);
+      if (_firebaseReady) {
+        final service = ref.read(notificationServiceProvider);
+        unawaited(service.initialize(
+          onIntent: (data) {
+            ref.invalidate(notificationsProvider);
+            ref.invalidate(unreadNotificationCountProvider);
+            notificationNavigation.submit(data);
+          },
+          onForegroundMessage: (message) {
+            ref.invalidate(notificationsProvider);
+            ref.invalidate(unreadNotificationCountProvider);
+            final intent = NotificationIntent.fromData(message.data);
+            final currentPath =
+                goRouter.routerDelegate.currentConfiguration.uri.path;
+            if (intent?.route == currentPath) return;
+            rootScaffoldMessengerKey.currentState?.showSnackBar(
+              SnackBar(
+                content: Text(
+                  message.body ??
+                      message.title ??
+                      'You have a new notification.',
+                ),
+                action: intent == null
+                    ? null
+                    : SnackBarAction(
+                        label: 'View',
+                        onPressed: () =>
+                            notificationNavigation.submit(message.data),
+                      ),
+              ),
+            );
+          },
+        ));
+      }
+    });
+
+    if (session != null && fetchedUser != null && !fetchedUserState.isLoading) {
+      final preference = fetchedUser.settingsNotifications;
+      if (_registeredNotificationAccount != session.user.id ||
+          _registeredPushPreference != preference) {
+        _registeredNotificationAccount = session.user.id;
+        _registeredPushPreference = preference;
+        unawaited(_syncNotificationSession(session.user.id, preference));
+      }
+    } else {
+      _registeredNotificationAccount = null;
+      _registeredPushPreference = null;
+    }
 
     // 4. Determine Theme
     ThemeMode currentMode = ThemeMode.system;
@@ -114,6 +297,7 @@ class MDQApp extends ConsumerWidget {
     }
 
     return MaterialApp.router(
+      scaffoldMessengerKey: rootScaffoldMessengerKey,
       title: 'MDQ+',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,

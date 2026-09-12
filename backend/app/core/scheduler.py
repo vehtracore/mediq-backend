@@ -14,6 +14,8 @@ from app.models.appointment import (
     resolve_appointment_type,
 )
 from app.models.notification import Notification
+from app.models.doctor import Doctor
+from app.models.support_message import SupportMessage
 from app.services.consultation_pricing import (
     DEFAULT_CONSULTATION_DURATION_MINUTES,
     CONSULTATION_MESSAGE_GRACE_MINUTES,
@@ -27,6 +29,7 @@ from app.services.consultation_refund_service import (
     REFUND_STATUS_AWAITING_ADMIN,
     process_approved_consultation_refunds,
 )
+from app.services.notification_service import NotificationType, notify_user
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -141,13 +144,28 @@ async def complete_expired_consultations() -> None:
             .all()
         )
         completed = 0
+        completed_recipients: list[tuple[int, int]] = []
         for appointment in appointments:
             start = consultation_started_utc(appointment)
             if start is not None and now >= start + close_after:
                 complete_consultation(db, appointment)
                 completed += 1
+                completed_recipients.append(
+                    (appointment.id, appointment.patient_id)
+                )
 
         db.commit()
+        for appointment_id, patient_id in completed_recipients:
+            notify_user(
+                db,
+                user_id=patient_id,
+                notification_type=NotificationType.CONSULTATION_COMPLETED,
+                navigation_data={"appointment_id": appointment_id},
+                event_key=(
+                    f"appointment:{appointment_id}:"
+                    f"{NotificationType.CONSULTATION_COMPLETED}:{patient_id}"
+                ),
+            )
         if completed:
             logger.info(
                 "[APPT SWEEP] Auto-completed %d consultation(s) in nightly wrap-up.",
@@ -187,6 +205,7 @@ async def mark_consultation_no_shows() -> None:
             "queue_patient_unavailable": 0,
             "returned_to_queue": 0,
         }
+        missed_recipients: list[tuple[int, int, int | None, str]] = []
         for appointment in appointments:
             deadline = attendance_deadline_utc(appointment)
             if deadline is None or now < deadline:
@@ -234,8 +253,33 @@ async def mark_consultation_no_shows() -> None:
             appointment.no_show_marked_at = now_naive
             ensure_consultation_payout(db, appointment)
             counts[appointment.status] += 1
+            missed_recipients.append(
+                (
+                    appointment.id,
+                    appointment.patient_id,
+                    appointment.doctor_id,
+                    appointment.status,
+                )
+            )
 
         db.commit()
+        for appointment_id, patient_id, doctor_id, missed_status in missed_recipients:
+            recipient_ids = [patient_id]
+            if doctor_id is not None:
+                doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
+                if doctor and doctor.user_id:
+                    recipient_ids.append(doctor.user_id)
+            for recipient_id in recipient_ids:
+                notify_user(
+                    db,
+                    user_id=recipient_id,
+                    notification_type=NotificationType.CONSULTATION_MISSED,
+                    navigation_data={"appointment_id": appointment_id},
+                    event_key=(
+                        f"appointment:{appointment_id}:no-show:{missed_status}:"
+                        f"{recipient_id}"
+                    ),
+                )
         if any(counts.values()):
             logger.info(
                 "[NO SHOW] patient=%d doctor=%d both=%d queue_patient_unavailable=%d returned_queue=%d",
@@ -269,6 +313,27 @@ async def cleanup_old_notifications() -> None:
     except Exception as exc:
         db.rollback()
         logger.exception("[NOTIFICATION CLEANUP] Error during retention sweep: %s", exc)
+    finally:
+        db.close()
+
+
+async def cleanup_old_support_messages() -> None:
+    """Delete support content after the bounded 30-day retention period."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+
+    db = SessionLocal()
+    try:
+        result = db.execute(
+            delete(SupportMessage).where(SupportMessage.created_at < cutoff)
+        )
+        db.commit()
+        logger.info(
+            "[SUPPORT CLEANUP] Deleted %d support submission(s) older than 30 days.",
+            result.rowcount,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.exception("[SUPPORT CLEANUP] Retention sweep failed: %s", exc)
     finally:
         db.close()
 

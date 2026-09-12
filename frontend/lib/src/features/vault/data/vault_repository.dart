@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/core/api/app_exception.dart';
 import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
+import 'package:mediq_app/src/features/auth/data/auth_state_provider.dart';
 
 import 'vault_record.dart';
 
@@ -21,7 +22,9 @@ final vaultRepositoryProvider = Provider<VaultRepository>((ref) {
 
 /// Fetches the patient's full Health Vault history from the backend.
 /// Returns a list of [VaultRecord] sorted newest-first (server-side).
-final vaultHistoryProvider = FutureProvider<List<VaultRecord>>((ref) async {
+final vaultHistoryProvider =
+    FutureProvider.family<List<VaultRecord>, String>((ref, userId) async {
+  if (ref.watch(authUserIdProvider) != userId) return const [];
   return ref.watch(vaultRepositoryProvider).getVaultHistory();
 });
 

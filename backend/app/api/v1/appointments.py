@@ -31,7 +31,7 @@ from app.services.consultation_completion import complete_consultation
 from app.services.consultation_payout_service import consultation_payout_hold_until
 from app.services.consultation_refund_service import REFUND_STATUS_AWAITING_ADMIN
 from app.api import deps
-from app.core.notifications import dispatch_push
+from app.services.notification_service import NotificationType, notify_user
 from app.core.limiter import limiter
 from app.services.email_guard import (
     get_from_email,
@@ -295,34 +295,25 @@ def map_appt(a, doc_name=None, patient_name=None):
     )
 
 
-def _display_name(user: User | None) -> str:
-    if not user:
-        return "A patient"
-    return f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email or "A patient"
-
-
 def _notify_user(
+    db: Session,
     user: User | None,
     *,
-    title: str,
-    body: str,
     notification_type: str,
-    event_label: str,
     appointment_id: int | None = None,
 ):
     if not user:
         return
-
-    data = {"type": notification_type}
-    if appointment_id is not None:
-        data["appointment_id"] = str(appointment_id)
-
-    dispatch_push(
-        token=user.fcm_token,
-        title=title,
-        body=body,
-        data=data,
-        event_label=event_label,
+    notify_user(
+        db,
+        user_id=user.id,
+        notification_type=notification_type,
+        navigation_data={"appointment_id": appointment_id},
+        event_key=(
+            f"appointment:{appointment_id}:{notification_type}:{user.id}"
+            if appointment_id is not None
+            else None
+        ),
     )
 
 
@@ -330,18 +321,13 @@ def _notify_patient(
     db: Session,
     appt: Appointment,
     *,
-    title: str,
-    body: str,
     notification_type: str,
-    event_label: str,
 ):
     patient = db.query(User).filter(User.id == appt.patient_id).first() if appt.patient_id else None
     _notify_user(
+        db,
         patient,
-        title=title,
-        body=body,
         notification_type=notification_type,
-        event_label=event_label,
         appointment_id=appt.id,
     )
 
@@ -350,19 +336,14 @@ def _notify_doctor(
     db: Session,
     doctor: Doctor | None,
     *,
-    title: str,
-    body: str,
     notification_type: str,
-    event_label: str,
     appointment_id: int | None = None,
 ):
     doctor_user = db.query(User).filter(User.id == doctor.user_id).first() if doctor else None
     _notify_user(
+        db,
         doctor_user,
-        title=title,
-        body=body,
         notification_type=notification_type,
-        event_label=event_label,
         appointment_id=appointment_id,
     )
 
@@ -812,10 +793,7 @@ def request_vip_appointment(
     _notify_doctor(
         db,
         doctor,
-        title="VIP Request Received",
-        body=f"{_display_name(current_user)} requested a VIP appointment.",
-        notification_type="vip_request_received",
-        event_label="APPOINTMENTS/VIP_REQUEST",
+        notification_type=NotificationType.CONSULTATION_REQUEST,
         appointment_id=new_appt.id,
     )
     return map_appt(new_appt)
@@ -1127,10 +1105,7 @@ def claim_appointment(appt_id: int, db: Session = Depends(get_db), current_user:
     _notify_patient(
         db,
         appt,
-        title="Appointment Confirmed",
-        body="Your consultation has been confirmed.",
-        notification_type="schedule_confirmed",
-        event_label="APPOINTMENTS/QUEUE_CLAIMED",
+        notification_type=NotificationType.CONSULTATION_ASSIGNED,
     )
     return map_appt(appt, doctor.full_name)
 
@@ -1160,10 +1135,7 @@ def accept_appointment(appt_id: int, db: Session = Depends(get_db), current_user
     _notify_patient(
         db,
         appt,
-        title="Appointment Confirmed",
-        body="Your consultation has been confirmed.",
-        notification_type="schedule_confirmed",
-        event_label="APPOINTMENTS/ACCEPTED",
+        notification_type=NotificationType.CONSULTATION_CONFIRMED,
     )
     return map_appt(appt, doctor.full_name)
 
@@ -1190,10 +1162,7 @@ def decline_appointment(appt_id: int, db: Session = Depends(get_db), current_use
     _notify_patient(
         db,
         appt,
-        title="Appointment Cancelled",
-        body="Your appointment request was declined.",
-        notification_type="schedule_cancelled",
-        event_label="APPOINTMENTS/DECLINED",
+        notification_type=NotificationType.CONSULTATION_CANCELLED,
     )
     return map_appt(appt, doctor.full_name)
 
@@ -1232,10 +1201,7 @@ def cancel_appointment_by_doctor(appt_id: int, db: Session = Depends(get_db), cu
     _notify_patient(
         db,
         appt,
-        title="Appointment Cancelled",
-        body="Your appointment was cancelled by the doctor.",
-        notification_type="schedule_cancelled",
-        event_label="APPOINTMENTS/CANCELLED_BY_DOCTOR",
+        notification_type=NotificationType.CONSULTATION_CANCELLED,
     )
     return map_appt(appt, doctor.full_name)
 
@@ -1271,10 +1237,7 @@ def complete_appointment(appt_id: int, db: Session = Depends(get_db), current_us
     _notify_patient(
         db,
         appt,
-        title="Consultation Complete",
-        body="Your consultation is complete. Any notes or prescriptions are available in your health vault.",
-        notification_type="consultation_complete",
-        event_label="APPOINTMENTS/COMPLETED",
+        notification_type=NotificationType.CONSULTATION_COMPLETED,
     )
     return map_appt(appt, doctor.full_name)
 
@@ -1325,10 +1288,7 @@ def prescribe_appointment(
         _notify_patient(
             db,
             appt,
-            title="Prescription Added",
-            body="Your doctor added a prescription to your consultation.",
-            notification_type="prescription_added",
-            event_label="APPOINTMENTS/PRESCRIPTION_ADDED",
+            notification_type=NotificationType.PRESCRIPTION_ADDED,
         )
     return map_appt(appt, doctor.full_name)
 
@@ -1374,6 +1334,12 @@ def refer_patient_to_hospital(
     appt.referral_note = referral_note
     db.commit()
     db.refresh(appt)
+
+    _notify_patient(
+        db,
+        appt,
+        notification_type=NotificationType.REFERRAL_CREATED,
+    )
 
     # 6. Return enriched response
     base = map_appt(appt, doctor.full_name)

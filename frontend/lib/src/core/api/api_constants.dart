@@ -1,5 +1,5 @@
 class ApiConstants {
-  static const bool isStaging = false;
+  static const bool isStaging = true;
 
   static const String prodBaseUrl = 'https://api.mdqplus.com';
   static const String stagingBaseUrl =

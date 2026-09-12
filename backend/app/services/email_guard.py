@@ -2,6 +2,7 @@
 import os
 import re
 import threading
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
 try:
@@ -19,6 +20,12 @@ _COUNTER_LOCK = threading.Lock()
 _COUNTER_DATE: date | None = None
 _COUNTER_COUNT = 0
 _RECIPIENT_LAST_SENT_AT: dict[str, datetime] = {}
+
+
+@dataclass(frozen=True)
+class EmailReservation:
+    recipient: str | None
+    failure_category: str | None = None
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -81,7 +88,13 @@ def _recipient_cooldown_seconds() -> int:
     return _env_int("EMAIL_RECIPIENT_COOLDOWN_SECONDS", 300)
 
 
-def _reserve_email_slot(*, to_email: str, subject: str, purpose: str) -> bool:
+def _reserve_email_slot(
+    *,
+    to_email: str,
+    subject: str,
+    purpose: str,
+    apply_recipient_cooldown: bool = True,
+) -> bool:
     daily_limit = _daily_send_limit()
     cooldown_seconds = _recipient_cooldown_seconds()
     now = datetime.now(timezone.utc)
@@ -96,7 +109,7 @@ def _reserve_email_slot(*, to_email: str, subject: str, purpose: str) -> bool:
             _COUNTER_COUNT = 0
             _RECIPIENT_LAST_SENT_AT.clear()
 
-        if cooldown_seconds > 0:
+        if apply_recipient_cooldown and cooldown_seconds > 0:
             last_sent_at = _RECIPIENT_LAST_SENT_AT.get(recipient_key)
             if last_sent_at is not None:
                 elapsed = (now - last_sent_at).total_seconds()
@@ -167,3 +180,31 @@ def reserve_email_send(to_email: str, subject: str, *, purpose: str) -> str | No
         return None
 
     return normalized
+
+
+def reserve_support_email_send(to_email: str) -> EmailReservation:
+    """Reserve support delivery without the invalid shared-inbox cooldown."""
+    normalized = normalize_email_address(to_email)
+    if normalized is None:
+        logger.warning(
+            "[SUPPORT EMAIL] Recipient configuration is missing or invalid."
+        )
+        return EmailReservation(None, "configuration")
+
+    if not email_delivery_enabled():
+        logger.warning("[SUPPORT EMAIL] Email delivery is disabled.")
+        return EmailReservation(None, "configuration")
+
+    if not get_resend_api_key():
+        logger.error("[SUPPORT EMAIL] Resend API key is not configured.")
+        return EmailReservation(None, "configuration")
+
+    if not _reserve_email_slot(
+        to_email=normalized,
+        subject="MDQ+ Support Request",
+        purpose="support_contact",
+        apply_recipient_cooldown=False,
+    ):
+        return EmailReservation(None, "rate_limited")
+
+    return EmailReservation(normalized)

@@ -36,6 +36,7 @@ import hmac
 import json
 import logging
 import os
+from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -43,6 +44,8 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
+from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -56,6 +59,7 @@ from app.models.appointment import (
     resolve_appointment_type,
 )
 from app.models.failed_webhook import FailedWebhook
+from app.models.payment_event import PaymentEvent
 from app.models.user import User
 from app.models.doctor import Doctor
 from app.models.consultation_payout import ConsultationPayout
@@ -64,34 +68,10 @@ from app.services.consultation_refund_service import REFUND_STATUS_AWAITING_ADMI
 from app.services.email_service import send_transactional_email
 from app.services.paystack_amounts import paystack_requested_amount_kobo
 from app.services.paystack_service import paystack_service  # noqa: F401 (used in future endpoints)
-from app.core.notifications import dispatch_push
+from app.services.notification_service import NotificationType, notify_user
 
 logger = logging.getLogger(__name__)
 
-
-def _push_user(
-    user: User | None,
-    *,
-    title: str,
-    body: str,
-    data: dict | None,
-    event_label: str,
-):
-    if not user:
-        return
-    dispatch_push(
-        token=user.fcm_token,
-        title=title,
-        body=body,
-        data=data,
-        event_label=event_label,
-    )
-
-
-def _display_name(user: User | None) -> str:
-    if not user:
-        return "A patient"
-    return f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email or "A patient"
 
 # â”€â”€ Paystack credentials â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 PAYSTACK_SECRET_KEY: str = os.environ.get("PAYSTACK_SECRET_KEY", "")
@@ -105,6 +85,55 @@ PAYSTACK_VERIFY_URL = "https://api.paystack.co/transaction/verify"
 PAYSTACK_INITIALIZE_URL = "https://api.paystack.co/transaction/initialize"
 INDIVIDUAL_SUBSCRIPTION_AMOUNT_KOBO = 350_000
 FAMILY_SUBSCRIPTION_AMOUNT_KOBO = 1_000_000
+PAYSTACK_CURRENCY = 'NGN'
+_PAYSTACK_INDIVIDUAL_PLAN_CODE_ENV = os.environ.get(
+    'PAYSTACK_INDIVIDUAL_PLAN_CODE',
+    '',
+).strip()
+_PAYSTACK_FAMILY_PLAN_CODE_ENV = os.environ.get(
+    'PAYSTACK_FAMILY_PLAN_CODE',
+    '',
+).strip()
+PAYSTACK_INDIVIDUAL_PLAN_CODE = (
+    _PAYSTACK_INDIVIDUAL_PLAN_CODE_ENV
+    or 'PLN_92o23tulrohyve4'
+)
+PAYSTACK_FAMILY_PLAN_CODE = (
+    _PAYSTACK_FAMILY_PLAN_CODE_ENV
+    or 'PLN_jb2m1yq93cun6x3'
+)
+PAYSTACK_WEBHOOK_MAX_BYTES = 256 * 1024
+
+SUBSCRIPTION_CONFIG = {
+    'subscription': {
+        'plan': 'premium',
+        'amount_kobo': INDIVIDUAL_SUBSCRIPTION_AMOUNT_KOBO,
+        'plan_code': PAYSTACK_INDIVIDUAL_PLAN_CODE,
+    },
+    'family_subscription': {
+        'plan': 'family',
+        'amount_kobo': FAMILY_SUBSCRIPTION_AMOUNT_KOBO,
+        'plan_code': PAYSTACK_FAMILY_PLAN_CODE,
+    },
+}
+
+
+def _configured_paystack_environment() -> str | None:
+    configured = os.environ.get('PAYSTACK_ENVIRONMENT', '').strip().lower()
+    if configured in {'test', 'live'}:
+        return configured
+    if PAYSTACK_SECRET_KEY.startswith('sk_test_'):
+        return 'test'
+    if PAYSTACK_SECRET_KEY.startswith('sk_live_'):
+        return 'live'
+    return None
+
+
+def _live_plan_configuration_is_complete() -> bool:
+    return bool(
+        _PAYSTACK_INDIVIDUAL_PLAN_CODE_ENV
+        and _PAYSTACK_FAMILY_PLAN_CODE_ENV
+    )
 
 router = APIRouter()
 
@@ -254,15 +283,41 @@ async def initialize_transaction(
         metadata["appointment_id"] = ref_appointment_id
     body["metadata"] = metadata
 
+    body['currency'] = PAYSTACK_CURRENCY
+
+    # A plan changes the amount Paystack charges, so it must be selected from
+    # the authenticated reference type on the server. The client value remains
+    # accepted for API compatibility but cannot select a different plan.
+    if transaction_type in SUBSCRIPTION_TRANSACTION_TYPES:
+        if (
+            _configured_paystack_environment() == 'live'
+            and not _live_plan_configuration_is_complete()
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail='Live subscription plans are not configured.',
+            )
+        expected_plan_code = SUBSCRIPTION_CONFIG[transaction_type]['plan_code']
+        if payload.plan and payload.plan != expected_plan_code:
+            raise HTTPException(
+                status_code=400,
+                detail='Subscription plan does not match the payment reference.',
+            )
+        payload.plan = expected_plan_code
+    elif payload.plan:
+        raise HTTPException(
+            status_code=400,
+            detail='A recurring plan cannot be attached to this payment type.',
+        )
+
     # Conditionally attach the Plan Code for recurring subscriptions.
     if payload.plan:
         body["plan"] = payload.plan
 
     logger.info(
-        "[PAYMENTS] Initializing transaction | reference='%s' | email='%s' "
-        "| amount=%d kobo | plan=%s",
+        "[PAYMENTS] initializing reference=%s user_id=%s amount_kobo=%d plan=%s",
         payload.reference,
-        current_user.email,
+        current_user.id,
         payload.amount,
         payload.plan or "(one-time)",
     )
@@ -275,25 +330,30 @@ async def initialize_transaction(
                 json=body,
             )
     except httpx.RequestError as exc:
-        logger.error("[PAYMENTS] HTTP error reaching Paystack /initialize: %s", exc)
+        logger.error(
+            "[PAYMENTS] initialize_network_error reference=%s error_type=%s",
+            payload.reference,
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=502,
             detail="Could not reach Paystack. Please try again.",
         )
 
-    resp_data: dict = resp.json()
+    try:
+        resp_data: dict = resp.json()
+    except ValueError:
+        resp_data = {}
 
     if not resp.is_success or not resp_data.get("status"):
-        error_msg: str = resp_data.get("message", "Unknown error from Paystack")
         logger.error(
-            "[PAYMENTS] âŒ Paystack initialization failed | HTTP %s | message='%s' | reference='%s'",
+            "[PAYMENTS] initialize_rejected http_status=%s reference=%s",
             resp.status_code,
-            error_msg,
             payload.reference,
         )
         raise HTTPException(
             status_code=400,
-            detail=f"Paystack error: {error_msg}",
+            detail="The payment provider rejected this transaction.",
         )
 
     tx: dict = resp_data.get("data", {})
@@ -301,9 +361,8 @@ async def initialize_transaction(
     access_code: str = tx.get("access_code", "")
 
     logger.info(
-        "[PAYMENTS] âœ… Transaction initialized | reference='%s' | access_code='%s'",
+        "[PAYMENTS] initialized reference=%s",
         payload.reference,
-        access_code,
     )
 
     return {
@@ -554,15 +613,22 @@ def _payment_timestamp(paystack_data: dict | None) -> datetime | None:
     return None
 
 
+def _add_calendar_month(value: datetime) -> datetime:
+    month_index = value.month
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(value.day, monthrange(year, month)[1])
+    return value.replace(year=year, month=month, day=day)
+
+
 def _next_subscription_expiry(
     current_expiry: datetime | None,
     payment_time: datetime | None = None,
 ) -> datetime:
     """
-    Extend access from the current paid-through date when still active, or from
-    now when the previous entitlement has already expired. When a Paystack
-    payment timestamp is available, use it as an idempotent anchor so processing
-    the same reference via webhook and manual verify does not add two months.
+    Use a calendar month rather than a fixed day count. A provider payment
+    timestamp is the deterministic fallback anchor, and an existing later
+    paid-through date is never shortened by a delayed or out-of-order event.
     """
     now = datetime.utcnow()
     if current_expiry and current_expiry.tzinfo:
@@ -571,13 +637,13 @@ def _next_subscription_expiry(
         )
 
     if payment_time is not None:
-        candidate = payment_time + timedelta(days=30)
+        candidate = _add_calendar_month(payment_time)
         if current_expiry and current_expiry > candidate:
             return current_expiry
         return candidate
 
     if current_expiry is None:
-        return now + timedelta(days=30)
+        return _add_calendar_month(now)
 
     comparison_now = (
         datetime.now(current_expiry.tzinfo)
@@ -585,7 +651,7 @@ def _next_subscription_expiry(
         else now
     )
     base = current_expiry if current_expiry > comparison_now else comparison_now
-    return base + timedelta(days=30)
+    return _add_calendar_month(base)
 
 
 def _is_subscription_entitlement_expired(expiry: datetime | None) -> bool:
@@ -598,6 +664,452 @@ def _is_subscription_entitlement_expired(expiry: datetime | None) -> bool:
     return expiry <= now
 
 
+class PaymentProcessingError(ValueError):
+    def __init__(self, error_code: str, message: str):
+        super().__init__(message)
+        self.error_code = error_code
+
+
+def _payment_error(error_code: str, message: str) -> None:
+    raise PaymentProcessingError(error_code, message)
+
+
+def _dict_value(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _code_from_object(value, *keys: str) -> str | None:
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, dict):
+        for key in keys:
+            candidate = value.get(key)
+            if candidate:
+                return str(candidate)
+    return None
+
+
+def _subscription_event_details(data: dict) -> dict:
+    subscription = _dict_value(data.get('subscription'))
+    transaction = _dict_value(data.get('transaction'))
+    customer = _dict_value(data.get('customer'))
+
+    subscription_code = (
+        _code_from_object(
+            data.get('subscription'),
+            'subscription_code',
+            'code',
+        )
+        or _code_from_object(
+            data,
+            'subscription_code',
+            'code',
+        )
+    )
+    customer_code = (
+        _code_from_object(data.get('customer'), 'customer_code', 'code')
+        or _code_from_object(
+            subscription.get('customer'),
+            'customer_code',
+            'code',
+        )
+        or _code_from_object(data, 'customer_code')
+    )
+    transaction_reference = str(
+        data.get('reference')
+        or data.get('transaction_reference')
+        or transaction.get('reference')
+        or ''
+    )
+    plan_value = (
+        data.get('plan')
+        or subscription.get('plan')
+        or transaction.get('plan')
+    )
+    plan_code = _code_from_object(plan_value, 'plan_code', 'code')
+    currency = str(
+        data.get('currency')
+        or transaction.get('currency')
+        or ''
+    ).upper()
+    amount_source = data if data.get('amount') is not None else transaction
+    email = str(
+        customer.get('email')
+        or data.get('email')
+        or ''
+    ).strip().lower()
+
+    return {
+        'subscription': subscription,
+        'transaction': transaction,
+        'subscription_code': subscription_code,
+        'customer_code': customer_code,
+        'transaction_reference': transaction_reference,
+        'invoice_code': str(data.get('invoice_code') or ''),
+        'plan_code': plan_code,
+        'amount_kobo': paystack_requested_amount_kobo(amount_source),
+        'currency': currency,
+        'environment': str(
+            data.get('domain')
+            or transaction.get('domain')
+            or ''
+        ).lower(),
+        'email': email,
+        'period_start': _parse_paystack_datetime(data.get('period_start')),
+        'period_end': _parse_paystack_datetime(data.get('period_end')),
+        'next_payment_date': _parse_paystack_datetime(
+            subscription.get('next_payment_date')
+            or data.get('next_payment_date')
+        ),
+        'paid_at': (
+            _parse_paystack_datetime(data.get('paid_at'))
+            or _payment_timestamp(transaction)
+            or _payment_timestamp(data)
+        ),
+        'provider_status': str(
+            subscription.get('status')
+            or data.get('status')
+            or ''
+        ).lower(),
+        'email_token': (
+            subscription.get('email_token')
+            or data.get('email_token')
+        ),
+    }
+
+
+def _subscription_type_for_user(
+    user: User,
+    details: dict,
+    explicit_type: str | None = None,
+) -> str:
+    if explicit_type in SUBSCRIPTION_TRANSACTION_TYPES:
+        return explicit_type
+    if user.paystack_plan_code == PAYSTACK_FAMILY_PLAN_CODE:
+        return 'family_subscription'
+    if user.paystack_plan_code == PAYSTACK_INDIVIDUAL_PLAN_CODE:
+        return 'subscription'
+    if details.get('plan_code') == PAYSTACK_FAMILY_PLAN_CODE:
+        return 'family_subscription'
+    if details.get('plan_code') == PAYSTACK_INDIVIDUAL_PLAN_CODE:
+        return 'subscription'
+    if user.plan == 'family':
+        return 'family_subscription'
+    if user.plan == 'premium':
+        return 'subscription'
+    _payment_error(
+        'unknown_subscription_plan',
+        'The local subscription plan could not be determined.',
+    )
+
+
+def _validate_paystack_environment(details: dict, user: User | None = None) -> None:
+    event_environment = details.get('environment')
+    configured = _configured_paystack_environment()
+    if event_environment not in {'test', 'live'}:
+        _payment_error(
+            'missing_environment',
+            'The Paystack event has no valid environment.',
+        )
+    if configured and event_environment != configured:
+        _payment_error(
+            'environment_mismatch',
+            'The Paystack event environment is not accepted here.',
+        )
+    if (
+        user
+        and user.paystack_environment
+        and user.paystack_environment != event_environment
+    ):
+        _payment_error(
+            'subscription_environment_mismatch',
+            'The event environment does not match the subscription.',
+        )
+
+
+def _validate_subscription_payment(
+    user: User,
+    details: dict,
+    *,
+    explicit_type: str | None = None,
+) -> tuple[str, dict]:
+    _validate_paystack_environment(details, user)
+    if (
+        details.get('environment') == 'live'
+        and not _live_plan_configuration_is_complete()
+    ):
+        _payment_error(
+            'live_plan_configuration_missing',
+            'Live Paystack plan codes are not configured.',
+        )
+    transaction_type = _subscription_type_for_user(
+        user,
+        details,
+        explicit_type,
+    )
+    config = SUBSCRIPTION_CONFIG[transaction_type]
+
+    if details.get('amount_kobo') != config['amount_kobo']:
+        _payment_error(
+            'amount_mismatch',
+            'The subscription payment amount does not match the plan.',
+        )
+    if details.get('currency') != PAYSTACK_CURRENCY:
+        _payment_error(
+            'currency_mismatch',
+            'The subscription payment currency is not supported.',
+        )
+    event_plan_code = details.get('plan_code')
+    if event_plan_code and event_plan_code != config['plan_code']:
+        _payment_error(
+            'plan_mismatch',
+            'The Paystack plan does not match the local subscription.',
+        )
+    if (
+        user.paystack_plan_code
+        and user.paystack_plan_code != config['plan_code']
+    ):
+        _payment_error(
+            'stored_plan_mismatch',
+            'The stored Paystack plan does not match the local subscription.',
+        )
+    return transaction_type, config
+
+
+def _single_subscription_user(query) -> User | None:
+    matches = query.with_for_update().limit(2).all()
+    if len(matches) > 1:
+        _payment_error(
+            'ambiguous_subscription_identifier',
+            'A Paystack identifier matches more than one local account.',
+        )
+    return matches[0] if matches else None
+
+
+def _resolve_subscription_user(
+    details: dict,
+    db: Session,
+    *,
+    initial_user_id: int | None = None,
+    allow_email_fallback: bool = True,
+) -> User:
+    user = None
+    subscription_code = details.get('subscription_code')
+    customer_code = details.get('customer_code')
+    reference = details.get('transaction_reference')
+
+    if subscription_code:
+        user = _single_subscription_user(
+            db.query(User)
+            .filter(User.paystack_subscription_code == subscription_code)
+        )
+    if user is None and customer_code:
+        user = _single_subscription_user(
+            db.query(User)
+            .filter(User.paystack_customer_code == customer_code)
+        )
+    if user is None and reference:
+        user = _single_subscription_user(
+            db.query(User)
+            .filter(User.paystack_last_payment_reference == reference)
+        )
+        if user is None:
+            prior_user_id = (
+                db.query(PaymentEvent.user_id)
+                .filter(
+                    PaymentEvent.provider == 'paystack',
+                    PaymentEvent.transaction_reference == reference,
+                    PaymentEvent.user_id.isnot(None),
+                )
+                .order_by(PaymentEvent.id.desc())
+                .scalar()
+            )
+            if prior_user_id:
+                user = (
+                    db.query(User)
+                    .filter(User.id == prior_user_id)
+                    .with_for_update()
+                    .first()
+                )
+    if user is None and initial_user_id:
+        user = (
+            db.query(User)
+            .filter(User.id == initial_user_id)
+            .with_for_update()
+            .first()
+        )
+    if user is None and allow_email_fallback and details.get('email'):
+        candidate = (
+            db.query(User)
+            .filter(User.email == details['email'])
+            .with_for_update()
+            .first()
+        )
+        if candidate and (
+            candidate.paystack_subscription_code
+            or candidate.paystack_customer_code
+            or (
+                candidate.plan in {'premium', 'family'}
+                and candidate.subscription_expiry is not None
+            )
+        ):
+            user = candidate
+
+    if user is None:
+        _payment_error(
+            'subscription_not_found',
+            'No local subscription matched the Paystack identifiers.',
+        )
+    if (
+        subscription_code
+        and user.paystack_subscription_code
+        and user.paystack_subscription_code != subscription_code
+    ):
+        _payment_error(
+            'subscription_code_mismatch',
+            'The subscription code does not match the local account.',
+        )
+    if (
+        customer_code
+        and user.paystack_customer_code
+        and user.paystack_customer_code != customer_code
+    ):
+        _payment_error(
+            'customer_code_mismatch',
+            'The customer code does not match the local subscription.',
+        )
+    if details.get('email') and (
+        not user.email
+        or user.email.strip().lower() != details['email']
+    ):
+        _payment_error(
+            'customer_email_mismatch',
+            'The Paystack customer does not match the local account.',
+        )
+    return user
+
+
+def _persist_subscription_identity(
+    user: User,
+    details: dict,
+    *,
+    plan_code: str | None = None,
+) -> None:
+    subscription_code = details.get('subscription_code')
+    customer_code = details.get('customer_code')
+    if subscription_code and not user.paystack_subscription_code:
+        user.paystack_subscription_code = subscription_code
+    if customer_code and not user.paystack_customer_code:
+        user.paystack_customer_code = customer_code
+    if plan_code and not user.paystack_plan_code:
+        user.paystack_plan_code = plan_code
+    if details.get('environment') and not user.paystack_environment:
+        user.paystack_environment = details['environment']
+
+    email_token = details.get('email_token')
+    if email_token and not user.paystack_email_token:
+        user.paystack_email_token = str(email_token)
+
+
+def _renewal_expiry(user: User, details: dict) -> datetime:
+    payment_time = details.get('paid_at') or datetime.utcnow()
+    candidates = (
+        details.get('next_payment_date'),
+        details.get('period_end'),
+    )
+    for candidate in candidates:
+        if candidate and candidate > payment_time:
+            if user.subscription_expiry and user.subscription_expiry > candidate:
+                return user.subscription_expiry
+            return candidate
+    return _next_subscription_expiry(
+        user.subscription_expiry,
+        payment_time,
+    )
+
+
+def _apply_subscription_payment(
+    *,
+    data: dict,
+    db: Session,
+    explicit_type: str | None = None,
+    initial_user_id: int | None = None,
+) -> dict:
+    details = _subscription_event_details(data)
+    user = _resolve_subscription_user(
+        details,
+        db,
+        initial_user_id=initial_user_id,
+    )
+    transaction_type, config = _validate_subscription_payment(
+        user,
+        details,
+        explicit_type=explicit_type,
+    )
+    reference = details.get('transaction_reference')
+    paid_at = details.get('paid_at') or datetime.utcnow()
+
+    if (
+        user.paystack_last_successful_payment_at
+        and paid_at < user.paystack_last_successful_payment_at
+    ):
+        return {
+            'action': 'stale_subscription_payment_ignored',
+            'user_id': user.id,
+            'plan': transaction_type,
+        }
+
+    expiry = _renewal_expiry(user, details)
+    user.plan = config['plan']
+    user.subscription_expiry = expiry
+    user.auto_renew = True
+    user.paystack_subscription_status = (
+        details.get('provider_status') or 'active'
+    )
+    user.paystack_last_payment_reference = reference or (
+        user.paystack_last_payment_reference
+    )
+    user.paystack_last_successful_payment_at = paid_at
+    user.paystack_current_period_start = (
+        details.get('period_start')
+        or user.paystack_current_period_start
+        or paid_at
+    )
+    user.paystack_current_period_end = expiry
+    user.paystack_next_payment_date = (
+        details.get('next_payment_date')
+        or user.paystack_next_payment_date
+    )
+    if details.get('invoice_code'):
+        user.paystack_latest_invoice_code = details['invoice_code']
+    _persist_subscription_identity(
+        user,
+        details,
+        plan_code=config['plan_code'],
+    )
+
+    upgraded_dependents = []
+    if transaction_type == 'family_subscription':
+        dependents = (
+            db.query(User)
+            .filter(User.primary_account_id == user.id)
+            .all()
+        )
+        for dependent in dependents:
+            dependent.plan = 'family'
+            dependent.subscription_expiry = expiry
+        upgraded_dependents = [dependent.id for dependent in dependents]
+
+    db.flush()
+    return {
+        'action': 'subscription_payment_applied',
+        'user_id': user.id,
+        'plan': transaction_type,
+        'expiry': str(expiry),
+        'dependents_upgraded': upgraded_dependents,
+    }
+
+
 def _apply_db_update(
     transaction_type: str,
     ref_appointment_id: str | None,
@@ -607,6 +1119,27 @@ def _apply_db_update(
     background_tasks: BackgroundTasks | None = None,
     paystack_data: dict | None = None,
 ) -> dict:
+    # Subscription fulfilment is centralised here so webhook, manual verify,
+    # and the watchdog use the same ownership and integrity checks.
+    if transaction_type in SUBSCRIPTION_TRANSACTION_TYPES:
+        if not paystack_data or paystack_data.get('status') != 'success':
+            _payment_error(
+                'transaction_not_successful',
+                'Paystack did not report a successful subscription charge.',
+            )
+        if not ref_user_id or not ref_user_id.isdigit():
+            _payment_error(
+                'missing_payment_owner',
+                'The subscription reference has no valid owner.',
+            )
+        result = _apply_subscription_payment(
+            data=paystack_data,
+            db=db,
+            explicit_type=transaction_type,
+            initial_user_id=int(ref_user_id),
+        )
+        db.commit()
+        return result
     """
     Execute the database update for a confirmed Paystack transaction.
 
@@ -718,15 +1251,6 @@ def _apply_db_update(
                 html_body=html_body,
             )
 
-        expiry_str = user.subscription_expiry.strftime("%d %b %Y") if user.subscription_expiry else "N/A"
-        _push_user(
-            user,
-            title="Subscription Activated",
-            body=f"Your {plan_label} subscription is active until {expiry_str}.",
-            data={"type": "subscription_successful", "plan": str(user.plan)},
-            event_label="PAYMENTS/SUBSCRIPTION_SUCCESS",
-        )
-
         return {
             "action": "subscription_upgraded",
             "plan": transaction_type,
@@ -834,39 +1358,23 @@ def _apply_db_update(
                     html_body=html_body,
                 )
 
+        doctor_user_id = None
         if appt.doctor_id is not None and not was_schedule_confirmed:
-            _push_user(
-                patient,
-                title="Appointment Confirmed",
-                body="Your consultation payment is confirmed and your appointment is booked.",
-                data={"type": "schedule_confirmed", "appointment_id": str(appt.id)},
-                event_label="PAYMENTS/APPOINTMENT_CONFIRMED_PATIENT",
-            )
-
-            doctor: Doctor | None = db.query(Doctor).filter(Doctor.id == appt.doctor_id).first()
-            doctor_user: User | None = (
-                db.query(User).filter(User.id == doctor.user_id).first()
-                if doctor
-                else None
-            )
-            _push_user(
-                doctor_user,
-                title="Appointment Booked",
-                body=f"{_display_name(patient)} booked a consultation.",
-                data={"type": "appointment_booked", "appointment_id": str(appt.id)},
-                event_label="PAYMENTS/APPOINTMENT_BOOKED_DOCTOR",
-            )
+            doctor = db.query(Doctor).filter(Doctor.id == appt.doctor_id).first()
+            doctor_user_id = doctor.user_id if doctor else None
 
         return {
             "action": "appointment_confirmed",
             "appointment_id": appt.id,
             "transaction_type": transaction_type,
+            "patient_user_id": patient.id if patient else None,
+            "doctor_user_id": doctor_user_id,
         }
 
     # â”€â”€ Unrecognised type â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     else:
         logger.warning(
-            "[PAYMENTS] Unrecognised transactionType='%s' â€” no action taken.",
+            "[PAYMENTS] result=ignored_unrecognised_reference type='%s'",
             transaction_type,
         )
         return {"action": "ignored", "reason": f"unrecognised type '{transaction_type}'"}
@@ -879,291 +1387,205 @@ def _write_dlq(
     error_message: str,
     db: Session,
 ) -> None:
-    """Persist a failed event to the failed_webhooks Dead Letter Queue."""
+    """Persist safe identifiers and a bounded error classification only."""
+    safe_keys = {
+        'reference',
+        'subscription_code',
+        'invoice_code',
+        'customer_code',
+    }
+    safe_payload = {
+        key: value
+        for key, value in payload.items()
+        if key in safe_keys and value
+    }
+    safe_error_code = str(error_message)[:80]
     try:
         dlq_entry = FailedWebhook(
             reference=reference,
             event_type=event_type,
-            payload=json.dumps(payload),
-            error_message=error_message,
+            payload=json.dumps(safe_payload),
+            error_message=safe_error_code,
         )
         db.add(dlq_entry)
         db.commit()
         logger.error(
-            "[PAYMENTS] âš ï¸  Event routed to DLQ â€” reference='%s' | error='%s'",
+            '[PAYMENTS] result=dlq reference=%s error_code=%s',
             reference,
-            error_message,
+            safe_error_code,
         )
     except Exception as dlq_exc:
-        # DLQ write itself failed â€” last-resort log, don't raise
+        db.rollback()
         logger.critical(
-            "[PAYMENTS] ðŸš¨ DLQ write FAILED â€” reference='%s' | dlq_error='%s'",
+            '[PAYMENTS] result=dlq_write_failed reference=%s error_type=%s',
             reference,
-            dlq_exc,
+            type(dlq_exc).__name__,
         )
 
 
-# â”€â”€â”€ Webhook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
-def _handle_charge_success(data: dict, db: Session) -> dict:
-    """
-    Handle charge.success events that carry a user_id in data.metadata.
-    Upgrades or renews the user's subscription, extends the paid-through date,
-    and resets burst_chat_count so the user gets a clean AI-chat allowance
-    immediately.
-
-    Raises ValueError when metadata is absent or the user is not found.
-    """
-    metadata: dict = data.get("metadata") or {}
-    user_id_raw = metadata.get("user_id")
-
-    if not user_id_raw:
-        raise ValueError(
-            "charge.success: metadata.user_id is absent â€” cannot upgrade subscription."
-        )
-
-    user: User | None = db.query(User).filter(User.id == int(user_id_raw)).first()
-    if not user:
-        raise ValueError(f"charge.success: user id={user_id_raw} not found.")
-
-    transaction_type = str(metadata.get("transaction_type") or "")
-    is_family_subscription = transaction_type == "family_subscription"
-    expiry = _next_subscription_expiry(
-        user.subscription_expiry,
-        _payment_timestamp(data),
+def _metadata_user_id(data: dict) -> int | None:
+    customer = _dict_value(data.get('customer'))
+    metadata_values = (
+        _dict_value(customer.get('metadata')),
+        _dict_value(data.get('metadata')),
     )
+    for metadata in metadata_values:
+        raw_user_id = metadata.get('user_id')
+        if raw_user_id is not None and str(raw_user_id).isdigit():
+            return int(raw_user_id)
+    return None
 
-    user.plan = "family" if is_family_subscription else "premium"
-    user.subscription_expiry = expiry
-    user.auto_renew = True
-    user.burst_chat_count = 0
 
-    # â”€â”€ Capture subscription codes if Paystack includes them â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    # charge.success events may embed `subscription` as either an object or a
-    # plain code string, so use the shared tolerant parser.
-    identifiers_saved = _persist_subscription_identifiers(user, data)
-    if identifiers_saved:
-        logger.info(
-            "[WEBHOOK] charge.success â€” captured subscription identifiers for user_id=%s",
-            user.id,
+def _handle_recurring_charge_observed(data: dict, db: Session) -> dict:
+    if data.get('status') != 'success':
+        _payment_error(
+            'transaction_not_successful',
+            'The recurring charge was not successful.',
         )
-
-    upgraded_dependents: list[int] = []
-    if is_family_subscription:
-        dependents: list[User] = (
-            db.query(User)
-            .filter(User.primary_account_id == user.id)
-            .all()
+    details = _subscription_event_details(data)
+    if not details.get('subscription_code'):
+        _payment_error(
+            'missing_subscription_code',
+            'The recurring charge has no subscription code.',
         )
-        for dep in dependents:
-            dep.plan = "family"
-            dep.subscription_expiry = expiry
-        upgraded_dependents = [dep.id for dep in dependents]
-
-    db.commit()
-    db.refresh(user)
-
-    logger.info(
-        "[WEBHOOK] charge.success â€” upgraded user_id=%s to %s | expiry=%s | dependents=%s",
-        user.id,
-        user.plan,
-        user.subscription_expiry,
-        upgraded_dependents,
+    user = _resolve_subscription_user(details, db)
+    transaction_type, config = _validate_subscription_payment(user, details)
+    _persist_subscription_identity(
+        user,
+        details,
+        plan_code=config['plan_code'],
     )
-
-    # â”€â”€ FCM: notify the user their subscription is now active â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    try:
-        expiry_str = user.subscription_expiry.strftime("%d %b %Y") if user.subscription_expiry else "N/A"
-        dispatch_push(
-            token=user.fcm_token,
-            title="ðŸŽ‰ MDQ+ Subscription Activated!",
-            body=f"Your subscription is active until {expiry_str}. Enjoy unlimited access!",
-            data={"type": "subscription_successful", "plan": str(user.plan)},
-            event_label="PAYMENTS/CHARGE_SUCCESS",
-        )
-    except Exception as notif_exc:
-        logger.error(
-            "[WEBHOOK] charge.success FCM push failed â€” user_id=%s: %s",
-            user.id,
-            notif_exc,
-            exc_info=True,
-        )
-
+    db.flush()
     return {
-        "action": "subscription_upgraded_via_charge",
-        "user_id": user.id,
-        "plan": user.plan,
-        "expiry": str(user.subscription_expiry),
-        "dependents_upgraded": upgraded_dependents,
+        'action': 'recurring_charge_observed',
+        'user_id': user.id,
+        'plan': transaction_type,
     }
 
 
-def _handle_subscription_disable(data: dict, db: Session) -> dict:
-    """
-    Handle subscription.disable (and subscription.not_renew) events from Paystack.
-
-    Paystack owns the failed-renewal retry schedule. When Paystack emits this
-    event, MDQ+ turns off local auto-renew immediately. Access is still governed
-    by subscription_expiry, so a user who cancelled early keeps paid access
-    until their paid-through date, while an already-expired entitlement is
-    downgraded immediately.
-
-    Raises ValueError when required fields are missing or the user is not found.
-    """
-    subscription_code: str | None = data.get("subscription_code") or data.get("code")
-
-    # Resolve user_id from customer.metadata (same path as subscription.create)
-    customer: dict = data.get("customer") or {}
-    customer_meta: dict = customer.get("metadata") or {}
-    user_id_raw = customer_meta.get("user_id")
-
-    # Fallback: some payloads embed user_id directly in data.metadata
-    if not user_id_raw:
-        top_meta: dict = data.get("metadata") or {}
-        user_id_raw = top_meta.get("user_id")
-
-    user: User | None = None
-    if user_id_raw:
-        user = db.query(User).filter(User.id == int(user_id_raw)).first()
-    elif subscription_code:
-        user = (
-            db.query(User)
-            .filter(User.paystack_subscription_code == subscription_code)
-            .first()
+def _handle_invoice_update(data: dict, db: Session) -> dict:
+    transaction = _dict_value(data.get('transaction'))
+    if (
+        data.get('paid') not in {True, 1}
+        or str(data.get('status') or '').lower() != 'success'
+        or str(transaction.get('status') or '').lower() != 'success'
+    ):
+        _payment_error(
+            'invoice_not_paid',
+            'The subscription invoice is not a successful paid invoice.',
         )
+    return _apply_subscription_payment(data=data, db=db)
 
-    if not user_id_raw and not subscription_code:
-        raise ValueError(
-            "subscription.disable: user_id/subscription_code not found in payload â€” "
-            "cannot downgrade subscription."
+
+def _handle_invoice_payment_failed(data: dict, db: Session) -> dict:
+    details = _subscription_event_details(data)
+    user = _resolve_subscription_user(details, db)
+    transaction_type, config = _validate_subscription_payment(user, details)
+    _persist_subscription_identity(
+        user,
+        details,
+        plan_code=config['plan_code'],
+    )
+    user.paystack_subscription_status = 'attention'
+    if details.get('invoice_code'):
+        user.paystack_latest_invoice_code = details['invoice_code']
+    if details.get('next_payment_date'):
+        user.paystack_next_payment_date = details['next_payment_date']
+    db.flush()
+    return {
+        'action': 'subscription_payment_failed',
+        'user_id': user.id,
+        'plan': transaction_type,
+        'access_preserved_until': str(user.subscription_expiry),
+    }
+
+
+def _handle_subscription_created(data: dict, db: Session) -> dict:
+    details = _subscription_event_details(data)
+    if not details.get('subscription_code'):
+        _payment_error(
+            'missing_subscription_code',
+            'The subscription event has no subscription code.',
         )
+    _validate_paystack_environment(details)
+    user = _resolve_subscription_user(
+        details,
+        db,
+        initial_user_id=_metadata_user_id(data),
+        allow_email_fallback=False,
+    )
 
-    if not user:
-        raise ValueError(
-            "subscription.disable: matching user not found for "
-            f"user_id={user_id_raw!r}, subscription_code={subscription_code!r}."
+    plan_code = details.get('plan_code')
+    if plan_code not in {
+        PAYSTACK_INDIVIDUAL_PLAN_CODE,
+        PAYSTACK_FAMILY_PLAN_CODE,
+    }:
+        _payment_error(
+            'plan_mismatch',
+            'The subscription was created for an unknown Paystack plan.',
         )
+    _validate_paystack_environment(details, user)
+    _persist_subscription_identity(user, details, plan_code=plan_code)
+    user.auto_renew = True
+    user.paystack_subscription_status = (
+        details.get('provider_status') or 'active'
+    )
+    user.paystack_next_payment_date = (
+        details.get('next_payment_date')
+        or user.paystack_next_payment_date
+    )
+    db.flush()
+    return {
+        'action': 'subscription_identifiers_persisted',
+        'user_id': user.id,
+    }
 
-    previous_plan = user.plan
+
+def _handle_subscription_lifecycle(
+    data: dict,
+    db: Session,
+    *,
+    event_type: str,
+) -> dict:
+    details = _subscription_event_details(data)
+    user = _resolve_subscription_user(details, db)
+    _validate_paystack_environment(details, user)
+    _persist_subscription_identity(user, details)
     user.auto_renew = False
+    if event_type == 'subscription.not_renew':
+        user.paystack_subscription_status = 'non-renewing'
+    else:
+        user.paystack_subscription_status = (
+            details.get('provider_status') or 'cancelled'
+        )
 
-    downgraded = _is_subscription_entitlement_expired(user.subscription_expiry)
+    downgraded = _is_subscription_entitlement_expired(
+        user.subscription_expiry
+    )
     dependent_count = 0
     if downgraded:
-        user.plan = "free"
+        user.plan = 'free'
         user.subscription_expiry = None
         dependent_count = (
             db.query(User)
             .filter(User.primary_account_id == user.id)
             .update(
                 {
-                    User.plan: "free",
+                    User.plan: 'free',
                     User.subscription_expiry: None,
                     User.auto_renew: False,
                 },
                 synchronize_session=False,
             )
         )
-
-    db.commit()
-    db.refresh(user)
-
-    logger.info(
-        "[WEBHOOK] subscription.disable â€” user_id=%s auto_renew disabled; "
-        "downgraded=%s; previous_plan=%s; dependents_downgraded=%s.",
-        user.id,
-        downgraded,
-        previous_plan,
-        dependent_count,
-    )
-
+    db.flush()
     return {
-        "action": "subscription_disabled",
-        "user_id": user.id,
-        "plan": user.plan,
-        "downgraded": downgraded,
-        "dependents_downgraded": dependent_count,
-    }
-
-
-def _handle_subscription_create(data: dict, db: Session) -> dict:
-    """
-    Handle subscription.create events from Paystack.
-
-    This is the primary source for ``subscription_code`` and ``email_token``.
-    Paystack fires this event immediately after a recurring subscription is
-    activated (either via a plan-based charge.success or an explicit creation).
-
-    Payload path: data.subscription_code, data.email_token, data.customer.metadata.user_id
-
-    Raises ValueError when required fields are missing or the user is not found.
-    """
-    subscription_code: str | None = data.get("subscription_code")
-    email_token: str | None = data.get("email_token")
-
-    if not subscription_code:
-        raise ValueError(
-            "subscription.create: data.subscription_code is absent."
-        )
-
-    # Resolve user_id â€” Paystack stores it in the customer's metadata
-    customer: dict = data.get("customer") or {}
-    customer_meta: dict = customer.get("metadata") or {}
-    top_meta: dict = data.get("metadata") or {}
-    user_id_raw = customer_meta.get("user_id")
-
-    if not user_id_raw:
-        raise ValueError(
-            "subscription.create: customer.metadata.user_id is absent â€” "
-            "cannot persist subscription codes."
-        )
-
-    user: User | None = db.query(User).filter(User.id == int(user_id_raw)).first()
-    if not user:
-        raise ValueError(
-            f"subscription.create: user id={user_id_raw} not found."
-        )
-
-    user.paystack_subscription_code = subscription_code
-    if email_token:
-        user.paystack_email_token = email_token
-    user.auto_renew = True
-
-    # Also ensure the plan is upgraded in case charge.success was missed
-    if user.plan not in ("premium", "family"):
-        transaction_type = str(
-            customer_meta.get("transaction_type")
-            or top_meta.get("transaction_type")
-            or ""
-        )
-        is_family_subscription = transaction_type == "family_subscription"
-        expiry = _next_subscription_expiry(user.subscription_expiry)
-
-        user.plan = "family" if is_family_subscription else "premium"
-        user.subscription_expiry = expiry
-        if is_family_subscription:
-            dependents: list[User] = (
-                db.query(User)
-                .filter(User.primary_account_id == user.id)
-                .all()
-            )
-            for dep in dependents:
-                dep.plan = "family"
-                dep.subscription_expiry = expiry
-
-    db.commit()
-    db.refresh(user)
-
-    logger.info(
-        "[WEBHOOK] subscription.create â€” persisted sub_code='%s' for user_id=%s",
-        subscription_code,
-        user.id,
-    )
-    return {
-        "action": "subscription_codes_persisted",
-        "user_id": user.id,
-        "subscription_code": subscription_code,
+        'action': 'subscription_lifecycle_updated',
+        'user_id': user.id,
+        'subscription_code': details.get('subscription_code'),
+        'provider_status': user.paystack_subscription_status,
+        'downgraded': downgraded,
+        'dependents_downgraded': dependent_count,
     }
 
 
@@ -1231,27 +1653,12 @@ def _handle_transfer_success(data: dict, db: Session) -> dict:
         db.refresh(ledger)
         db.refresh(doctor)
 
-        doctor_user = (
-            db.query(User).filter(User.id == doctor.user_id).first()
-            if doctor.user_id
-            else None
-        )
-        _push_user(
-            doctor_user,
-            title="Payout Sent",
-            body=f"Your payout of â‚¦{float(ledger.amount):,.2f} has been processed.",
-            data={
-                "type": "payout_sent",
-                "doctor_id": str(doctor.id),
-                "appointment_id": str(ledger.appointment_id),
-            },
-            event_label="PAYMENTS/PAYOUT_SENT",
-        )
         return {
             "action": "consultation_payout_confirmed",
             "payout_id": ledger.id,
             "appointment_id": ledger.appointment_id,
             "doctor_id": doctor.id,
+            "user_id": doctor.user_id,
             "amount_credited": float(ledger.amount),
         }
 
@@ -1289,22 +1696,10 @@ def _handle_transfer_success(data: dict, db: Session) -> dict:
         doctor.total_earnings,
     )
 
-    doctor_user: User | None = (
-        db.query(User).filter(User.id == doctor.user_id).first()
-        if doctor.user_id
-        else None
-    )
-    _push_user(
-        doctor_user,
-        title="Payout Sent",
-        body=f"Your payout of â‚¦{amount_naira:,.2f} has been processed.",
-        data={"type": "payout_sent", "doctor_id": str(doctor.id)},
-        event_label="PAYMENTS/PAYOUT_SENT",
-    )
-
     return {
         "action": "doctor_earnings_credited",
         "doctor_id": doctor.id,
+        "user_id": doctor.user_id,
         "amount_credited": amount_naira,
         "total_earnings": doctor.total_earnings,
     }
@@ -1409,6 +1804,684 @@ def _handle_paystack_dispute(data: dict, db: Session, *, event: str) -> dict:
     }
 
 
+RECOGNISED_PAYSTACK_EVENTS = {
+    'charge.success',
+    'invoice.update',
+    'invoice.payment_failed',
+    'subscription.create',
+    'subscription.disable',
+    'subscription.not_renew',
+    'transfer.success',
+    'transfer.pending',
+    'transfer.failed',
+    'transfer.reversed',
+    'charge.dispute.create',
+    'charge.dispute.remind',
+    'refund.pending',
+    'refund.processing',
+    'refund.needs-attention',
+    'refund.failed',
+    'refund.processed',
+}
+
+
+def _provider_event_key(
+    event_type: str,
+    data: dict,
+    raw_body: bytes,
+) -> str:
+    details = _subscription_event_details(data)
+    environment = details.get('environment') or 'unknown'
+    identifier = ''
+    if event_type.startswith('invoice.'):
+        identifier = details.get('invoice_code') or ''
+    elif event_type.startswith('subscription.'):
+        identifier = details.get('subscription_code') or ''
+        if event_type in {'subscription.disable', 'subscription.not_renew'}:
+            provider_status = details.get('provider_status') or 'unknown'
+            identifier = f'{identifier}:{provider_status}'
+    else:
+        identifier = (
+            details.get('transaction_reference')
+            or str(data.get('transfer_code') or data.get('id') or '')
+        )
+    if not identifier:
+        identifier = hashlib.sha256(raw_body).hexdigest()
+    return f'{environment}:{event_type}:{identifier}'[:255]
+
+
+def _payment_identity_key(
+    event_type: str,
+    data: dict,
+    transaction_type: str,
+) -> str | None:
+    details = _subscription_event_details(data)
+    reference = details.get('transaction_reference')
+    environment = details.get('environment') or 'unknown'
+    if not reference:
+        return None
+    if event_type == 'invoice.update':
+        return f'{environment}:transaction:{reference}'[:255]
+    if (
+        event_type in {'charge.success', 'manual.verify'}
+        and transaction_type
+    ):
+        return f'{environment}:transaction:{reference}'[:255]
+    return None
+
+
+def _find_payment_event(
+    db: Session,
+    *,
+    provider_event_key: str,
+    payment_key: str | None,
+) -> PaymentEvent | None:
+    conditions = [
+        PaymentEvent.provider_event_key == provider_event_key,
+    ]
+    if payment_key:
+        conditions.append(PaymentEvent.payment_key == payment_key)
+    return (
+        db.query(PaymentEvent)
+        .filter(
+            PaymentEvent.provider == 'paystack',
+            or_(*conditions),
+        )
+        .with_for_update()
+        .first()
+    )
+
+
+def _claim_payment_event(
+    db: Session,
+    *,
+    event_type: str,
+    provider_event_key: str,
+    payment_key: str | None,
+    reference: str,
+    subscription_code: str | None,
+    invoice_code: str | None,
+) -> tuple[PaymentEvent, bool]:
+    existing = _find_payment_event(
+        db,
+        provider_event_key=provider_event_key,
+        payment_key=payment_key,
+    )
+    if existing:
+        if existing.processing_status == 'failed':
+            existing.processing_status = 'processing'
+            existing.error_code = None
+            existing.processing_note = None
+            return existing, False
+        return existing, True
+
+    event = PaymentEvent(
+        provider='paystack',
+        event_type=event_type,
+        provider_event_key=provider_event_key,
+        payment_key=payment_key,
+        transaction_reference=reference or None,
+        subscription_code=subscription_code,
+        invoice_code=invoice_code,
+        processing_status='processing',
+    )
+    db.add(event)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = _find_payment_event(
+            db,
+            provider_event_key=provider_event_key,
+            payment_key=payment_key,
+        )
+        if existing is None:
+            raise
+        return existing, True
+    return event, False
+
+
+def _mark_payment_event_processed(
+    event: PaymentEvent,
+    *,
+    user_id: int | None,
+    action: str,
+) -> None:
+    event.user_id = user_id
+    event.processing_status = 'processed'
+    event.processed_at = datetime.now(timezone.utc)
+    event.processing_note = action[:200]
+    event.error_code = None
+
+
+def _record_payment_event_failure(
+    db: Session,
+    *,
+    event_type: str,
+    provider_event_key: str,
+    payment_key: str | None,
+    reference: str,
+    subscription_code: str | None,
+    invoice_code: str | None,
+    error_code: str,
+) -> None:
+    try:
+        event = _find_payment_event(
+            db,
+            provider_event_key=provider_event_key,
+            payment_key=payment_key,
+        )
+        if event is None:
+            event = PaymentEvent(
+                provider='paystack',
+                event_type=event_type,
+                provider_event_key=provider_event_key,
+                payment_key=payment_key,
+                transaction_reference=reference or None,
+                subscription_code=subscription_code,
+                invoice_code=invoice_code,
+            )
+            db.add(event)
+        event.processing_status = 'failed'
+        event.error_code = error_code[:80]
+        event.processing_note = None
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            '[PAYMENTS] payment_event_failure_record_failed event=%s reference=%s',
+            event_type,
+            reference,
+        )
+
+
+async def _verified_paystack_payload(request: Request) -> tuple[bytes, dict]:
+    if not PAYSTACK_SECRET_KEY:
+        logger.error('[WEBHOOK] rejected reason=secret_not_configured')
+        raise HTTPException(
+            status_code=503,
+            detail='Webhook processing is unavailable.',
+        )
+
+    raw_content_length = request.headers.get('content-length')
+    if raw_content_length:
+        try:
+            if int(raw_content_length) > PAYSTACK_WEBHOOK_MAX_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail='Webhook payload is too large.',
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail='Invalid webhook request.',
+            )
+
+    body = await request.body()
+    if len(body) > PAYSTACK_WEBHOOK_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail='Webhook payload is too large.',
+        )
+
+    signature = request.headers.get('x-paystack-signature', '')
+    if not signature:
+        logger.warning('[WEBHOOK] rejected reason=missing_signature')
+        raise HTTPException(
+            status_code=400,
+            detail='Invalid webhook signature.',
+        )
+    expected = hmac.new(
+        PAYSTACK_SECRET_KEY.encode('utf-8'),
+        msg=body,
+        digestmod=hashlib.sha512,
+    ).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        logger.warning('[WEBHOOK] rejected reason=invalid_signature')
+        raise HTTPException(
+            status_code=400,
+            detail='Invalid webhook signature.',
+        )
+
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(
+            status_code=400,
+            detail='Malformed JSON payload.',
+        )
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=400,
+            detail='Malformed JSON payload.',
+        )
+    return body, payload
+
+
+def _validate_successful_consultation_charge(data: dict) -> None:
+    details = _subscription_event_details(data)
+    if data.get('status') != 'success':
+        _payment_error(
+            'transaction_not_successful',
+            'The consultation transaction was not successful.',
+        )
+    _validate_paystack_environment(details)
+    if details.get('currency') != PAYSTACK_CURRENCY:
+        _payment_error(
+            'currency_mismatch',
+            'The consultation payment currency is not supported.',
+        )
+    if details.get('plan_code'):
+        _payment_error(
+            'unexpected_plan',
+            'A consultation charge cannot contain a subscription plan.',
+        )
+
+
+def _dispatch_paystack_event(
+    *,
+    event_type: str,
+    data: dict,
+    transaction_type: str,
+    ref_appointment_id: str | None,
+    ref_user_id: str | None,
+    reference: str,
+    db: Session,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    if event_type == 'charge.success':
+        if transaction_type in SUBSCRIPTION_TRANSACTION_TYPES:
+            return _apply_db_update(
+                transaction_type=transaction_type,
+                ref_appointment_id=ref_appointment_id,
+                ref_user_id=ref_user_id,
+                reference=reference,
+                db=db,
+                background_tasks=background_tasks,
+                paystack_data=data,
+            )
+        if transaction_type in CONSULTATION_TRANSACTION_TYPES:
+            _validate_successful_consultation_charge(data)
+            _validate_consultation_payment(
+                transaction_type=transaction_type,
+                ref_appointment_id=ref_appointment_id,
+                ref_user_id=ref_user_id,
+                reference=reference,
+                amount_kobo=paystack_requested_amount_kobo(data),
+                db=db,
+            )
+            return _apply_db_update(
+                transaction_type=transaction_type,
+                ref_appointment_id=ref_appointment_id,
+                ref_user_id=ref_user_id,
+                reference=reference,
+                db=db,
+                background_tasks=background_tasks,
+                paystack_data=data,
+            )
+        details = _subscription_event_details(data)
+        if details.get('subscription_code'):
+            return _handle_recurring_charge_observed(data, db)
+        return {'action': 'unsupported_charge_ignored'}
+    if event_type == 'invoice.update':
+        return _handle_invoice_update(data, db)
+    if event_type == 'invoice.payment_failed':
+        return _handle_invoice_payment_failed(data, db)
+    if event_type == 'subscription.create':
+        return _handle_subscription_created(data, db)
+    if event_type in {'subscription.disable', 'subscription.not_renew'}:
+        return _handle_subscription_lifecycle(
+            data,
+            db,
+            event_type=event_type,
+        )
+    if event_type == 'transfer.success':
+        return _handle_transfer_success(data=data, db=db)
+    if event_type in {'transfer.pending', 'transfer.failed', 'transfer.reversed'}:
+        return _handle_transfer_status(
+            data=data,
+            db=db,
+            status_value=event_type.removeprefix('transfer.'),
+        )
+    if event_type in {'charge.dispute.create', 'charge.dispute.remind'}:
+        return _handle_paystack_dispute(
+            data=data,
+            db=db,
+            event=event_type,
+        )
+    if event_type.startswith('refund.'):
+        return _handle_refund_status(
+            data=data,
+            db=db,
+            status_value=event_type.removeprefix('refund.'),
+        )
+    return {'action': 'event_ignored'}
+
+
+def _emit_payment_notification(
+    db: Session,
+    *,
+    result: dict,
+    provider_event_key: str,
+) -> None:
+    action = result.get("action")
+
+    def emit(
+        user_id: int | None,
+        notification_type: str,
+        navigation_data: dict[str, object] | None = None,
+        stable_event_key: str | None = None,
+    ) -> None:
+        if user_id is None:
+            return
+        notify_user(
+            db,
+            user_id=int(user_id),
+            notification_type=notification_type,
+            navigation_data=navigation_data,
+            event_key=(stable_event_key or (
+                f"paystack:{provider_event_key}:{notification_type}:{user_id}"
+            ))[:255],
+        )
+
+    if action in {"subscription_payment_applied", "subscription_upgraded"}:
+        emit(
+            result.get("user_id"),
+            NotificationType.SUBSCRIPTION_ACTIVATED,
+            {"subscription_destination": "subscription"},
+        )
+    elif action == "subscription_payment_failed":
+        emit(
+            result.get("user_id"),
+            NotificationType.SUBSCRIPTION_PAYMENT_FAILED,
+            {"subscription_destination": "subscription"},
+        )
+    elif action == "subscription_lifecycle_updated":
+        notification_type = (
+            NotificationType.SUBSCRIPTION_EXPIRED
+            if result.get("downgraded")
+            else NotificationType.SUBSCRIPTION_CANCELLED
+        )
+        subscription_code = result.get("subscription_code") or "unknown"
+        user_id = result.get("user_id")
+        emit(
+            user_id,
+            notification_type,
+            {"subscription_destination": "subscription"},
+            f"subscription:{subscription_code}:{notification_type}:{user_id}",
+        )
+    elif action == "appointment_confirmed":
+        appointment_id = result.get("appointment_id")
+        navigation = {"appointment_id": appointment_id}
+        emit(
+            result.get("patient_user_id"),
+            NotificationType.CONSULTATION_PAYMENT_CONFIRMED,
+            navigation,
+        )
+        emit(
+            result.get("doctor_user_id"),
+            NotificationType.CONSULTATION_CONFIRMED,
+            navigation,
+        )
+    elif action in {"consultation_payout_confirmed", "doctor_earnings_credited"}:
+        emit(
+            result.get("user_id"),
+            NotificationType.PAYOUT_SENT,
+            (
+                {"appointment_id": result.get("appointment_id")}
+                if result.get("appointment_id") is not None
+                else None
+            ),
+        )
+
+
+async def _process_paystack_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session,
+) -> dict:
+    raw_body, payload = await _verified_paystack_payload(request)
+    event_type = str(payload.get('event') or 'unknown')
+    raw_data = payload.get('data')
+    data = raw_data if isinstance(raw_data, dict) else {}
+    details = _subscription_event_details(data)
+    reference = details.get('transaction_reference') or ''
+    subscription_code = details.get('subscription_code')
+    invoice_code = details.get('invoice_code') or None
+    customer_code = details.get('customer_code')
+
+    if event_type not in RECOGNISED_PAYSTACK_EVENTS:
+        logger.info(
+            '[WEBHOOK] event=%s reference=%s subscription_code=%s '
+            'customer_code=%s result=ignored_unknown_event',
+            event_type,
+            reference,
+            subscription_code,
+            customer_code,
+        )
+        return {
+            'status': 'success',
+            'action': 'unknown_event_ignored',
+        }
+    if not isinstance(raw_data, dict):
+        raise HTTPException(
+            status_code=400,
+            detail='Malformed webhook data.',
+        )
+
+    transaction_type, ref_appointment_id, ref_user_id = _parse_reference(
+        reference
+    )
+    provider_event_key = _provider_event_key(
+        event_type,
+        data,
+        raw_body,
+    )
+    payment_key = _payment_identity_key(
+        event_type,
+        data,
+        transaction_type,
+    )
+    event_record, duplicate = _claim_payment_event(
+        db,
+        event_type=event_type,
+        provider_event_key=provider_event_key,
+        payment_key=payment_key,
+        reference=reference,
+        subscription_code=subscription_code,
+        invoice_code=invoice_code,
+    )
+    if duplicate:
+        db.rollback()
+        logger.info(
+            '[WEBHOOK] event=%s reference=%s subscription_code=%s '
+            'customer_code=%s result=duplicate',
+            event_type,
+            reference,
+            subscription_code,
+            customer_code,
+        )
+        return {
+            'status': 'success',
+            'action': 'duplicate_event_ignored',
+        }
+
+    try:
+        result = _dispatch_paystack_event(
+            event_type=event_type,
+            data=data,
+            transaction_type=transaction_type,
+            ref_appointment_id=ref_appointment_id,
+            ref_user_id=ref_user_id,
+            reference=reference,
+            db=db,
+            background_tasks=background_tasks,
+        )
+        _mark_payment_event_processed(
+            event_record,
+            user_id=result.get('user_id'),
+            action=str(result.get('action') or 'processed'),
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        error_code = (
+            exc.error_code
+            if isinstance(exc, PaymentProcessingError)
+            else 'processing_failure'
+        )
+        _record_payment_event_failure(
+            db,
+            event_type=event_type,
+            provider_event_key=provider_event_key,
+            payment_key=payment_key,
+            reference=reference,
+            subscription_code=subscription_code,
+            invoice_code=invoice_code,
+            error_code=error_code,
+        )
+        _write_dlq(
+            reference=reference,
+            event_type=event_type,
+            payload={
+                'reference': reference,
+                'subscription_code': subscription_code,
+                'invoice_code': invoice_code,
+                'customer_code': customer_code,
+            },
+            error_message=error_code,
+            db=db,
+        )
+        if isinstance(exc, PaymentProcessingError):
+            logger.warning(
+                '[WEBHOOK] event=%s reference=%s subscription_code=%s '
+                'customer_code=%s result=failed error_code=%s',
+                event_type,
+                reference,
+                subscription_code,
+                customer_code,
+                error_code,
+            )
+        else:
+            logger.exception(
+                '[WEBHOOK] event=%s reference=%s subscription_code=%s '
+                'result=failed error_code=%s',
+                event_type,
+                reference,
+                subscription_code,
+                error_code,
+            )
+        raise HTTPException(
+            status_code=500,
+            detail='Webhook processing failed.',
+        ) from exc
+
+    _emit_payment_notification(
+        db,
+        result=result,
+        provider_event_key=provider_event_key,
+    )
+
+    logger.info(
+        '[WEBHOOK] event=%s reference=%s subscription_code=%s '
+        'customer_code=%s result=%s',
+        event_type,
+        reference,
+        subscription_code,
+        customer_code,
+        result.get('action'),
+    )
+    return {'status': 'success', **result}
+
+
+def _process_manual_verified_transaction(
+    *,
+    transaction_type: str,
+    ref_appointment_id: str | None,
+    ref_user_id: str | None,
+    reference: str,
+    tx_data: dict,
+    db: Session,
+    background_tasks: BackgroundTasks,
+    current_user: User,
+) -> dict:
+    details = _subscription_event_details(tx_data)
+    _validate_paystack_environment(details)
+    environment = details.get('environment')
+    provider_event_key = (
+        f'{environment}:manual.verify:{reference}'
+    )[:255]
+    payment_key = _payment_identity_key(
+        'manual.verify',
+        tx_data,
+        transaction_type,
+    )
+    event, duplicate = _claim_payment_event(
+        db,
+        event_type='manual.verify',
+        provider_event_key=provider_event_key,
+        payment_key=payment_key,
+        reference=reference,
+        subscription_code=details.get('subscription_code'),
+        invoice_code=None,
+    )
+    if duplicate:
+        db.rollback()
+        return {
+            'verified': True,
+            'paystack_status': 'success',
+            'action': 'payment_already_processed',
+        }
+
+    try:
+        if transaction_type in CONSULTATION_TRANSACTION_TYPES:
+            _validate_successful_consultation_charge(tx_data)
+            _validate_consultation_payment(
+                transaction_type=transaction_type,
+                ref_appointment_id=ref_appointment_id,
+                ref_user_id=ref_user_id,
+                reference=reference,
+                amount_kobo=paystack_requested_amount_kobo(tx_data),
+                db=db,
+                current_user=current_user,
+            )
+        result = _apply_db_update(
+            transaction_type=transaction_type,
+            ref_appointment_id=ref_appointment_id,
+            ref_user_id=ref_user_id,
+            reference=reference,
+            db=db,
+            background_tasks=background_tasks,
+            paystack_data=tx_data,
+        )
+        _mark_payment_event_processed(
+            event,
+            user_id=(
+                result.get('user_id')
+                or (
+                    int(ref_user_id)
+                    if ref_user_id and ref_user_id.isdigit()
+                    else None
+                )
+            ),
+            action=str(result.get('action') or 'processed'),
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    _emit_payment_notification(
+        db,
+        result=result,
+        provider_event_key=provider_event_key,
+    )
+    return {
+        'verified': True,
+        'paystack_status': 'success',
+        **result,
+    }
+
+
 def _handle_refund_status(
     data: dict,
     db: Session,
@@ -1481,167 +2554,11 @@ async def paystack_webhook(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    """
-    POST /api/v1/payments/webhook
-
-    1. Verifies the HMAC-SHA512 signature from Paystack.
-    2. Parses the reference string to extract transaction type + DB IDs.
-    3. Updates the database (subscription or appointment).
-    4. On any DB failure, writes to the failed_webhooks DLQ instead of
-       raising â€” so Paystack receives 200 and stops retrying a
-       structurally unprocessable event.
-
-    Always returns HTTP 200 so Paystack never enters a retry loop for
-    events we deliberately ignore or route to the DLQ.
-    """
-
-    # â”€â”€ 1. Read raw body BEFORE any parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    body: bytes = await request.body()
-
-    # â”€â”€ 2. Extract Paystack signature header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    signature: str = request.headers.get("x-paystack-signature", "")
-    if not signature:
-        logger.warning("[WEBHOOK] Request missing x-paystack-signature header â€” rejected.")
-        raise HTTPException(status_code=400, detail="Missing signature header")
-
-    # â”€â”€ 3. Recompute HMAC-SHA512 digest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    expected_hash: str = hmac.new(
-        PAYSTACK_SECRET_KEY.encode("utf-8"),
-        msg=body,
-        digestmod=hashlib.sha512,
-    ).hexdigest()
-
-    # â”€â”€ 4. Timing-attack-safe comparison â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    if not hmac.compare_digest(expected_hash, signature):
-        logger.warning("[WEBHOOK] Signature mismatch â€” request rejected.")
-        raise HTTPException(status_code=400, detail="Invalid signature")
-
-    # â”€â”€ 5. Parse payload â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    try:
-        payload: dict = json.loads(body)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Malformed JSON payload")
-
-    data: dict = payload.get("data") or {}
-    reference: str = (
-        data.get("reference")
-        or data.get("transaction_reference")
-        or ""
+    return await _process_paystack_webhook(
+        request,
+        background_tasks,
+        db,
     )
-    raw_event: str = payload.get("event", "unknown")
-
-    # â”€â”€ 6. Parse reference string â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    transaction_type, ref_appointment_id, ref_user_id = _parse_reference(reference)
-
-    logger.info(
-        "[WEBHOOK] Received event='%s' | reference='%s' | transactionType='%s' "
-        "| appointment_id='%s' | user_id='%s'",
-        raw_event,
-        reference,
-        transaction_type,
-        ref_appointment_id,
-        ref_user_id,
-    )
-
-    # -- 7. Event-level dispatch then reference-based routing -----------------
-    #
-    # charge.success  -> subscription upgrade via metadata.user_id
-    # transfer.success -> doctor earnings credit via metadata/recipient.metadata
-    # everything else -> existing reference-based router (_apply_db_update)
-    #
-    # All three paths share the same DLQ fallback below.
-    # -------------------------------------------------------------------------
-    try:
-        if (
-            raw_event == "charge.success"
-            and transaction_type in {"subscription", "family_subscription"}
-        ):
-            result = _handle_charge_success(data=data, db=db)
-        elif (
-            raw_event == "charge.success"
-            and transaction_type in CONSULTATION_TRANSACTION_TYPES
-        ):
-            _validate_consultation_payment(
-                transaction_type=transaction_type,
-                ref_appointment_id=ref_appointment_id,
-                ref_user_id=ref_user_id,
-                reference=reference,
-                amount_kobo=paystack_requested_amount_kobo(data),
-                db=db,
-            )
-            result = _apply_db_update(
-                transaction_type=transaction_type,
-                ref_appointment_id=ref_appointment_id,
-                ref_user_id=ref_user_id,
-                reference=reference,
-                db=db,
-                background_tasks=background_tasks,
-                paystack_data=data,
-            )
-        elif raw_event == "subscription.create":
-            result = _handle_subscription_create(data=data, db=db)
-        elif raw_event == "transfer.success":
-            result = _handle_transfer_success(data=data, db=db)
-        elif raw_event == "transfer.pending":
-            result = _handle_transfer_status(
-                data=data,
-                db=db,
-                status_value="pending",
-            )
-        elif raw_event == "transfer.failed":
-            result = _handle_transfer_status(
-                data=data,
-                db=db,
-                status_value="failed",
-            )
-        elif raw_event == "transfer.reversed":
-            result = _handle_transfer_status(
-                data=data,
-                db=db,
-                status_value="reversed",
-            )
-        elif raw_event in {"charge.dispute.create", "charge.dispute.remind"}:
-            result = _handle_paystack_dispute(data=data, db=db, event=raw_event)
-        elif raw_event in {
-            "refund.pending",
-            "refund.processing",
-            "refund.needs-attention",
-            "refund.failed",
-            "refund.processed",
-        }:
-            result = _handle_refund_status(
-                data=data,
-                db=db,
-                status_value=raw_event.removeprefix("refund."),
-            )
-        elif raw_event in ("subscription.disable", "subscription.not_renew"):
-            result = _handle_subscription_disable(data=data, db=db)
-        else:
-            result = _apply_db_update(
-                transaction_type=transaction_type,
-                ref_appointment_id=ref_appointment_id,
-                ref_user_id=ref_user_id,
-                reference=reference,
-                db=db,
-                background_tasks=background_tasks,
-                paystack_data=data,
-            )
-    except Exception as exc:
-        db.rollback()  # ensure the session is clean before the DLQ write
-        _write_dlq(
-            reference=reference,
-            event_type=raw_event,
-            payload=payload,
-            error_message=str(exc),
-            db=db,
-        )
-        return {
-            "status": "success",
-            "detail": "event routed to DLQ â€” see failed_webhooks table",
-        }
-
-    return {"status": "success", **result}
-
 
 # â”€â”€â”€ Manual Verification Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -1693,9 +2610,16 @@ async def verify_transaction(
                 f"{PAYSTACK_VERIFY_URL}/{reference}",
                 headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"},
             )
-        paystack_data: dict = resp.json()
+        try:
+            paystack_data: dict = resp.json()
+        except ValueError:
+            paystack_data = {}
     except httpx.RequestError as exc:
-        logger.error("[VERIFY] HTTP error reaching Paystack: %s", exc)
+        logger.error(
+            "[VERIFY] network_error reference=%s error_type=%s",
+            reference,
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=502,
             detail="Could not reach Paystack verification endpoint.",
@@ -1704,17 +2628,29 @@ async def verify_transaction(
     # â”€â”€ 2. Inspect Paystack's verdict â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if not paystack_data.get("status"):
         logger.warning(
-            "[VERIFY] Paystack returned an error for reference='%s': %s",
+            "[VERIFY] provider_rejected reference=%s http_status=%s",
             reference,
-            paystack_data.get("message"),
+            resp.status_code,
         )
         raise HTTPException(
             status_code=402,
-            detail=paystack_data.get("message", "Transaction not found on Paystack."),
+            detail="The transaction could not be verified.",
         )
 
     tx_data: dict = paystack_data.get("data") or {}
     paystack_status: str = tx_data.get("status", "")
+
+    if paystack_status == 'success':
+        return _process_manual_verified_transaction(
+            transaction_type=transaction_type,
+            ref_appointment_id=ref_appointment_id,
+            ref_user_id=ref_user_id,
+            reference=reference,
+            tx_data=tx_data,
+            db=db,
+            background_tasks=background_tasks,
+            current_user=current_user,
+        )
 
     if paystack_status != "success":
         logger.info(
@@ -1727,52 +2663,3 @@ async def verify_transaction(
             "paystack_status": paystack_status,
             "detail": "Transaction is not yet successful.",
         }
-
-    # Step 3: update database using the pre-validated reference.
-    try:
-        _validate_consultation_payment(
-            transaction_type=transaction_type,
-            ref_appointment_id=ref_appointment_id,
-            ref_user_id=ref_user_id,
-            reference=reference,
-            amount_kobo=paystack_requested_amount_kobo(tx_data),
-            db=db,
-            current_user=current_user,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    logger.info(
-        "[VERIFY] âœ… Paystack confirmed success â€” reference='%s' | type='%s' "
-        "| appointment_id='%s' | user_id='%s'",
-        reference,
-        transaction_type,
-        ref_appointment_id,
-        ref_user_id,
-    )
-
-    try:
-        result = _apply_db_update(
-            transaction_type=transaction_type,
-            ref_appointment_id=ref_appointment_id,
-            ref_user_id=ref_user_id,
-            reference=reference,
-            db=db,
-            background_tasks=background_tasks,
-            paystack_data=tx_data,
-        )
-    except Exception as exc:
-        db.rollback()
-        logger.error(
-            "[VERIFY] DB update failed for reference='%s': %s", reference, exc
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Payment verified by Paystack, but DB update failed: {exc}",
-        )
-
-    return {
-        "verified": True,
-        "paystack_status": paystack_status,
-        **result,
-    }

@@ -1,6 +1,7 @@
 import logging
 import os
 import uuid
+import json
 
 import cloudinary
 import cloudinary.api
@@ -13,6 +14,7 @@ from fastapi import (
     Depends,
     Request,
     File,
+    Form,
     Header,
     UploadFile,
 )
@@ -20,10 +22,12 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from typing import Optional
+from uuid import UUID
 
 from app.services import ai_service
 from app.core.database import get_db
 from app.models.user import User
+from app.models.vault import AIChatSummary
 from app.api import deps
 from app.api.v1.ai_consent import require_active_ai_consent
 from app.core.limiter import limiter
@@ -37,6 +41,8 @@ from app.services.ai_request_guard import (
     acquire_ai_request_lease,
     release_ai_request_lease,
 )
+from app.services.ai_pdf import read_validated_ai_pdf
+from app.services.subscription_entitlement import has_active_paid_entitlement
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -61,6 +67,8 @@ class ChatRequest(BaseModel):
     conversation_memory: Optional[str] = None
     memory_source: Optional[str] = None
     update_memory: bool = False
+    source_summary_id: Optional[UUID] = None
+    source_summary_updated_at: Optional[datetime] = None
 
 
 class ChatResponse(BaseModel):
@@ -94,7 +102,6 @@ _BURST_WINDOW_MINUTES: int  = 15   # sliding window length
 _BURST_MSG_THRESHOLD: int = 15
 _COLD_CAP_MINUTES: int = 15
 
-_PAID_PLANS = {"premium", "family"}
 _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
 _MAX_TEMP_IMAGE_BYTES = 5 * 1024 * 1024
 _TEMP_IMAGE_TTL = timedelta(hours=2)
@@ -124,6 +131,47 @@ def _paid_message_thresholds(plan: str) -> tuple[int, int]:
     if plan == "family":
         return _FAMILY_MONTHLY_MSG_SOFT_LIMIT, _FAMILY_MONTHLY_WARNING_AT
     return _PREMIUM_MONTHLY_MSG_SOFT_LIMIT, _PREMIUM_MONTHLY_WARNING_AT
+
+
+def _get_owned_source_summary(
+    db: Session,
+    summary_id: UUID,
+    user_id: int,
+    expected_updated_at: datetime | None = None,
+) -> AIChatSummary:
+    summary = (
+        db.query(AIChatSummary)
+        .filter(
+            AIChatSummary.id == summary_id,
+            AIChatSummary.patient_id == user_id,
+        )
+        .first()
+    )
+    if summary is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This saved conversation is no longer available.",
+        )
+    if expected_updated_at is not None:
+        stored_updated_at = summary.updated_at
+        if stored_updated_at.tzinfo is None:
+            stored_updated_at = stored_updated_at.replace(tzinfo=timezone.utc)
+        else:
+            stored_updated_at = stored_updated_at.astimezone(timezone.utc)
+        source_updated_at = expected_updated_at
+        if source_updated_at.tzinfo is None:
+            source_updated_at = source_updated_at.replace(tzinfo=timezone.utc)
+        else:
+            source_updated_at = source_updated_at.astimezone(timezone.utc)
+        if stored_updated_at != source_updated_at:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This saved conversation was updated elsewhere. Your current "
+                    "chat is still available; refresh it before continuing."
+                ),
+            )
+    return summary
 
 
 def _require_owned_temp_image(public_id: str, user_id: int) -> None:
@@ -288,6 +336,24 @@ async def analyze_symptoms(
     current_user: User = Depends(deps.get_current_user),
     request_lease: AIRequestLease = Depends(require_ai_request_slot),
 ):
+    return await _analyze_chat_request(
+        request,
+        chat_request,
+        db,
+        current_user,
+        request_lease,
+    )
+
+
+async def _analyze_chat_request(
+    request: Request,
+    chat_request: ChatRequest,
+    db: Session,
+    current_user: User,
+    request_lease: AIRequestLease,
+    *,
+    document_bytes: bytes | None = None,
+):
     """
     AI Symptom Checker / Chat endpoint.
 
@@ -316,8 +382,47 @@ async def analyze_symptoms(
     require_active_ai_consent(current_user)
 
     now = datetime.utcnow()
+    has_paid_entitlement = has_active_paid_entitlement(current_user)
+    plan_category = (
+        (current_user.plan or "free").strip().lower()
+        if has_paid_entitlement
+        else "free"
+    )
     has_image = bool(chat_request.image_public_id)
+    has_document = document_bytes is not None
+    has_heavy_attachment = has_image or has_document
     trusted_image_url = None
+
+    if has_image and has_document:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only one attachment can be analysed at a time.",
+        )
+
+    historical_saved_context = None
+    if chat_request.source_summary_id is not None:
+        if not has_paid_entitlement:
+            logger.info(
+                "[AI CHAT] plan=%s quota_outcome=not_evaluated "
+                "entitlement_outcome=continuation_denied",
+                plan_category,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Continue with AI is available on Premium and Family plans.",
+            )
+        if chat_request.source_summary_updated_at is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="The saved conversation version is required.",
+            )
+        source_summary = _get_owned_source_summary(
+            db,
+            chat_request.source_summary_id,
+            current_user.id,
+            chat_request.source_summary_updated_at,
+        )
+        historical_saved_context = source_summary.summary_text
 
     if chat_request.image_url and not has_image:
         raise HTTPException(
@@ -333,8 +438,8 @@ async def analyze_symptoms(
             resource_type="image",
         )[0]
 
-    # Guard: at least one of text or image must be present
-    if not chat_request.message.strip() and not has_image:
+    # Guard: at least one of text or attachment must be present.
+    if not chat_request.message.strip() and not has_heavy_attachment:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Message or Image is required",
@@ -395,9 +500,9 @@ async def analyze_symptoms(
     # LAYER 2 — Tier-specific quota
     # =========================================================================
 
-    if current_user.plan in _PAID_PLANS:
+    if has_paid_entitlement:
         monthly_soft_limit, monthly_warning_at = _paid_message_thresholds(
-            current_user.plan
+            plan_category
         )
         # Premium / Family fair use and post-cap rolling allowance.
         window_start = current_user.rolling_chat_window_start
@@ -428,14 +533,14 @@ async def analyze_symptoms(
             )
 
         if (
-            has_image
+            has_heavy_attachment
             and monthly_heavy_ai_usage(current_user)
             >= PAID_MONTHLY_HEAVY_AI_LIMIT
         ):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=(
-                    "You've used this month's 10 AI photo and lab "
+                    "You've used this month's 10 AI attachment and lab "
                     "interpretations. Text AI support remains available."
                 ),
             )
@@ -467,12 +572,12 @@ async def analyze_symptoms(
                 ),
             )
 
-        # Check image sub-bucket
-        if has_image and (current_user.monthly_chat_image_count or 0) >= _FREE_MONTHLY_IMAGE_LIMIT:
+        # Check attachment sub-bucket (images and PDFs share the existing cap).
+        if has_heavy_attachment and (current_user.monthly_chat_image_count or 0) >= _FREE_MONTHLY_IMAGE_LIMIT:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=(
-                    f"You've used your {_FREE_MONTHLY_IMAGE_LIMIT} image analyses "
+                    f"You've used your {_FREE_MONTHLY_IMAGE_LIMIT} attachment analyses "
                     "allowed per month on the Free plan. You can still send text "
                     "messages, or upgrade to Premium for more."
                 ),
@@ -493,24 +598,65 @@ async def analyze_symptoms(
 
     target_language = chat_request.language or "English"
 
+    history_limit = ai_service.MAX_HISTORY_MESSAGES if has_paid_entitlement else 4
+    entitled_history = ai_service.sanitise_recent_history(
+        chat_request.history,
+        max_messages=history_limit,
+    )
+    entitled_conversation_memory = (
+        chat_request.conversation_memory if has_paid_entitlement else None
+    )
+    entitled_memory_source = (
+        chat_request.memory_source if has_paid_entitlement else None
+    )
+    entitled_update_memory = (
+        chat_request.update_memory if has_paid_entitlement else False
+    )
+
+    logger.info(
+        "[AI CHAT] plan=%s quota_outcome=allowed",
+        plan_category,
+    )
+
     try:
         try:
             ai_result = await ai_service.get_medical_response(
                 chat_request.message,
-                history=chat_request.history,
+                history=entitled_history,
                 image_url=trusted_image_url,
                 user_context=user_context,
                 target_language=target_language,
-                conversation_memory=chat_request.conversation_memory,
-                memory_source=chat_request.memory_source,
-                update_memory=chat_request.update_memory,
+                conversation_memory=entitled_conversation_memory,
+                memory_source=entitled_memory_source,
+                update_memory=entitled_update_memory,
+                historical_saved_context=historical_saved_context,
+                document_bytes=document_bytes,
+                plan_category=plan_category,
             )
         except ai_service.AIInputLimitError as exc:
+            logger.info(
+                "[AI CHAT] plan=%s quota_outcome=not_consumed finish=input_limit",
+                plan_category,
+            )
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=str(exc),
             )
+        except ai_service.AIResponseCompletionError as exc:
+            logger.info(
+                "[AI CHAT] plan=%s quota_outcome=not_consumed finish=%s",
+                plan_category,
+                exc.finish_category,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="AI service is temporarily unavailable. Please try again.",
+            )
         except Exception:
+            logger.info(
+                "[AI CHAT] plan=%s quota_outcome=not_consumed finish=abnormal",
+                plan_category,
+            )
             logger.exception(
                 "[AI CHAT] Gemini processing failed for user_id=%s",
                 current_user.id,
@@ -530,9 +676,9 @@ async def analyze_symptoms(
     current_user.burst_chat_count = (current_user.burst_chat_count or 0) + 1
 
     usage_notice = None
-    if current_user.plan in _PAID_PLANS:
+    if has_paid_entitlement:
         monthly_soft_limit, monthly_warning_at = _paid_message_thresholds(
-            current_user.plan
+            plan_category
         )
         monthly_before_increment = current_user.monthly_chat_count or 0
         current_user.monthly_chat_count = monthly_before_increment + 1
@@ -555,21 +701,82 @@ async def analyze_symptoms(
                 "your monthly allowance resets."
             )
 
-        if has_image:
+        if has_heavy_attachment:
             current_user.monthly_chat_image_count = (
                 current_user.monthly_chat_image_count or 0
             ) + 1
     else:
         current_user.monthly_chat_count = (current_user.monthly_chat_count or 0) + 1
-        if has_image:
+        if has_heavy_attachment:
             current_user.monthly_chat_image_count = (current_user.monthly_chat_image_count or 0) + 1
 
     db.add(current_user)
     db.commit()
     request_lease.completed = True
+    logger.info(
+        "[AI CHAT] plan=%s quota_outcome=consumed response_chars=%s",
+        plan_category,
+        len(ai_result.text),
+    )
 
     return ChatResponse(
         response=ai_result.text,
         usage_notice=usage_notice,
         memory_summary=ai_result.memory_update,
+    )
+
+
+def _parse_document_history(raw_history: str) -> list:
+    try:
+        history = json.loads(raw_history)
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid conversation context.",
+        ) from None
+    if not isinstance(history, list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid conversation context.",
+        )
+    return history
+
+
+@router.post("/analyze-document", response_model=ChatResponse)
+@limiter.limit("10/hour")
+async def analyze_document(
+    request: Request,
+    file: UploadFile = File(...),
+    message: str = Form(""),
+    history: str = Form("[]"),
+    language: str = Form("English"),
+    conversation_memory: Optional[str] = Form(None),
+    memory_source: Optional[str] = Form(None),
+    update_memory: bool = Form(False),
+    source_summary_id: Optional[UUID] = Form(None),
+    source_summary_updated_at: Optional[datetime] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+    request_lease: AIRequestLease = Depends(require_ai_request_slot),
+):
+    """Validate and analyse one temporary PDF without persisting its bytes."""
+    require_active_ai_consent(current_user)
+    document_bytes = await read_validated_ai_pdf(file)
+    chat_request = ChatRequest(
+        message=message.strip() or "Analyse and explain this PDF document.",
+        history=_parse_document_history(history),
+        language=language,
+        conversation_memory=conversation_memory,
+        memory_source=memory_source,
+        update_memory=update_memory,
+        source_summary_id=source_summary_id,
+        source_summary_updated_at=source_summary_updated_at,
+    )
+    return await _analyze_chat_request(
+        request,
+        chat_request,
+        db,
+        current_user,
+        request_lease,
+        document_bytes=document_bytes,
     )

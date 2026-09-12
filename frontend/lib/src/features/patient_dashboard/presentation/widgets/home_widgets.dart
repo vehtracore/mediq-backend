@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:mediq_app/src/features/notifications/presentation/notification_bell_icon.dart';
 import 'package:intl/intl.dart';
+import 'package:uuid/uuid.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_repository.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/appointments/data/appointment_model.dart';
@@ -112,8 +114,10 @@ class HomeHeader extends StatelessWidget {
                                   blurRadius: 15,
                                   offset: const Offset(0, 5))
                             ]),
-                  child: const Icon(Icons.notifications_none_rounded,
-                      color: Color(0xFF4A90E2), size: 26))),
+                  child: const NotificationBellIcon(
+                    color: Color(0xFF4A90E2),
+                    size: 26,
+                  ))),
         ],
       ),
     );
@@ -404,7 +408,8 @@ class QuickActionGrid extends ConsumerWidget {
                 if (item['label'] == 'Find Doctor') {
                   _showBookingOptions(context, ref);
                 } else if (item['label'] == 'Emergency') {
-                  context.push('/emergency');
+                  final activationId = const Uuid().v4();
+                  context.push('/emergency?activationId=$activationId');
                 }
               },
               borderRadius: BorderRadius.circular(24),
