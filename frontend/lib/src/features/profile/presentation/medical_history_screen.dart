@@ -5,6 +5,7 @@ import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/auth/presentation/auth_controller.dart';
 import 'package:mediq_app/src/features/auth/presentation/profile_recovery_view.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 class MedicalHistoryScreen extends ConsumerStatefulWidget {
   const MedicalHistoryScreen({super.key});
@@ -56,7 +57,10 @@ class _MedicalHistoryScreenState extends ConsumerState<MedicalHistoryScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(UIErrorFormatter.getMessage(e)),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }

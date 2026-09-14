@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../data/auth_repository.dart';
 import 'auth_controller.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 class DoctorPendingScreen extends ConsumerStatefulWidget {
   const DoctorPendingScreen({super.key});
@@ -21,9 +22,8 @@ class _DoctorPendingScreenState extends ConsumerState<DoctorPendingScreen> {
     setState(() => _isLoading = true);
     try {
       // 1. Fetch Profile
-      final doctor = await ref
-          .read(authRepositoryProvider)
-          .getMyDoctorProfile();
+      final doctor =
+          await ref.read(authRepositoryProvider).getMyDoctorProfile();
 
       if (!mounted) return;
 
@@ -49,7 +49,7 @@ class _DoctorPendingScreenState extends ConsumerState<DoctorPendingScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("Error checking status: $e"),
+            content: Text(UIErrorFormatter.getMessage(e)),
             backgroundColor: Colors.red,
           ),
         );

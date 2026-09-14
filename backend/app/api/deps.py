@@ -1,6 +1,8 @@
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -59,6 +61,10 @@ SUPABASE_URL: str = os.getenv(
 ).rstrip("/")
 JWKS_URL: str = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json"
 SUPABASE_JWT_AUDIENCE: str = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
+SUPABASE_JWT_ISSUER: str = os.getenv(
+    "SUPABASE_JWT_ISSUER",
+    f"{SUPABASE_URL}/auth/v1",
+).rstrip("/")
 
 # Keep the JWKS document in-process so normal authenticated requests do not
 # depend on a Supabase network call. An unknown key ID still forces a refresh,
@@ -75,6 +81,64 @@ jwks_client = PyJWKClient(
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=True)
 
 
+@dataclass(frozen=True)
+class SupabaseIdentity:
+    """Verified immutable identity claims from a Supabase access token."""
+
+    auth_id: UUID
+    email: str
+    expires_at: datetime
+
+
+def get_supabase_identity(token: str = Depends(oauth2_scheme)) -> SupabaseIdentity:
+    """Verify a Supabase JWT without requiring an existing local User row."""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        payload = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["ES256"],
+            audience=SUPABASE_JWT_AUDIENCE,
+            issuer=SUPABASE_JWT_ISSUER,
+        )
+        email = payload.get("email")
+        subject = payload.get("sub")
+        expires_at_epoch = payload.get("exp")
+        if not isinstance(email, str) or not email.strip():
+            raise credentials_exception
+        if not isinstance(subject, str):
+            raise credentials_exception
+        if not isinstance(expires_at_epoch, (int, float)):
+            raise credentials_exception
+        auth_id = UUID(subject)
+    except HTTPException:
+        raise
+    except (PyJWTError, ValueError, TypeError) as exc:
+        logger.warning(
+            "[AUTH] JWT verification failed failure_category=%s",
+            type(exc).__name__,
+        )
+        raise credentials_exception
+    except Exception as exc:
+        logger.error(
+            "[AUTH] Unexpected token verification failure_category=%s",
+            type(exc).__name__,
+        )
+        raise credentials_exception
+
+    return SupabaseIdentity(
+        auth_id=auth_id,
+        email=email.strip().lower(),
+        expires_at=datetime.fromtimestamp(expires_at_epoch, tz=timezone.utc),
+    )
+
+
 def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
@@ -87,7 +151,8 @@ def get_current_user(
         2. Frontend sends the Supabase `access_token` in `Authorization: Bearer <token>`
         3. This function fetches the matching public key from the Supabase JWKS
            endpoint and verifies the JWT signature (ES256) and audience claim.
-        4. The `email` field from the JWT payload is used to look up the local User.
+        4. The immutable `sub` UUID resolves the local User. Signed email is
+           used only once to bind pre-migration rows that have no UUID yet.
     """
 
     credentials_exception = HTTPException(
@@ -95,40 +160,37 @@ def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-
-    # ── Decode & verify ───────────────────────────────────────────────────────
-    try:
-        logger.debug(f"[AUTH] Verifying token: {token[:15]}...")
-
-        # Resolve the correct public key using the token's `kid` header claim.
-        signing_key = jwks_client.get_signing_key_from_jwt(token)
-
-        payload = jwt.decode(
-            token,
-            signing_key.key,
-            algorithms=["ES256"],
-            audience=SUPABASE_JWT_AUDIENCE,
-        )
-
-        # Supabase stores the user's email in the top-level `email` claim.
-        email: str | None = payload.get("email")
-        if email is None:
-            logger.warning("[AUTH] Token decoded but 'email' claim is missing.")
-            raise credentials_exception
-
-    except PyJWTError as e:
-        logger.warning(f"[AUTH] JWT verification failed: {e}")
-        raise credentials_exception
-    except Exception as e:
-        # Catch JWKS fetch failures, network errors, etc.
-        logger.error(f"[AUTH] Unexpected error during token verification: {e}")
-        raise credentials_exception
+    identity = get_supabase_identity(token)
 
     # ── Resolve local user ────────────────────────────────────────────────────
-    user = db.query(User).filter(User.email == email).first()
+    user = (
+        db.query(User)
+        .filter(User.supabase_auth_id == identity.auth_id)
+        .first()
+    )
     if user is None:
-        logger.warning(f"[AUTH] Authenticated email {email} has no local User row.")
+        # One-time bridge for rows created before immutable Supabase IDs were
+        # stored. A signed token proves control of the normalized email, and an
+        # already-bound row can never be claimed by a different auth subject.
+        legacy_matches = (
+            db.query(User)
+            .filter(User.email.ilike(identity.email))
+            .limit(2)
+            .all()
+        )
+        legacy_user = legacy_matches[0] if len(legacy_matches) == 1 else None
+        if legacy_user is not None and legacy_user.supabase_auth_id is None:
+            legacy_user.supabase_auth_id = identity.auth_id
+            db.commit()
+            db.refresh(legacy_user)
+            user = legacy_user
+    if user is None:
+        logger.warning("[AUTH] Authenticated identity has no local User row.")
         raise credentials_exception
+
+    # Used by long-lived protocols such as WebSocket to enforce token expiry
+    # after the initial handshake. It is transient and never persisted.
+    user._auth_expires_at = identity.expires_at
 
     if user.is_banned:
         logger.info(f"[AUTH] Banned user attempted access: {user.email}")
@@ -154,7 +216,7 @@ def get_current_user(
             pass  # Allow access to quarantine flow
         elif doctor_status == "pending":
             logger.info(f"[AUTH] Pending doctor attempted access: {user.email}")
-            raise HTTPException(status_code=401, detail="Account pending approval")
+            raise HTTPException(status_code=403, detail="Account pending approval")
         else:
             logger.info(f"[AUTH] Inactive user attempted access: {user.email}")
             raise HTTPException(
@@ -183,5 +245,5 @@ def get_current_user(
         db.commit()
         db.refresh(user)
 
-    logger.debug(f"[AUTH] ✅ Authenticated: {user.first_name} ({user.email})")
+    logger.debug("[AUTH] Authenticated local user_id=%s", user.id)
     return user

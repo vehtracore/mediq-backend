@@ -49,7 +49,7 @@ from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import case, func, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -86,6 +86,16 @@ def _request_id_digest(request_id: str) -> str:
     return hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:12]
 
 
+def _emergency_request_fingerprint(
+    *,
+    user_id: int,
+    kin_phone: str,
+    message: str,
+) -> str:
+    canonical = f"{user_id}\n{kin_phone.strip()}\n{message}"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _normalise_datetime(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
@@ -100,6 +110,7 @@ def _reserve_emergency_sms(
     *,
     user_id: int,
     request_id: str,
+    request_fingerprint: str,
     now: datetime,
 ) -> _SmsReservation:
     """Atomically claim an activation and reserve one cooldown/quota unit."""
@@ -112,12 +123,21 @@ def _reserve_emergency_sms(
         .first()
     )
     if existing is not None:
+        if (
+            existing.request_fingerprint is not None
+            and existing.request_fingerprint != request_fingerprint
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This emergency request identifier was used for different alert details.",
+            )
         return _SmsReservation("duplicate", 0, request_status=existing.status)
 
     db.add(
         EmergencySmsRequest(
             user_id=user_id,
             request_id=request_id,
+            request_fingerprint=request_fingerprint,
             status="reserved",
         )
     )
@@ -135,6 +155,14 @@ def _reserve_emergency_sms(
             .first()
         )
         if duplicate is not None:
+            if (
+                duplicate.request_fingerprint is not None
+                and duplicate.request_fingerprint != request_fingerprint
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="This emergency request identifier was used for different alert details.",
+                )
             return _SmsReservation("duplicate", 0, request_status=duplicate.status)
         raise
 
@@ -337,6 +365,8 @@ class EmergencyTriggerRequest(BaseModel):
     the SMS body so the Next of Kin gets a recognisable location name in
     addition to the raw coordinates.
     """
+    model_config = ConfigDict(extra="forbid")
+
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     address: Optional[str] = None
@@ -471,6 +501,11 @@ async def trigger_emergency(
         db,
         user_id=current_user.id,
         request_id=request_id,
+        request_fingerprint=_emergency_request_fingerprint(
+            user_id=current_user.id,
+            kin_phone=kin_phone,
+            message=message,
+        ),
         now=datetime.now(timezone.utc),
     )
 

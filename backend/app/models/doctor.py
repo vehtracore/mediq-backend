@@ -35,6 +35,16 @@ class Doctor(Base):
     license_number = Column(String, unique=True, index=True)
     mdcn_license_url = Column(String, nullable=True) # NEW
     indemnity_cert_url = Column(String, nullable=True) # NEW
+    # Authenticated Cloudinary identifiers. Legacy URL columns remain nullable
+    # during the non-destructive reclassification/backfill transition.
+    mdcn_license_public_id = Column(String, nullable=True)
+    mdcn_license_resource_type = Column(String(16), nullable=True)
+    mdcn_license_format = Column(String(16), nullable=True)
+    mdcn_license_delivery_type = Column(String(16), nullable=True)
+    indemnity_cert_public_id = Column(String, nullable=True)
+    indemnity_cert_resource_type = Column(String(16), nullable=True)
+    indemnity_cert_format = Column(String(16), nullable=True)
+    indemnity_cert_delivery_type = Column(String(16), nullable=True)
     status = Column(String, default="pending", index=True) # "pending", "active", "rejected"
     rejection_reason = Column(String, nullable=True)  # Admin's reason for rejection
     is_verified = Column(Boolean, default=False, index=True)
@@ -50,4 +60,30 @@ class Doctor(Base):
     total_earnings = Column(Numeric(14, 2), nullable=False, default=0)
 
     user = relationship("User")
+
+    @property
+    def mdcn_license_available(self) -> bool:
+        return bool(
+            self.mdcn_license_public_id
+            and self.mdcn_license_resource_type
+            and self.mdcn_license_format
+            and self.mdcn_license_delivery_type == "authenticated"
+        )
+
+    @property
+    def indemnity_certificate_available(self) -> bool:
+        return bool(
+            self.indemnity_cert_public_id
+            and self.indemnity_cert_resource_type
+            and self.indemnity_cert_format
+            and self.indemnity_cert_delivery_type == "authenticated"
+        )
+
+    @property
+    def verification_media_migration_required(self) -> bool:
+        return bool(
+            (self.mdcn_license_url and not self.mdcn_license_available)
+            or (self.indemnity_cert_url and not self.indemnity_certificate_available)
+            or (self.documents_url and not self.mdcn_license_available)
+        )
 

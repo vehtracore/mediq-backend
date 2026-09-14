@@ -72,6 +72,9 @@ class ConsultationVideoPresenceBridge {
   void onReconnected({required bool remotePresent}) =>
       _session.mediaReconnected(remotePresent: remotePresent);
 
+  void onJoinFailed({required bool returningToChat}) =>
+      _session.videoJoinFailed(returningToChat: returningToChat);
+
   void onLeft({required bool returningToChat}) =>
       _session.leaveVideo(returningToChat: returningToChat);
 }
@@ -488,6 +491,7 @@ class ConsultationSessionController extends ChangeNotifier {
   Future<void>? _initialization;
   bool _liveRequested = false;
   bool _presenceConnected = false;
+  bool _connectingPresence = false;
   String? _expectedPeerPresenceId;
   bool _connectingSocket = false;
   bool _disposed = false;
@@ -565,8 +569,8 @@ class ConsultationSessionController extends ChangeNotifier {
 
   Future<void> _ensureLiveConnections() async {
     if (_disposed || myUserId == null) return;
-    if (!_presenceConnected) {
-      _presenceConnected = true;
+    if (!_presenceConnected && !_connectingPresence) {
+      _connectingPresence = true;
       try {
         await _presence.connect(
           appointmentId: appointmentId,
@@ -580,10 +584,16 @@ class ConsultationSessionController extends ChangeNotifier {
             _notify();
           },
         );
+        _presenceConnected = true;
         await _publishDesiredMode();
       } catch (_) {
+        // A failed optional presence connection must remain retryable. It is
+        // never consultation authority and cannot lock chat or video access.
+        _presenceConnected = false;
         peerMode = null;
         _notify();
+      } finally {
+        _connectingPresence = false;
       }
     }
     await _connectSocket();
@@ -901,6 +911,10 @@ class ConsultationSessionController extends ChangeNotifier {
     if (_videoActive) {
       localVideoJoined(remotePresent: remotePresent);
     }
+  }
+
+  void videoJoinFailed({required bool returningToChat}) {
+    leaveVideo(returningToChat: returningToChat);
   }
 
   void leaveVideo({required bool returningToChat}) {

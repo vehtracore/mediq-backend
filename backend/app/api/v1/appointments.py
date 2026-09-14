@@ -100,10 +100,14 @@ def require_approved_doctor(current_user: User, db: Session) -> Doctor:
         )
 
     doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-    if not doctor:
+    if (
+        not doctor
+        or not doctor.is_verified
+        or doctor.status != "active"
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Doctor profile not found.",
+            detail="An approved doctor profile is required.",
         )
     return doctor
 
@@ -445,7 +449,13 @@ def create_slot(
             if doctor.user_id
             else None
         )
-        if doctor_user is None or not doctor_user.is_active:
+        if (
+            doctor_user is None
+            or not doctor_user.is_active
+            or doctor_user.role != "doctor"
+            or not doctor.is_verified
+            or doctor.status != "active"
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Slots can only be created for active doctor accounts.",
@@ -491,12 +501,7 @@ def delete_doctor_slot(
         raise HTTPException(status_code=404, detail="Slot not found.")
 
     # Ownership: resolve doctor row from the authenticated user
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-    if not doctor or slot.doctor_id != doctor.id:
-        raise HTTPException(
-            status_code=403,
-            detail="You do not have permission to delete this slot.",
-        )
+    doctor = require_slot_owner(slot, current_user, db)
 
     # Safety: refuse to delete a slot that already has a booking
     if slot.is_booked:
@@ -551,7 +556,13 @@ def book_appointment(
         if slot.doctor.user_id
         else None
     )
-    if doctor_user is None or not doctor_user.is_active:
+    if (
+        doctor_user is None
+        or not doctor_user.is_active
+        or doctor_user.role != "doctor"
+        or not slot.doctor.is_verified
+        or slot.doctor.status != "active"
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This specialist is not currently available for booking.",
@@ -644,6 +655,7 @@ def book_appointment(
 
 @router.post("/book-general", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
 def book_general_consultation(req: GeneralBookRequest, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
+    require_patient_role(current_user)
     patient_price = 4000.0
     platform_commission, doctor_payout = calculate_consultation_split(
         patient_price
@@ -688,8 +700,10 @@ def request_vip_appointment(
         raise HTTPException(status_code=404, detail="Doctor not found")
     if (
         doctor.status != "active"
+        or not doctor.is_verified
         or doctor.user is None
         or not doctor.user.is_active
+        or doctor.user.role != "doctor"
     ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -800,6 +814,7 @@ def request_vip_appointment(
 
 @router.get("/my", response_model=List[AppointmentResponse])
 def get_my_appointments(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
+    require_patient_role(current_user)
     # Preserve the existing scheduled/general split and response ordering.
     # Eager-load every relationship touched by map_appt so this endpoint does
     # not issue one extra doctor-profile query per appointment.
@@ -906,10 +921,7 @@ def cancel_my_appointment(appt_id: int, db: Session = Depends(get_db), current_u
 # --- DOCTOR ENDPOINTS ---
 @router.get("/doctor/requests", response_model=List[AppointmentResponse])
 def get_doctor_requests(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
-    if not doctor:
-        logger.warning("[doctor/requests] No doctor row for user_id=%s", current_user.id)
-        raise HTTPException(403, "Not a doctor")
+    doctor = require_approved_doctor(current_user, db)
 
     logger.info(
         "[doctor/requests] Fetching pending requests for doctor_id=%s user_id=%s",
@@ -1351,7 +1363,7 @@ def refer_patient_to_hospital(
 
 @router.get("/doctor/appointments", response_model=List[AppointmentResponse])
 def get_doctor_confirmed_appointments(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
-    doctor = db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+    doctor = require_approved_doctor(current_user, db)
     scheduled = db.query(Appointment).options(joinedload(Appointment.patient), joinedload(Appointment.slot)).join(DoctorSlot, Appointment.slot_id == DoctorSlot.id).filter(Appointment.doctor_id == doctor.id, Appointment.status == "confirmed").all()
     general = db.query(Appointment).options(joinedload(Appointment.patient)).filter(Appointment.doctor_id == doctor.id, Appointment.slot_id == None, Appointment.status == "confirmed").all()
     

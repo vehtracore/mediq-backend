@@ -1,4 +1,4 @@
-﻿import 'dart:math' as math;
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -106,8 +106,8 @@ class _LabScannerScreenState extends ConsumerState<LabScannerScreen>
       final image = await _controller!.takePicture();
 
       await _analyzeImageWithPreflight(image);
-    } catch (e) {
-      debugPrint('[LabScanner] capture error: $e');
+    } catch (_) {
+      debugPrint('[LabScanner] image capture failed.');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(

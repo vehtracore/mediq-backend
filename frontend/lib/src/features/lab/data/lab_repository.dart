@@ -6,6 +6,7 @@ import 'package:mediq_app/src/core/api/app_exception.dart';
 import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'lab_result_model.dart';
 import 'package:http_parser/http_parser.dart';
+import 'package:mediq_app/src/core/media/sensitive_media_access.dart';
 
 final labRepositoryProvider =
     Provider((ref) => LabRepository(ref.read(dioProvider)));
@@ -42,6 +43,17 @@ class LabRepository {
       );
 
       return LabAnalysisResponse.fromJson(response.data);
+    } catch (e) {
+      throw AppException(
+        UIErrorFormatter.getMessage(e),
+        originalException: e,
+      );
+    }
+  }
+
+  Future<SensitiveMediaAccess> getImageAccess(int recordId) async {
+    try {
+      return await SensitiveMediaAccessClient(_dioClient).labImage(recordId);
     } catch (e) {
       throw AppException(
         UIErrorFormatter.getMessage(e),

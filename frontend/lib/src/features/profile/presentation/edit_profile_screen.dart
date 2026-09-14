@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/auth/presentation/auth_controller.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 class EditProfileScreen extends ConsumerStatefulWidget {
   final User user;
@@ -22,8 +23,9 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   late TextEditingController _lastNameCtrl;
   late TextEditingController _locationCtrl;
 
-  XFile? _selectedImage; 
-  Uint8List? _webImageBytes; // ✅ Holds image data in memory (Works on Web & Mobile)
+  XFile? _selectedImage;
+  Uint8List?
+      _webImageBytes; // ✅ Holds image data in memory (Works on Web & Mobile)
 
   @override
   void initState() {
@@ -41,11 +43,11 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       maxWidth: 1920,
       maxHeight: 1920,
     );
-    
+
     if (pickedFile != null) {
       // ✅ Read bytes immediately. This removes the need for 'dart:io' File objects in UI.
       final bytes = await pickedFile.readAsBytes();
-      
+
       setState(() {
         _selectedImage = pickedFile;
         _webImageBytes = bytes;
@@ -75,7 +77,10 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(UIErrorFormatter.getMessage(e)),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }

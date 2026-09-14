@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
+from app.core.api_errors import ApiError
 from sqlalchemy.orm import Session
 
 from app.models.user import User
@@ -60,9 +61,10 @@ def enforce_lab_scan_guard(db: Session, user: User) -> None:
         changed = True
     elif cooldown_until is not None:
         remaining_minutes = max(1, int((cooldown_until - now).total_seconds() // 60))
-        raise HTTPException(
-            status_code=429,
-            detail=(
+        raise ApiError(
+            429,
+            "cooldown_active",
+            (
                 "Scanner is temporarily locked after repeated unreadable scans. "
                 f"Please try again in about {remaining_minutes} minutes."
             ),
@@ -74,9 +76,10 @@ def enforce_lab_scan_guard(db: Session, user: User) -> None:
         user.lab_cooldown_until = now + timedelta(hours=LAB_COOLDOWN_HOURS)
         db.add(user)
         db.commit()
-        raise HTTPException(
-            status_code=429,
-            detail=(
+        raise ApiError(
+            429,
+            "cooldown_active",
+            (
                 "Scanner is temporarily locked after repeated unreadable scans. "
                 "Please try again tomorrow."
             ),

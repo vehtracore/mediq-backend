@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/auth/presentation/profile_recovery_view.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 class FamilyDashboardScreen extends ConsumerStatefulWidget {
   const FamilyDashboardScreen({super.key});
@@ -29,7 +30,7 @@ class _FamilyDashboardScreenState extends ConsumerState<FamilyDashboardScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
+        SnackBar(content: Text(UIErrorFormatter.getMessage(e))),
       );
     } finally {
       if (mounted) {

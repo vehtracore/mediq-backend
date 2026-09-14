@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../data/auth_repository.dart';
 import 'auth_controller.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 class DoctorRejectedScreen extends ConsumerStatefulWidget {
   const DoctorRejectedScreen({super.key});
@@ -99,7 +100,7 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _errorMessage = e.toString().replaceFirst('Exception: ', '');
+        _errorMessage = UIErrorFormatter.getMessage(e);
         _isSubmitting = false;
       });
     }
@@ -181,8 +182,8 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
                             decoration: BoxDecoration(
                               color: _accentRed.withOpacity(0.15),
                               borderRadius: BorderRadius.circular(20),
-                              border:
-                                  Border.all(color: _accentRed.withOpacity(0.4)),
+                              border: Border.all(
+                                  color: _accentRed.withOpacity(0.4)),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -457,8 +458,8 @@ class _StepTile extends StatelessWidget {
             decoration: BoxDecoration(
               color: const Color(0xFF4A90E2).withOpacity(0.15),
               shape: BoxShape.circle,
-              border: Border.all(
-                  color: const Color(0xFF4A90E2).withOpacity(0.5)),
+              border:
+                  Border.all(color: const Color(0xFF4A90E2).withOpacity(0.5)),
             ),
             alignment: Alignment.center,
             child: Text(

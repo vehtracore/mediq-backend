@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 class FullScreenImageViewer extends StatefulWidget {
   final String imageUrl;
@@ -65,7 +66,7 @@ class _FullScreenImageViewerState extends State<FullScreenImageViewer> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error saving image: $e'),
+            content: Text(UIErrorFormatter.getMessage(e)),
             backgroundColor: Colors.red,
           ),
         );

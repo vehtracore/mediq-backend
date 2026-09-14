@@ -70,10 +70,16 @@ class _FakeLocationService extends EmergencyLocationService {
   final List<Object> positionResults;
   Future<String?> addressFuture;
   final requestedTimeouts = <Duration>[];
+  final LocationPermission checkedPermission;
+  final LocationPermission requestedPermission;
+  int permissionRequests = 0;
+  int settingsOpens = 0;
 
   _FakeLocationService({
     List<Object>? positionResults,
     Future<String?>? addressFuture,
+    this.checkedPermission = LocationPermission.always,
+    this.requestedPermission = LocationPermission.always,
   })  : positionResults = positionResults ?? [_position],
         addressFuture = addressFuture ?? Future<String?>.value('Test Area');
 
@@ -81,8 +87,19 @@ class _FakeLocationService extends EmergencyLocationService {
   Future<bool> isServiceEnabled() async => true;
 
   @override
-  Future<LocationPermission> checkPermission() async =>
-      LocationPermission.always;
+  Future<LocationPermission> checkPermission() async => checkedPermission;
+
+  @override
+  Future<LocationPermission> requestPermission() async {
+    permissionRequests += 1;
+    return requestedPermission;
+  }
+
+  @override
+  Future<bool> openAppSettings() async {
+    settingsOpens += 1;
+    return true;
+  }
 
   @override
   Future<Position> currentPosition({
@@ -277,6 +294,63 @@ void main() {
 
     expect(api.searchCalls, 1);
     expect(api.alertCalls, 0);
+  });
+
+  testWidgets('denied location permission remains on Emergency',
+      (tester) async {
+    final api = _FakeEmergencyApi();
+    final location = _FakeLocationService(
+      checkedPermission: LocationPermission.denied,
+      requestedPermission: LocationPermission.denied,
+    );
+
+    await tester.pumpWidget(_app(api: api, location: location));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Emergency'), findsOneWidget);
+    expect(find.textContaining('Location permission denied'), findsOneWidget);
+    expect(location.permissionRequests, 1);
+    expect(api.searchCalls, 0);
+  });
+
+  testWidgets('permanent location denial waits for explicit Settings action',
+      (tester) async {
+    final location = _FakeLocationService(
+      checkedPermission: LocationPermission.deniedForever,
+    );
+
+    await tester.pumpWidget(
+      _app(api: _FakeEmergencyApi(), location: location),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Emergency'), findsOneWidget);
+    expect(find.text('Open app settings'), findsOneWidget);
+    expect(location.settingsOpens, 0);
+
+    await tester.tap(find.text('Open app settings'));
+    await tester.pump();
+    expect(location.settingsOpens, 1);
+  });
+
+  testWidgets('nearby result card is tappable without narrow-width overflow',
+      (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      _app(api: _FakeEmergencyApi(), location: _FakeLocationService()),
+    );
+    await tester.pumpAndSettle();
+
+    final card = find.byKey(
+      const ValueKey('emergency-service-card-Nearby Hospital'),
+    );
+    expect(card, findsOneWidget);
+    expect(tester.widget<InkWell>(card).onTap, isNotNull);
+    expect(tester.takeException(), isNull);
   });
 
   test(

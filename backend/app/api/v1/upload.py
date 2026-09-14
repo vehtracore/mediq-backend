@@ -21,7 +21,11 @@ async def upload_profile_image(
 ):
     """Authenticated profile image upload to Cloudinary."""
     try:
-        image_url = await upload_media_file(file, folder="mediq_profile_pics")
+        image_url = await upload_media_file(
+            file,
+            folder="mediq_profile_pics",
+            allowed_types={"image/jpeg", "image/png", "image/webp"},
+        )
         logger.info(
             "[UPLOAD] Profile image uploaded for user_id=%s",
             current_user.id,

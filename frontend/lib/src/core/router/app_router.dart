@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -101,10 +102,17 @@ String? authRedirectDecision({
   required bool authLoading,
   required bool passwordRecovery,
   required bool hasSession,
+  required bool preserveAuthenticatedRoute,
   required bool roleLoading,
   required String? role,
 }) {
-  if (authLoading) return location == '/' ? null : '/';
+  // Auth/profile restoration is not a navigation event. In particular, the
+  // Supabase stream briefly loading during token restoration must not destroy
+  // an authenticated nested route. The splash route can keep displaying while
+  // cold-start restoration completes.
+  if (authLoading) {
+    return preserveAuthenticatedRoute || location == '/' ? null : '/';
+  }
   if (passwordRecovery) {
     return location == '/update-password' ? null : '/update-password';
   }
@@ -124,11 +132,16 @@ String? authRedirectDecision({
     return isPublicRoute ? null : '/auth';
   }
 
-  if (roleLoading) return location == '/' ? null : '/';
+  if (roleLoading) {
+    return preserveAuthenticatedRoute || location == '/' ? null : '/';
+  }
 
   if (role == null ||
       (role != 'doctor' && role != 'patient' && role != 'admin')) {
-    return location == '/' ? null : '/';
+    // A transient profile failure is not evidence that an already-open route
+    // became invalid. At cold start the user remains on the authenticated
+    // recovery/splash route until an authoritative role is available.
+    return preserveAuthenticatedRoute || location == '/' ? null : '/';
   }
 
   if ((isPublicRoute || location == '/') &&
@@ -158,10 +171,9 @@ String? authRedirectDecision({
 }
 
 final goRouterProvider = Provider<GoRouter>((ref) {
-  // Watch both the auth stream AND the resolved role so GoRouter rebuilds
-  // on every session change AND whenever the role finishes loading.
-  final authState = ref.watch(supabaseAuthProvider);
-  final roleAsync = ref.watch(resolvedRoleProvider);
+  final refresh = _RouterRefreshNotifier();
+  String? establishedAuthenticatedUserId;
+  ref.onDispose(refresh.dispose);
 
   // Detect PASSWORD_RECOVERY events from the Supabase stream and set the flag.
   ref.listen<AsyncValue<AuthState>>(supabaseAuthProvider, (_, next) {
@@ -169,13 +181,19 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       final notifier = ref.read(_isPasswordRecoveryProvider.notifier);
       notifier.state = nextPasswordRecoveryState(notifier.state, state.event);
     });
+    refresh.notify();
   });
-
-  final isPasswordRecovery = ref.watch(_isPasswordRecoveryProvider);
+  ref.listen<AsyncValue<String?>>(resolvedRoleProvider, (_, __) {
+    refresh.notify();
+  });
+  ref.listen<bool>(_isPasswordRecoveryProvider, (_, __) {
+    refresh.notify();
+  });
 
   return GoRouter(
     navigatorKey: rootNavigatorKey,
     initialLocation: '/',
+    refreshListenable: refresh,
     // -------------------------------------------------------------------------
     // Redirect — strict role-enforcement auth gate.
     //
@@ -191,17 +209,41 @@ final goRouterProvider = Provider<GoRouter>((ref) {
     //        unknown → authenticated restoration UI on '/'
     // -------------------------------------------------------------------------
     redirect: (context, state) {
+      final authState = ref.read(supabaseAuthProvider);
+      final roleAsync = ref.read(resolvedRoleProvider);
+      final isPasswordRecovery = ref.read(_isPasswordRecoveryProvider);
       final loc = state.matchedLocation;
       final session = Supabase.instance.client.auth.currentSession ??
           authState.valueOrNull?.session;
-      return authRedirectDecision(
+      final resolvedRole = roleAsync.valueOrNull;
+      final hasResolvedRole = resolvedRole == 'doctor' ||
+          resolvedRole == 'patient' ||
+          resolvedRole == 'admin';
+      if (session != null && hasResolvedRole) {
+        establishedAuthenticatedUserId = session.user.id;
+      } else if (session == null && !authState.isLoading) {
+        establishedAuthenticatedUserId = null;
+      }
+      final preserveAuthenticatedRoute =
+          session != null && establishedAuthenticatedUserId == session.user.id;
+      final decision = authRedirectDecision(
         location: loc,
         authLoading: authState.isLoading,
         passwordRecovery: isPasswordRecovery,
         hasSession: session != null,
+        preserveAuthenticatedRoute: preserveAuthenticatedRoute,
         roleLoading: !roleAsync.hasValue && roleAsync.isLoading,
-        role: roleAsync.valueOrNull,
+        role: resolvedRole,
       );
+      if (kDebugMode && decision != null && decision != loc) {
+        debugPrint(
+          '[ROUTER] $loc -> $decision '
+          '(authenticated=${session != null}, '
+          'authLoading=${authState.isLoading}, '
+          'roleLoading=${roleAsync.isLoading})',
+        );
+      }
+      return decision;
     },
     routes: [
       GoRoute(path: '/', builder: (context, state) => const SplashScreen()),
@@ -420,3 +462,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
     ],
   );
 });
+
+class _RouterRefreshNotifier extends ChangeNotifier {
+  void notify() => notifyListeners();
+}

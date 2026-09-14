@@ -24,6 +24,7 @@ class EmergencySmsRequest(Base):
         index=True,
     )
     request_id = Column(String(128), nullable=False)
+    request_fingerprint = Column(String(64), nullable=True)
     status = Column(String(32), nullable=False, default="reserved")
     created_at = Column(
         DateTime(timezone=True),

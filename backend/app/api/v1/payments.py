@@ -50,6 +50,7 @@ from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.database import get_db
+from app.core.api_errors import ApiError
 from app.core.limiter import limiter
 from app.models.appointment import (
     APPOINTMENT_TYPE_GENERAL_QUEUE,
@@ -268,7 +269,11 @@ async def initialize_transaction(
             require_payable=True,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ApiError(
+            400,
+            "invalid_payment_request",
+            "This payment request is invalid. Please refresh and try again.",
+        ) from exc
     # Consultation funds are collected by MDQ+ first. Doctor payout is handled
     # later through ConsultationPayout after the 24-hour complaint hold and
     # explicit admin approval. Do not attach a Paystack subaccount split here.

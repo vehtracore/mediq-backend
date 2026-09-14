@@ -225,9 +225,10 @@ class AiSymptomCheckerCard extends StatelessWidget {
                 child: Image.asset(
                   MdqAiAssets.lens,
                   key: const ValueKey('mdq-ai-lens'),
-                  width: 28,
-                  height: 28,
+                  width: 25,
+                  height: 25,
                   fit: BoxFit.contain,
+                  opacity: const AlwaysStoppedAnimation(0.68),
                   excludeFromSemantics: true,
                 ),
               ),

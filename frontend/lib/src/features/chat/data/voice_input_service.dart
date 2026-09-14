@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 import 'package:uuid/uuid.dart';
+import '../../../core/api/api_error_mapper.dart';
 
 const mdqVoiceTempPrefix = 'mdq_voice_input_';
 const mdqVoiceMimeType = 'audio/mp4';
@@ -202,20 +203,14 @@ class DioVoiceTranscriptionApi implements VoiceTranscriptionPort {
       }
       return transcript;
     } on DioException catch (error) {
-      if (error.response?.statusCode == 429) {
-        final data = error.response?.data;
-        final detail = data is Map
-            ? (data['detail'] ?? data['error'])?.toString().trim()
-            : null;
-        throw VoiceTranscriptionException(
-          message: detail == null || detail.isEmpty
-              ? 'Voice input is temporarily limited. '
-                  'You can still type your message.'
-              : detail,
-          canRetry: false,
-        );
-      }
-      rethrow;
+      final failure = ApiErrorMapper.map(error);
+      if (!failure.shouldPresent) rethrow;
+      throw VoiceTranscriptionException(
+        message: failure.message,
+        canRetry: failure.kind != ApiFailureKind.rateLimited &&
+            failure.kind != ApiFailureKind.validation &&
+            failure.kind != ApiFailureKind.forbidden,
+      );
     } finally {
       if (identical(_cancelToken, cancelToken)) _cancelToken = null;
     }

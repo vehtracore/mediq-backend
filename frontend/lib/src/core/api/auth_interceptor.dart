@@ -151,11 +151,13 @@ class AuthenticatedRequestInterceptor extends Interceptor {
   }
 
   DioException _mapped(DioException error, {String? overrideMessage}) {
-    final message =
-        overrideMessage ?? ApiErrorMapper.getSecureErrorMessage(error);
+    final mapped = ApiErrorMapper.map(error);
+    final failure = overrideMessage == null
+        ? mapped
+        : mapped.copyWith(message: overrideMessage);
     return error.copyWith(
-      message: message,
-      error: AppException(message, originalException: error),
+      message: failure.message,
+      error: AppException.fromFailure(failure, originalException: error),
     );
   }
 

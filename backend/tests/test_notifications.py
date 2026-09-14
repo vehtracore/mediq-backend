@@ -207,11 +207,13 @@ class ReliableNotificationTests(unittest.TestCase):
         other = self.db.query(Notification).filter(Notification.user_id == 2).one()
         self.assertFalse(other.is_read)
 
-    @patch('app.api.v1.family._decode_invite_token', return_value=1)
+    @patch('app.api.v1.family._decode_invite_token', return_value=(1, 'invite-nonce'))
     def test_family_join_creates_durable_events_for_both_accounts(self, _decode):
         primary = self.db.query(User).filter(User.id == 1).one()
         member = self.db.query(User).filter(User.id == 2).one()
         primary.plan = 'family'
+        primary.family_invite_nonce = 'invite-nonce'
+        primary.family_invite_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
         self.db.commit()
         family.join_family(
             body=family.JoinRequest(invite_code='fixture'),

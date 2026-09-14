@@ -248,10 +248,10 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
         return;
       }
       _showSnack(UIErrorFormatter.getMessage(e), isError: true);
-      debugPrint('[PAYMENTS] DioException during initialize: $e');
+      debugPrint('[PAYMENTS] initialization request failed.');
     } catch (e) {
       _showSnack(UIErrorFormatter.getMessage(e), isError: true);
-      debugPrint('[PAYMENTS] Unexpected error during initialize: $e');
+      debugPrint('[PAYMENTS] initialization failed unexpectedly.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }

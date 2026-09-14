@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
 import '../../appointments/data/appointment_model.dart';
 import '../../appointments/data/appointment_repository.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 final doctorScheduleProvider = FutureProvider.autoDispose<List<Appointment>>((
   ref,
@@ -41,7 +42,8 @@ class DoctorScheduleScreen extends ConsumerWidget {
             Expanded(
               child: scheduleAsync.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
-                error: (err, stack) => Center(child: Text("Error: $err")),
+                error: (err, stack) =>
+                    Center(child: Text(UIErrorFormatter.getMessage(err))),
                 data: (appointments) {
                   if (appointments.isEmpty) {
                     return RefreshIndicator(
@@ -387,7 +389,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
-                                content: Text(e.toString()),
+                                content: Text(UIErrorFormatter.getMessage(e)),
                                 backgroundColor: Colors.red,
                               ),
                             );
@@ -542,7 +544,7 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
-                                content: Text(e.toString()),
+                                content: Text(UIErrorFormatter.getMessage(e)),
                                 backgroundColor: Colors.red,
                               ),
                             );

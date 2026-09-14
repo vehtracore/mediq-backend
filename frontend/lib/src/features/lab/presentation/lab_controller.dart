@@ -37,8 +37,13 @@ class LabState {
 
 class LabController extends StateNotifier<LabState> {
   final LabRepository _repository;
+  final Future<File?> Function(File) _compressImage;
 
-  LabController(this._repository) : super(LabState());
+  LabController(
+    this._repository, {
+    Future<File?> Function(File)? compressImage,
+  })  : _compressImage = compressImage ?? _defaultCompressImage,
+        super(LabState());
 
   Future<void> analyzeImage(XFile imageFile) async {
     if (state.isLoading) return;
@@ -70,8 +75,8 @@ class LabController extends StateNotifier<LabState> {
           result: result,
         );
       }
-    } catch (e) {
-      debugPrint('[LabController] analyzeImage error: $e');
+    } catch (_) {
+      debugPrint('[LabController] image analysis failed.');
       state = state.copyWith(
         isLoading: false,
         errorMessage:
@@ -84,7 +89,7 @@ class LabController extends StateNotifier<LabState> {
     state = LabState();
   }
 
-  Future<File?> _compressImage(File file) async {
+  static Future<File?> _defaultCompressImage(File file) async {
     try {
       final dir = await getTemporaryDirectory();
       final separator = Platform.pathSeparator;

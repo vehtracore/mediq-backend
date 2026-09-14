@@ -8,6 +8,7 @@ from agora_token_builder import RtcTokenBuilder
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.api_errors import ApiError
 from app.core.limiter import limiter
 from app.models.user import User
 from app.models.appointment import consultation_started_utc
@@ -159,8 +160,13 @@ def get_agora_token(
         raise
     except Exception as e:
         # 6. Capture the real error log
-        logger.error("Failed to generate Agora video token: %s", e, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Video service is temporarily unavailable. Please try again.",
+        logger.error(
+            "[VIDEO] token generation failed failure_category=%s",
+            type(e).__name__,
+            exc_info=True,
+        )
+        raise ApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "video_unavailable",
+            "Video is temporarily unavailable. Chat is still available.",
         )

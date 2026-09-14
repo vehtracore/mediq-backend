@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import BackgroundTasks, HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -66,12 +67,13 @@ class EmergencyTestCase(unittest.TestCase):
             db.commit()
             return user.id
 
-    def _reserve(self, user_id, request_id, now):
+    def _reserve(self, user_id, request_id, now, fingerprint='a' * 64):
         with self.Session() as db:
             return emergency._reserve_emergency_sms(
                 db,
                 user_id=user_id,
                 request_id=request_id,
+                request_fingerprint=fingerprint,
                 now=now,
             )
 
@@ -177,6 +179,16 @@ class EmergencyTestCase(unittest.TestCase):
         self.assertEqual(sorted(item.outcome for item in outcomes), ['duplicate', 'queued'])
         with self.Session() as db:
             self.assertEqual(db.get(User, user_id).emergency_sms_count, 1)
+
+    def test_same_request_id_with_different_alert_details_conflicts(self):
+        user_id = self._add_user()
+        now = datetime.now(timezone.utc)
+        self._reserve(user_id, 'same-activation-1234', now, 'a' * 64)
+
+        with self.assertRaises(HTTPException) as raised:
+            self._reserve(user_id, 'same-activation-1234', now, 'b' * 64)
+
+        self.assertEqual(raised.exception.status_code, 409)
 
     def test_concurrent_distinct_requests_make_atomic_cooldown_decision(self):
         user_id = self._add_user()
@@ -350,14 +362,13 @@ class EmergencyTestCase(unittest.TestCase):
             self.assertEqual(db.query(EmergencySmsRequest).count(), 1)
 
     def test_monthly_reset_is_not_client_controlled(self):
-        payload = emergency.EmergencyTriggerRequest.model_validate(
-            {
-                'request_id': 'server-month-only-01',
-                'emergency_sms_month_reset': '2035-01-01',
-            }
-        )
-
-        self.assertNotIn('emergency_sms_month_reset', payload.model_dump())
+        with self.assertRaises(ValidationError):
+            emergency.EmergencyTriggerRequest.model_validate(
+                {
+                    'request_id': 'server-month-only-01',
+                    'emergency_sms_month_reset': '2035-01-01',
+                }
+            )
 
     def test_phone_less_places_are_excluded_and_category_is_returned(self):
         async def handler(request):

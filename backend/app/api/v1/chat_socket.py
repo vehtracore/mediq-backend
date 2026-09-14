@@ -8,10 +8,11 @@ from fastapi import (
 )
 from fastapi.concurrency import run_in_threadpool
 from typing import List, Dict, Optional
+import asyncio
 import json
 import logging
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # 1. DB Imports
 from app.core.database import engine, get_db
@@ -40,6 +41,8 @@ if hasattr(sys.stdout, 'reconfigure'):
 WsSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 router = APIRouter()
+
+_MAX_MESSAGE_BYTES = 8 * 1024
 
 # --- Connection Manager ---
 class ConnectionManager:
@@ -256,7 +259,9 @@ async def websocket_endpoint(
     await websocket.accept()
     auth_db = WsSession()
     try:
-        auth_message = json.loads(await websocket.receive_text())
+        auth_message = json.loads(
+            await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+        )
         if not isinstance(auth_message, dict) or auth_message.get("type") != "auth":
             raise HTTPException(
                 status_code=401,
@@ -287,6 +292,9 @@ async def websocket_endpoint(
             appointment_id,
             current_user,
         )
+        auth_expires_at = getattr(current_user, "_auth_expires_at", None)
+        if not isinstance(auth_expires_at, datetime):
+            raise HTTPException(status_code=401, detail="Token expiry is unavailable.")
     except HTTPException as exc:
         logger.warning(
             "[WS] Rejected user=%s appointment=%s: %s",
@@ -304,7 +312,7 @@ async def websocket_endpoint(
         }.get(exc.status_code, 4400)
         await websocket.close(code=close_code)
         return
-    except (json.JSONDecodeError, TypeError, WebSocketDisconnect):
+    except (asyncio.TimeoutError, json.JSONDecodeError, TypeError, WebSocketDisconnect):
         try:
             await websocket.close(code=4401)
         except Exception:
@@ -334,8 +342,33 @@ async def websocket_endpoint(
     try:
         while True:
             # 1. Receive
-            data = await websocket.receive_text()
-            logger.debug("[WS] Received from user %s: %s...", user_id, data[:100])
+            seconds_until_expiry = (
+                auth_expires_at - datetime.now(timezone.utc)
+            ).total_seconds()
+            if seconds_until_expiry <= 0:
+                await manager.disconnect(websocket, room_id, user_id)
+                await websocket.close(code=4401)
+                break
+            try:
+                data = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=seconds_until_expiry,
+                )
+            except asyncio.TimeoutError:
+                await manager.disconnect(websocket, room_id, user_id)
+                await websocket.close(code=4401)
+                break
+            if not data.strip() or len(data.encode("utf-8")) > _MAX_MESSAGE_BYTES:
+                await websocket.send_text(json.dumps({
+                    "type": "message_rejected",
+                    "message": "Message is empty or too large.",
+                }))
+                continue
+            logger.debug(
+                "[WS] Received message from user %s bytes=%d",
+                user_id,
+                len(data.encode("utf-8")),
+            )
             
             # 2. Save to DB (Run in background thread!)
             logger.debug("[WS] Calling save_message_sync...")

@@ -98,27 +98,12 @@ class AiChatWelcomeState extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.blue.withValues(alpha: 0.05),
-              shape: BoxShape.circle,
-            ),
-            child: Image.asset(
-              MdqAiAssets.conversation,
-              key: const ValueKey('mdq-ai-conversation'),
-              width: 88,
-              height: 88,
-              fit: BoxFit.contain,
-              excludeFromSemantics: true,
-            ),
-          ),
-          const SizedBox(height: 24),
           Text(
             "Hello! I'm MDQ+.",
             style: TextStyle(
               color: theme.colorScheme.onSurfaceVariant,
               fontSize: 18,
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 8),
@@ -127,6 +112,18 @@ class AiChatWelcomeState extends StatelessWidget {
             style: TextStyle(
               color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
               fontSize: 14,
+            ),
+          ),
+          const SizedBox(height: 24),
+          Opacity(
+            opacity: theme.brightness == Brightness.dark ? 0.16 : 0.20,
+            child: Image.asset(
+              MdqAiAssets.conversation,
+              key: const ValueKey('mdq-ai-conversation'),
+              width: 124,
+              height: 92,
+              fit: BoxFit.contain,
+              excludeFromSemantics: true,
             ),
           ),
         ],
@@ -152,6 +149,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
   // --- IMAGE STAGING STATE ---
   String? _stagedImageUrl; // Cloudinary URL after upload
   String? _stagedImagePublicId;
+  String? _stagedImageFormat;
   bool _isUploadingImage = false;
   AiPdfAttachment? _stagedPdf;
   bool _isPickingPdf = false;
@@ -421,10 +419,11 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
         setState(() {
           _stagedImageUrl = image.url;
           _stagedImagePublicId = image.publicId;
+          _stagedImageFormat = image.format;
         });
       }
-    } catch (e) {
-      debugPrint('[AiChatScreen] image staging failed: $e');
+    } catch (_) {
+      debugPrint('[AiChatScreen] image staging failed.');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -443,6 +442,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
       setState(() {
         _stagedImageUrl = null;
         _stagedImagePublicId = null;
+        _stagedImageFormat = null;
       });
     }
     if (publicId != null) {
@@ -498,6 +498,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
     final text = _messageController.text.trim();
     final imageUrl = _stagedImageUrl;
     final imagePublicId = _stagedImagePublicId;
+    final imageFormat = _stagedImageFormat;
     final document = _stagedPdf;
 
     // Need either text or an image
@@ -513,6 +514,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
         messageText,
         imageUrl: imageUrl,
         imagePublicId: imagePublicId,
+        imageFormat: imageFormat,
         document: document,
         language: _selectedLanguage);
 
@@ -520,6 +522,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
     setState(() {
       _stagedImageUrl = null;
       _stagedImagePublicId = null;
+      _stagedImageFormat = null;
       _stagedPdf = null;
     });
 
@@ -1494,8 +1497,8 @@ class _PremiumVoiceButtonState extends ConsumerState<_PremiumVoiceButton> {
       await _player.setFilePath(file.path);
       if (mounted) setState(() => _state = _VoiceState.playing);
       _player.play();
-    } catch (e) {
-      debugPrint('Voice API Error: $e');
+    } catch (_) {
+      debugPrint('[VOICE] playback request failed.');
       if (mounted) {
         setState(() => _state = _VoiceState.idle);
         ScaffoldMessenger.of(context).showSnackBar(

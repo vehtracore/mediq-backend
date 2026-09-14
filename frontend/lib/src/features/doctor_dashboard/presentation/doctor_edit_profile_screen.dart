@@ -99,8 +99,8 @@ class _DoctorEditProfileScreenState
             content: Text("Updated!"), backgroundColor: Colors.green));
         context.pop(true);
       }
-    } catch (e) {
-      debugPrint('[DoctorEditProfile] Save failed: $e');
+    } catch (_) {
+      debugPrint('[DoctorEditProfile] Save failed.');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text("Unable to update profile. Please try again."),
@@ -129,8 +129,7 @@ class _DoctorEditProfileScreenState
               Theme.of(context).colorScheme.surface,
           elevation: 0,
           iconTheme: Theme.of(context).appBarTheme.iconTheme ??
-              IconThemeData(
-                  color: Theme.of(context).colorScheme.onSurface),
+              IconThemeData(color: Theme.of(context).colorScheme.onSurface),
           titleTextStyle: Theme.of(context).appBarTheme.titleTextStyle ??
               Theme.of(context).textTheme.titleLarge?.copyWith(
                     color: Theme.of(context).colorScheme.onSurface,

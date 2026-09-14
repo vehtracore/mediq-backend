@@ -27,6 +27,7 @@ void main() {
     final mark = find.byKey(const ValueKey('mdq-ai-lens'));
     expect(mark, findsOneWidget);
     expect(_assetName(tester, mark), MdqAiAssets.lens);
+    expect(tester.widget<Image>(mark).opacity?.value, lessThan(0.8));
     await tester.tap(find.byType(AiSymptomCheckerCard));
     expect(wasTapped, isTrue);
     expect(tester.takeException(), isNull);
@@ -39,6 +40,14 @@ void main() {
     final mark = find.byKey(const ValueKey('mdq-ai-conversation'));
     expect(mark, findsOneWidget);
     expect(_assetName(tester, mark), MdqAiAssets.conversation);
+    final opacity = tester.widget<Opacity>(
+      find.ancestor(of: mark, matching: find.byType(Opacity)).first,
+    );
+    expect(opacity.opacity, lessThanOrEqualTo(0.2));
+    expect(
+      tester.getTopLeft(find.text("Hello! I'm MDQ+.")).dy,
+      lessThan(tester.getTopLeft(mark).dy),
+    );
     expect(tester.takeException(), isNull);
   });
 }

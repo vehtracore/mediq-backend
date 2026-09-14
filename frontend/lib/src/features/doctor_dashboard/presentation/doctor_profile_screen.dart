@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mediq_app/src/features/auth/data/auth_repository.dart';
 import 'package:mediq_app/src/features/auth/presentation/auth_controller.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 final myDoctorProfileProvider = FutureProvider.autoDispose((ref) async {
   return await ref.watch(authRepositoryProvider).getMyDoctorProfile();
@@ -20,7 +21,7 @@ class DoctorProfileScreen extends ConsumerWidget {
       backgroundColor: theme.scaffoldBackgroundColor, // ✅ Dynamic Background
       body: doctorAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text("Error: $e")),
+        error: (e, _) => Center(child: Text(UIErrorFormatter.getMessage(e))),
         data: (doctor) {
           return ListView(
             padding: const EdgeInsets.all(24),

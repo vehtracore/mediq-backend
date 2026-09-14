@@ -190,6 +190,41 @@ void main() {
       await session.shutdown();
     });
 
+    test('failed video join clears transition and remains reusable', () async {
+      final harness = _Harness();
+      final session = harness.session;
+      session.attachChatSurface();
+      await session.ensureStarted(live: true);
+
+      session.setChatSurfaceVisible(false);
+      session.beginVideoTransition();
+      session.videoJoinFailed(returningToChat: true);
+
+      expect(session.isVideoActive, isFalse);
+      expect(harness.presence.published.last, ConsultationMode.chat);
+
+      session.beginVideoTransition();
+      session.localVideoJoined(remotePresent: false);
+      expect(session.isVideoActive, isTrue);
+      expect(harness.presence.published.last, ConsultationMode.videoWaiting);
+      await session.shutdown();
+    });
+
+    test('failed optional presence setup can retry without locking session',
+        () async {
+      final harness = _Harness(presenceConnectFails: true);
+      await harness.session.ensureStarted(live: true);
+      expect(harness.sockets.connectCount, 1);
+      expect(harness.presence.connectCount, 1);
+
+      harness.presence.connectFails = false;
+      await harness.session.ensureStarted(live: true);
+
+      expect(harness.presence.connectCount, 2);
+      expect(harness.session.canSend, isTrue);
+      await harness.session.shutdown();
+    });
+
     test('app inactivity removes active presence and resume restores mode',
         () async {
       final harness = _Harness();
@@ -457,7 +492,7 @@ class _FakeSocket implements ConsultationChatSocket {
 class _FakePresence implements ConsultationPresenceTransport {
   _FakePresence({this.connectFails = false});
 
-  final bool connectFails;
+  bool connectFails;
   int connectCount = 0;
   int untrackCount = 0;
   int disposeCount = 0;

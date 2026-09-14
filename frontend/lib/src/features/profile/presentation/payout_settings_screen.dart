@@ -8,6 +8,7 @@ import 'package:mediq_app/src/features/doctors/data/doctor_repository.dart';
 import 'package:mediq_app/src/shared/presentation/widgets/skeleton_loader.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../../presentation/widgets/global_error_widget.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 // ─── Bank model ───────────────────────────────────────────────────────────────
 class _PaystackBank {
@@ -149,7 +150,7 @@ class _PayoutSettingsScreenState extends ConsumerState<PayoutSettingsScreen> {
         throw Exception('Could not launch $urlString');
       }
     } catch (e) {
-      if (mounted) _showSnack('Could not open link: $e', isError: true);
+      if (mounted) _showSnack(UIErrorFormatter.getMessage(e), isError: true);
     }
   }
 

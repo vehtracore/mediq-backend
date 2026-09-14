@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.database import get_db
+from app.core.api_errors import ApiError
 from app.core.limiter import limiter
 from app.models.support_message import SupportMessage
 from app.models.user import User
@@ -65,9 +66,10 @@ def _resolve_submission(
             or existing.subject != payload.subject
             or existing.message != payload.message
         ):
-            raise HTTPException(
-                status_code=409,
-                detail="This support request identifier is already in use.",
+            raise ApiError(
+                409,
+                "request_conflict",
+                "This support request identifier is already in use.",
             )
         return existing
 
@@ -94,9 +96,10 @@ def _resolve_submission(
             or existing.subject != payload.subject
             or existing.message != payload.message
         ):
-            raise HTTPException(
-                status_code=409,
-                detail="This support request identifier is already in use.",
+            raise ApiError(
+                409,
+                "request_conflict",
+                "This support request identifier is already in use.",
             )
         return existing
 
@@ -177,9 +180,10 @@ async def send_support_message(
                 request_id=submission.request_id,
                 status="sent",
             )
-        raise HTTPException(
-            status_code=409,
-            detail="This support request is already being processed. Please try again shortly.",
+        raise ApiError(
+            409,
+            "request_conflict",
+            "This support request is already being processed. Please try again shortly.",
         )
 
     logger.info(
@@ -217,9 +221,10 @@ async def send_support_message(
             current_user.id,
             exc.category,
         )
-        raise HTTPException(
-            status_code=_failure_status(exc.category),
-            detail=_RETRYABLE_DETAIL,
+        raise ApiError(
+            _failure_status(exc.category),
+            "support_delivery_unavailable",
+            _RETRYABLE_DETAIL,
         ) from None
 
     sent_at = datetime.now(timezone.utc)

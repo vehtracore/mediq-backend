@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from fastapi import HTTPException, status
+from app.core.api_errors import ApiError
 from sqlalchemy import case, func, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -165,9 +166,10 @@ def reserve_stt_allowance(
             .first()
         )
         if duplicate is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="This transcription request was already submitted.",
+            raise ApiError(
+                status.HTTP_409_CONFLICT,
+                "request_conflict",
+                "This transcription request was already submitted.",
             )
 
         plan = _effective_stt_plan(quota_user, now)
@@ -183,9 +185,10 @@ def reserve_stt_allowance(
             .execution_options(synchronize_session=False)
         )
         if incremented.rowcount != 1:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=(
+            raise ApiError(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "quota_exceeded",
+                (
                     "You've used this month's voice input. "
                     "You can still type your message."
                 ),
@@ -212,9 +215,10 @@ def reserve_stt_allowance(
         raise
     except IntegrityError:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This transcription request was already submitted.",
+        raise ApiError(
+            status.HTTP_409_CONFLICT,
+            "request_conflict",
+            "This transcription request was already submitted.",
         ) from None
     except Exception:
         db.rollback()

@@ -11,7 +11,13 @@ from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.appointment import Appointment
 from app.models.consultation_payout import ConsultationPayout
-from app.schemas.doctor import DoctorResponse, DoctorUpdate, ReapplyRequest, PayoutSettingsRequest
+from app.schemas.doctor import (
+    DoctorResponse,
+    DoctorUpdate,
+    PayoutSettingsRequest,
+    PublicDoctorResponse,
+    ReapplyRequest,
+)
 from app.api import deps
 from app.services.consultation_pricing import (
     DEFAULT_CONSULTATION_DURATION_MINUTES,
@@ -34,8 +40,12 @@ def reapply_for_verification(
     current_user: User = Depends(deps.get_current_user),
 ):
     """
-    Allows a rejected doctor to submit corrected documents and re-apply.
+    Allows a rejected doctor to submit corrected registration details and re-apply.
     Resets their status back to 'pending' for admin review.
+
+    Document replacement is intentionally not accepted as a client URL. The
+    existing restricted evidence remains attached until a versioned document
+    record workflow is approved.
     """
     if current_user.role != "doctor":
         raise HTTPException(status_code=403, detail="Only doctors can reapply")
@@ -61,12 +71,6 @@ def reapply_for_verification(
             raise HTTPException(status_code=400, detail="That license number is already registered to another account")
         doctor.license_number = payload.license_number
 
-    if payload.mdcn_license_url:
-        doctor.mdcn_license_url = payload.mdcn_license_url
-
-    if payload.indemnity_cert_url:
-        doctor.indemnity_cert_url = payload.indemnity_cert_url
-
     # Reset back to pending for admin re-review
     doctor.status = "pending"
     doctor.is_verified = False
@@ -77,11 +81,18 @@ def reapply_for_verification(
         db.refresh(doctor)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Database error during reapply: {e}")
+        logger.error(
+            "[DOCTOR REAPPLY] Persistence failed failure_category=%s",
+            type(e).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Application could not be resubmitted. Please try again.",
+        ) from e
 
     return doctor
 
-@router.get("/", response_model=List[DoctorResponse])
+@router.get("/", response_model=List[PublicDoctorResponse])
 def read_doctors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     try:
         doctors = db.query(Doctor).filter(Doctor.is_verified == True).offset(skip).limit(limit).all()
@@ -89,11 +100,11 @@ def read_doctors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db))
         results = []
         for doc in doctors:
             try:
-                results.append(DoctorResponse.model_validate(doc))
+                results.append(PublicDoctorResponse.model_validate(doc))
             except Exception as ve:
                 logger.warning("[DOCTORS] Validation error for Doctor ID=%s, Name=%s: %s", doc.id, doc.full_name, ve, exc_info=True)
                 # Still include it with lenient fields
-                results.append(DoctorResponse.model_validate(doc, strict=False))
+                results.append(PublicDoctorResponse.model_validate(doc, strict=False))
         return results
     except Exception as e:
         logger.error("[DOCTORS] Failed to list doctors: %s", e, exc_info=True)
@@ -317,8 +328,12 @@ async def update_payout_settings(
     )
     return doctor
 
-@router.get("/{doctor_id}", response_model=DoctorResponse)
+@router.get("/{doctor_id}", response_model=PublicDoctorResponse)
 def read_doctor(doctor_id: int, db: Session = Depends(get_db)):
-    doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
+    doctor = (
+        db.query(Doctor)
+        .filter(Doctor.id == doctor_id, Doctor.is_verified.is_(True))
+        .first()
+    )
     if not doctor: raise HTTPException(404, "Doctor not found")
     return doctor

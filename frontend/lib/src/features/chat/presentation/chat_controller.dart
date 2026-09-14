@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mediq_app/src/features/chat/data/chat_repository.dart';
+import 'package:mediq_app/src/core/api/app_exception.dart';
 
 final chatControllerProvider = AsyncNotifierProvider<ChatController, void>(() {
   return ChatController();
@@ -22,11 +23,10 @@ class ChatController extends AsyncNotifier<void> {
     } catch (e, st) {
       state = AsyncError(e, st);
 
-      // CHECK FOR LIMIT ERROR FROM BACKEND
-      // The backend sends "Free tier limit reached" or "You are chatting too fast"
-      final errorString = e.toString();
-      if (errorString.contains("Free tier limit") ||
-          errorString.contains("chatting too fast")) {
+      final failure = e is AppException ? e.failure : null;
+      if (failure?.code == 'quota_exceeded' ||
+          failure?.code == 'cooldown_active' ||
+          failure?.code == 'rate_limited') {
         throw Exception("LIMIT_REACHED");
       }
       rethrow;

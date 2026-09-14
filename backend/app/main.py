@@ -1,6 +1,5 @@
 import logging
 import os
-import traceback
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -69,12 +68,16 @@ sentry_sdk.init(
     ],
 )
 
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from app.core.limiter import limiter
+from app.core.api_errors import (
+    REQUEST_ID_HEADER,
+    error_response,
+    install_error_handlers,
+    request_id_for,
+)
 from app.core.database import engine, Base, SessionLocal
 
 # ✅ KEEP "app." prefix because your main.py is inside the app folder
@@ -850,7 +853,7 @@ async def lifespan(app: FastAPI):
 # ✅ redirect_slashes=False prevents 307 redirects that strip CORS headers
 app = FastAPI(title="MDQplus API", redirect_slashes=False, lifespan=lifespan, docs_url=None, redoc_url=None)
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+install_error_handlers(app, logger)
 
 
 @app.exception_handler(SQLAlchemyTimeoutError)
@@ -870,33 +873,12 @@ async def database_pool_timeout_handler(request: Request, exc: SQLAlchemyTimeout
     )
     return JSONResponse(
         status_code=503,
-        content={
-            "detail": "Database is temporarily busy. Please retry shortly.",
-            "error_code": "database_pool_timeout",
-        },
-        headers={"Retry-After": "1"},
-    )
-
-
-
-# --- Global Exception Handler: ensures CORS headers are present even on 500 errors ---
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(
-        "🔥 [UNHANDLED ERROR] %s %s — %s",
-        request.method,
-        request.url.path,
-        exc,
-        exc_info=True,
-    )
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
+        content={"error": {
+            "code": "database_pool_timeout",
+            "message": "MDQ+ is temporarily unavailable. Please try again shortly.",
+            "request_id": request_id_for(request),
+        }},
+        headers={"Retry-After": "1", REQUEST_ID_HEADER: request_id_for(request)},
     )
 
 # ========================================================================
@@ -908,13 +890,18 @@ async def global_exception_handler(request: Request, exc: Exception):
 # 1. Payload limiter (innermost — runs closest to the route handlers)
 @app.middleware("http")
 async def limit_payload_size(request: Request, call_next):
+    request_id = request_id_for(request)
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > 10 * 1024 * 1024:
-        return JSONResponse(
+    if content_length and content_length.isdigit() and int(content_length) > 10 * 1024 * 1024:
+        return error_response(
             status_code=413,
-            content={"detail": "Payload exceeds the 10MB limit."}
+            code="file_too_large",
+            message="This file is too large. Please choose a file under 10 MB.",
+            request_id=request_id,
         )
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers[REQUEST_ID_HEADER] = request_id
+    return response
 
 # 2. CORS Middleware — MUST be added LAST so it runs FIRST (outermost wrapper)
 app.add_middleware(

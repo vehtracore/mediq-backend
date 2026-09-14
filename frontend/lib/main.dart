@@ -120,15 +120,14 @@ Future<void> _bootstrapApplication() async {
       options: DefaultFirebaseOptions.currentPlatform, // Fix for Flutter Web
     );
     _firebaseReady = true;
-  } catch (e) {
-    debugPrint("Firebase init failed: $e");
+  } catch (_) {
+    debugPrint('[STARTUP] Firebase initialization failed.');
   }
 
   // --- 🛡️ Error Boundaries ---
   // 1. Catch synchronous UI rendering errors (Grey Screen of Death)
   ErrorWidget.builder = (FlutterErrorDetails details) {
-    // Only return the custom widget in release mode or if we want it in debug too.
-    // We already handle kDebugMode inside GlobalErrorWidget to show the stack trace.
+    // The global widget always uses MDQ-owned copy and never renders raw details.
     return GlobalErrorWidget(details: details);
   };
 
@@ -136,8 +135,9 @@ Future<void> _bootstrapApplication() async {
   //    returning true (fail-open: the app never crashes from this handler).
   PlatformDispatcher.instance.onError = (error, stack) {
     if (kDebugMode) {
-      debugPrint('🐛 [PlatformDispatcher] Asynchronous Error Caught: $error');
-      debugPrint('🐛 StackTrace: $stack');
+      debugPrint(
+        '[PlatformDispatcher] asynchronous failure_type=${error.runtimeType}',
+      );
     }
     // Forward to Sentry — no-op when DSN is empty (local dev)
     Sentry.captureException(error, stackTrace: stack);
@@ -173,6 +173,15 @@ class _MDQAppState extends ConsumerState<MDQApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (kDebugMode) {
+      final route = ref
+          .read(goRouterProvider)
+          .routerDelegate
+          .currentConfiguration
+          .uri
+          .path;
+      debugPrint('[LIFECYCLE] state=${state.name} route=$route');
+    }
     ref
         .read(consultationSessionRegistryProvider)
         .handleAppLifecycleState(state);
@@ -208,8 +217,10 @@ class _MDQAppState extends ConsumerState<MDQApp> with WidgetsBindingObserver {
             accountKey: accountKey,
             pushEnabled: pushEnabled,
           );
-    } catch (error) {
-      if (kDebugMode) debugPrint('Notification lifecycle unavailable: $error');
+    } catch (_) {
+      if (kDebugMode) {
+        debugPrint('[NOTIFICATIONS] lifecycle initialization unavailable.');
+      }
     }
   }
 

@@ -20,8 +20,9 @@ class DoctorResponse(DoctorBase):
     id: int
     user_id: int
     license_number: Optional[str] = None
-    mdcn_license_url: Optional[str] = None
-    indemnity_cert_url: Optional[str] = None
+    mdcn_license_available: bool = False
+    indemnity_certificate_available: bool = False
+    verification_media_migration_required: bool = False
     status: Optional[str] = "pending"           # 'pending' | 'active' | 'rejected'
     rejection_reason: Optional[str] = None       # Set by admin on rejection
     # Banking / Paystack subaccount (nullable until doctor completes payout setup)
@@ -30,6 +31,13 @@ class DoctorResponse(DoctorBase):
     paystack_subaccount_code: Optional[str] = None
     paystack_recipient_code: Optional[str] = None
     total_earnings: Optional[float] = 0.0
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PublicDoctorResponse(DoctorBase):
+    """Public booking profile with verification and payout secrets omitted."""
+
+    id: int
     model_config = ConfigDict(from_attributes=True)
 
 class DoctorRegister(BaseModel):
@@ -63,8 +71,7 @@ class DoctorUpdate(BaseModel):
 class ReapplyRequest(BaseModel):
     """Payload a rejected doctor submits when re-applying for verification."""
     license_number: Optional[str] = None          # Corrected MDCN number
-    mdcn_license_url: Optional[str] = None        # New Cloudinary URL for license image
-    indemnity_cert_url: Optional[str] = None      # New Cloudinary URL for indemnity cert
+    model_config = ConfigDict(extra="forbid")
 
 
 class PayoutSettingsRequest(BaseModel):

@@ -102,6 +102,10 @@ class User(Base):
     # ON DELETE SET NULL ensures removing the primary account unlinks dependents
     # gracefully rather than cascade-deleting them.
     primary_account_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    # One outstanding, one-time family invitation per primary account. The
+    # random nonce is embedded in the signed token and consumed on redemption.
+    family_invite_nonce = Column(String(64), nullable=True, unique=True)
+    family_invite_expires_at = Column(DateTime(timezone=True), nullable=True)
 
     # Bidirectional relationship:
     #   primary_user.dependents  → list of User objects linked to this account

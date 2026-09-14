@@ -348,7 +348,11 @@ class NotificationService {
       await _store.clearPendingToken();
     } catch (error) {
       await _store.setPendingToken(token);
-      if (kDebugMode) debugPrint('Notification registration deferred: $error');
+      if (kDebugMode) {
+        debugPrint(
+          '[NOTIFICATIONS] registration deferred failure_type=${error.runtimeType}',
+        );
+      }
     }
   }
 

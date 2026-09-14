@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../content/data/content_repository.dart';
 import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 class AdminContentEditorScreen extends ConsumerStatefulWidget {
   final HealthTip? healthTip; // If null, we are creating. If exists, editing.
@@ -60,7 +61,10 @@ class _AdminContentEditorScreenState
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error uploading image: $e"), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(UIErrorFormatter.getMessage(e)),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
@@ -74,8 +78,9 @@ class _AdminContentEditorScreenState
     setState(() => _isLoading = true);
     final repo = ref.read(contentRepositoryProvider);
     final trimmedImageUrl = _imgUrl?.trim();
-    final imageUrl =
-        trimmedImageUrl == null || trimmedImageUrl.isEmpty ? null : trimmedImageUrl;
+    final imageUrl = trimmedImageUrl == null || trimmedImageUrl.isEmpty
+        ? null
+        : trimmedImageUrl;
 
     try {
       if (widget.healthTip == null) {
@@ -86,7 +91,9 @@ class _AdminContentEditorScreenState
           readTime: _timeCtrl.text.trim(),
           content: _contentCtrl.text.trim(),
           imageUrl: imageUrl,
-          externalLink: _externalLinkCtrl.text.trim().isEmpty ? null : _externalLinkCtrl.text.trim(),
+          externalLink: _externalLinkCtrl.text.trim().isEmpty
+              ? null
+              : _externalLinkCtrl.text.trim(),
         );
       } else {
         // Update
@@ -98,7 +105,9 @@ class _AdminContentEditorScreenState
           content: _contentCtrl.text.trim(),
           imageUrl: imageUrl,
           includeImageUrl: true,
-          externalLink: _externalLinkCtrl.text.trim().isEmpty ? null : _externalLinkCtrl.text.trim(),
+          externalLink: _externalLinkCtrl.text.trim().isEmpty
+              ? null
+              : _externalLinkCtrl.text.trim(),
         );
       }
 
@@ -114,7 +123,10 @@ class _AdminContentEditorScreenState
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(UIErrorFormatter.getMessage(e)),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
@@ -159,7 +171,8 @@ class _AdminContentEditorScreenState
                   decoration: BoxDecoration(
                     color: Colors.grey[200],
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey[400]!, style: BorderStyle.solid),
+                    border: Border.all(
+                        color: Colors.grey[400]!, style: BorderStyle.solid),
                   ),
                   child: _isUploadingImage
                       ? const Center(child: CircularProgressIndicator())
@@ -171,9 +184,11 @@ class _AdminContentEditorScreenState
                           : Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Icon(Icons.add_a_photo, size: 40, color: Colors.grey[600]),
+                                Icon(Icons.add_a_photo,
+                                    size: 40, color: Colors.grey[600]),
                                 const SizedBox(height: 8),
-                                Text("Add Thumbnail Image", style: TextStyle(color: Colors.grey[700])),
+                                Text("Add Thumbnail Image",
+                                    style: TextStyle(color: Colors.grey[700])),
                               ],
                             ),
                 ),
@@ -184,16 +199,16 @@ class _AdminContentEditorScreenState
                   child: TextButton.icon(
                     onPressed: () => setState(() => _imgUrl = null),
                     icon: const Icon(Icons.delete, color: Colors.red, size: 16),
-                    label: const Text("Remove Image", style: TextStyle(color: Colors.red)),
+                    label: const Text("Remove Image",
+                        style: TextStyle(color: Colors.red)),
                   ),
                 ),
               const SizedBox(height: 16),
-              _buildField("External Article URL (Optional)", _externalLinkCtrl, required: false),
+              _buildField("External Article URL (Optional)", _externalLinkCtrl,
+                  required: false),
               const SizedBox(height: 16),
               _buildField("Content / Body", _contentCtrl, maxLines: 10),
-
               const SizedBox(height: 32),
-
               SizedBox(
                 width: double.infinity,
                 height: 50,

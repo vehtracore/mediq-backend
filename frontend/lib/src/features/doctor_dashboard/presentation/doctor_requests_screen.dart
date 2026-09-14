@@ -7,6 +7,7 @@ import 'package:mediq_app/src/shared/presentation/widgets/skeleton_loader.dart';
 import 'package:mediq_app/src/shared/presentation/widgets/error_state_widget.dart';
 import 'package:mediq_app/src/core/api/app_exception.dart';
 import 'package:dio/dio.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 class DoctorRequestsScreen extends ConsumerStatefulWidget {
   const DoctorRequestsScreen({super.key});
@@ -115,7 +116,7 @@ class _DoctorRequestsScreenState extends ConsumerState<DoctorRequestsScreen>
           itemBuilder: (_, __) => const RequestCardSkeleton(),
         ),
         error: (err, stack) {
-          String errorMessage = err.toString();
+          String errorMessage = UIErrorFormatter.getMessage(err);
           if (err is DioException && err.error is AppException) {
             errorMessage = (err.error as AppException).message;
           }
@@ -206,7 +207,7 @@ class _RequestCardState extends ConsumerState<_RequestCard> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(error.toString().replaceFirst('Exception: ', '')),
+            content: Text(UIErrorFormatter.getMessage(error)),
             backgroundColor: Colors.red,
           ),
         );

@@ -10,6 +10,7 @@ import uuid
 from dataclasses import dataclass
 
 from fastapi import HTTPException, status
+from app.core.api_errors import ApiError
 
 try:
     import redis
@@ -148,9 +149,10 @@ def enforce_stt_user_rate_limit(user_id: int) -> None:
             if attempts == 1:
                 client.expire(_rate_key(user_id), STT_RATE_WINDOW_SECONDS)
             if attempts > STT_RATE_LIMIT:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Voice transcription limit reached. Try again later.",
+                raise ApiError(
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                    "rate_limited",
+                    "Voice transcription limit reached. Try again later.",
                 )
             return
         except HTTPException:
@@ -163,9 +165,10 @@ def enforce_stt_user_rate_limit(user_id: int) -> None:
         _prune(now)
         attempts = _LOCAL_RATE.setdefault(user_id, [])
         if len(attempts) >= STT_RATE_LIMIT:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Voice transcription limit reached. Try again later.",
+            raise ApiError(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "rate_limited",
+                "Voice transcription limit reached. Try again later.",
             )
         attempts.append(now)
 

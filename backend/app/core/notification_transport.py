@@ -51,7 +51,10 @@ def _initialise_firebase():
             credential = credentials.Certificate(credential_value)
         return firebase_admin.initialize_app(credential)
     except Exception as exc:
-        logger.error("[FCM] Firebase Admin initialisation failed: %s", exc)
+        logger.error(
+            "[FCM] provider initialisation failed failure_category=%s",
+            type(exc).__name__,
+        )
         return None
 
 

@@ -7,6 +7,7 @@ String? _redirect({
   bool authLoading = false,
   bool passwordRecovery = false,
   bool hasSession = true,
+  bool preserveAuthenticatedRoute = true,
   bool roleLoading = false,
   String? role = 'patient',
 }) {
@@ -15,25 +16,53 @@ String? _redirect({
     authLoading: authLoading,
     passwordRecovery: passwordRecovery,
     hasSession: hasSession,
+    preserveAuthenticatedRoute: preserveAuthenticatedRoute,
     roleLoading: roleLoading,
     role: role,
   );
 }
 
 void main() {
-  test('authenticated profile loading is held on restoration, not auth', () {
-    expect(_redirect(roleLoading: true), '/');
+  test('authenticated profile loading preserves an existing feature route', () {
+    expect(_redirect(location: '/ai-chat', roleLoading: true), isNull);
+    expect(_redirect(location: '/emergency', roleLoading: true), isNull);
     expect(_redirect(location: '/', roleLoading: true), isNull);
   });
 
-  test('authenticated unresolved/profile-failure role stays on restoration',
+  test('authenticated unresolved/profile-failure role preserves navigation',
       () {
-    expect(_redirect(role: null), '/');
+    expect(_redirect(location: '/video_call', role: null), isNull);
     expect(_redirect(location: '/', role: null), isNull);
+  });
+
+  test('auth stream restoration does not redirect a nested route', () {
+    expect(_redirect(location: '/ai-chat', authLoading: true), isNull);
+  });
+
+  test('cold-start unresolved deep link remains behind restoration', () {
+    expect(
+      _redirect(
+        location: '/ai-chat',
+        roleLoading: true,
+        preserveAuthenticatedRoute: false,
+      ),
+      '/',
+    );
   });
 
   test('only a genuinely absent session routes to auth', () {
     expect(_redirect(hasSession: false), '/auth');
+    expect(
+      _redirect(location: '/ai-chat', hasSession: false),
+      '/auth',
+    );
+  });
+
+  test('resolved role restrictions still correct invalid routes', () {
+    expect(
+      _redirect(location: '/doctor_home', role: 'patient'),
+      '/patient_home',
+    );
   });
 
   test('password recovery unlatches on completion sign-out and later login',

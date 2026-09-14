@@ -6,6 +6,7 @@ import '../../auth/data/auth_repository.dart';
 import '../../appointments/data/appointment_repository.dart';
 import '../../../shared/presentation/widgets/skeleton_loader.dart';
 import '../../../../presentation/widgets/global_error_widget.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 
 // Provider to get current doctor ID
 final myDoctorProfileProvider = FutureProvider.autoDispose((ref) async {
@@ -121,7 +122,10 @@ class _DoctorAvailabilityScreenState
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Failed: $e"), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(UIErrorFormatter.getMessage(e)),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
@@ -166,7 +170,7 @@ class _DoctorAvailabilityScreenState
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error: $e'),
+            content: Text(UIErrorFormatter.getMessage(e)),
             backgroundColor: Colors.red,
           ),
         );
@@ -359,7 +363,7 @@ class _DoctorAvailabilityScreenState
                         child: LinearProgressIndicator(),
                       ),
                       error: (e, _) => Text(
-                        'Could not load slots: $e',
+                        UIErrorFormatter.getMessage(e),
                         style: const TextStyle(color: Colors.red, fontSize: 12),
                       ),
                       data: (slots) {

@@ -1,7 +1,4 @@
-import cloudinary
-import cloudinary.uploader
 import logging
-import os
 from datetime import datetime
 from fastapi import (
     APIRouter,
@@ -13,9 +10,9 @@ from fastapi import (
     Request,
 )
 from sqlalchemy.orm import Session
-from dotenv import load_dotenv
 
 from app.core.database import get_db
+from app.core.api_errors import ApiError
 from app.api.deps import get_current_user
 from app.api.v1.ai_consent import require_active_ai_consent
 from app.models.user import User
@@ -38,26 +35,22 @@ from app.services.ai_request_guard import (
     acquire_ai_request_lease,
     release_ai_request_lease,
 )
+from app.services.media_service import (
+    delete_sensitive_media,
+    detect_upload_media_type,
+    upload_sensitive_media,
+)
 from app.schemas.lab import LabAnalysisResponse
 
 logger = logging.getLogger(__name__)
-
-load_dotenv()
 
 from app.core.limiter import limiter
 
 router = APIRouter()
 
-# Configure Cloudinary (same as upload.py)
-cloudinary.config(
-    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
-    api_key=os.getenv("CLOUDINARY_API_KEY"),
-    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
-    secure=True
-)
-
 # Allowed image types
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
+_MAX_LAB_IMAGE_BYTES = 5 * 1024 * 1024
 
 # Plans that have access to AI lab analysis
 _LAB_ELIGIBLE_PLANS = {"premium", "family"}
@@ -104,9 +97,10 @@ async def analyze_lab_image(
     require_active_ai_consent(current_user)
 
     if current_user.plan not in _LAB_ELIGIBLE_PLANS:
-        raise HTTPException(
-            status_code=403,
-            detail="Upgrade to MDQ+ Premium to access AI Urinalysis.",
+        raise ApiError(
+            403,
+            "subscription_required",
+            "Upgrade to MDQ+ Premium to access AI Urinalysis.",
         )
 
     # ── 1. Inline monthly reset ──────────────────────────────────────────────
@@ -120,9 +114,10 @@ async def analyze_lab_image(
 
     # ── 2. Enforce monthly quota ─────────────────────────────────────────────
     if monthly_heavy_ai_usage(current_user) >= PAID_MONTHLY_HEAVY_AI_LIMIT:
-        raise HTTPException(
-            status_code=429,
-            detail=(
+        raise ApiError(
+            429,
+            "quota_exceeded",
+            (
                 "You've used this month's 10 AI photo and lab "
                 "interpretations. Your allowance resets next month."
             ),
@@ -132,17 +127,38 @@ async def analyze_lab_image(
 
     # ── 3. Validate file type ────────────────────────────────────────────────
     if file.content_type not in ALLOWED_CONTENT_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid file type. Allowed: {', '.join(ALLOWED_CONTENT_TYPES)}",
+        raise ApiError(
+            400,
+            "unsupported_file",
+            "We couldn't use this image. Choose a JPEG, PNG, or WebP image.",
         )
 
     try:
         # ── 4. Read image bytes ──────────────────────────────────────────────
-        image_bytes = await file.read()
+        image_bytes = await file.read(_MAX_LAB_IMAGE_BYTES + 1)
 
         if len(image_bytes) == 0:
-            raise HTTPException(status_code=400, detail="Empty file uploaded")
+            raise ApiError(
+                400,
+                "invalid_file",
+                "We couldn't use this image. Try taking another clear photo.",
+            )
+        if len(image_bytes) > _MAX_LAB_IMAGE_BYTES:
+            raise ApiError(
+                413,
+                "file_too_large",
+                "This image is too large. Choose an image under 5 MB.",
+            )
+        if detect_upload_media_type(image_bytes) not in {
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+        }:
+            raise ApiError(
+                400,
+                "unsupported_file",
+                "We couldn't use this image. Choose a JPEG, PNG, or WebP image.",
+            )
 
         quality_result = assess_lab_image_quality(image_bytes)
         if not quality_result.passed:
@@ -160,8 +176,12 @@ async def analyze_lab_image(
         # ── 5. Analyze with Gemini Vision ────────────────────────────────────
         try:
             analysis_result = await analyze_lab_strip(image_bytes)
-        except AIInputLimitError as exc:
-            raise HTTPException(status_code=413, detail=str(exc))
+        except AIInputLimitError:
+            raise ApiError(
+                413,
+                "file_too_large",
+                "We couldn't use this image. Try taking another clear photo.",
+            )
 
         # ── 6. Handle analysis result ────────────────────────────────────────
         status = analysis_result.get("status", "ERROR")
@@ -169,18 +189,22 @@ async def analyze_lab_image(
         if status == "SUCCESS":
             record_lab_scan_success(current_user)
 
-            # Upload image to Cloudinary for storage
-            await file.seek(0)  # Reset file pointer
-            upload_result = cloudinary.uploader.upload(
-                file.file,
-                folder="mediq_lab_scans",
+            # Persist the successful scan with authenticated delivery. The
+            # analysis response exposes only the logical record ID.
+            await file.seek(0)
+            image_asset = await upload_sensitive_media(
+                file,
+                media_class="lab_image",
             )
-            image_url = upload_result.get("secure_url")
 
             # Save draft record to database
             lab_result = LabResult(
                 user_id=current_user.id,
-                image_url=image_url,
+                image_url=None,
+                image_public_id=image_asset.public_id,
+                image_resource_type=image_asset.resource_type,
+                image_format=image_asset.format,
+                image_delivery_type=image_asset.delivery_type,
                 raw_data=analysis_result,
                 lighting_score=analysis_result.get("lighting_score"),
                 is_verified=False,
@@ -193,8 +217,13 @@ async def analyze_lab_image(
             current_user.monthly_lab_count += 1
             db.add(current_user)
 
-            db.commit()
-            db.refresh(lab_result)
+            try:
+                db.commit()
+                db.refresh(lab_result)
+            except Exception:
+                db.rollback()
+                delete_sensitive_media(image_asset)
+                raise
 
             # Add record ID to response
             analysis_result["record_id"] = lab_result.id
@@ -211,9 +240,14 @@ async def analyze_lab_image(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("Failed to analyze lab strip image: %s", e, exc_info=True)
-        raise HTTPException(
-            status_code=503,
-            detail="Image analysis is temporarily unavailable. Please try again.",
+    except Exception as exc:
+        logger.error(
+            "[LAB] analysis failed failure_category=%s",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        raise ApiError(
+            503,
+            "analysis_unavailable",
+            "Analysis is temporarily unavailable. Please try again shortly.",
         )

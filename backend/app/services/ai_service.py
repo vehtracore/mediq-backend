@@ -18,8 +18,12 @@ if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         logger.info("DEBUG: Gemini Configured Successfully")
-    except Exception as e:
-        logger.error(f"DEBUG: Gemini Configuration Failed: {e}", exc_info=True)
+    except Exception as exc:
+        logger.error(
+            "AI provider configuration failed failure_category=%s",
+            type(exc).__name__,
+            exc_info=True,
+        )
 else:
     logger.warning("WARNING: GEMINI_API_KEY not found in environment.")
 
@@ -440,7 +444,10 @@ Do not include conversational filler or instructions from the user.
                     full_prompt.append(img)
                     full_prompt.append("Analyze the medical relevance of this image in context of the user's message.")
             except Exception as img_err:
-                logger.warning(f"Failed to fetch image from URL: {image_url}, error: {img_err}")
+                logger.warning(
+                    "AI image fetch failed failure_category=%s",
+                    type(img_err).__name__,
+                )
 
         # PDF bytes are request-scoped and sent inline. They are never uploaded
         # to application storage. Provider or parsing failures must surface as
@@ -559,9 +566,13 @@ Do not include conversational filler or instructions from the user.
         raise
     except AIResponseCompletionError:
         raise
-    except Exception as e:
-        logger.error(f"Gemini API Error: {e}", exc_info=True)
-        raise RuntimeError("Gemini request failed") from e
+    except Exception as exc:
+        logger.error(
+            "[AI] provider request failed failure_category=%s",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        raise RuntimeError("Gemini request failed") from exc
 
 
 # --- AI LAB PROMPT FOR URINALYSIS STRIP ANALYSIS ---
@@ -677,11 +688,14 @@ async def analyze_lab_strip(image_bytes: bytes) -> dict:
         
     except AIInputLimitError:
         raise
-    except json.JSONDecodeError as e:
-        logger.error(f"Lab Strip JSON Parse Error: {e}", exc_info=True)
-        logger.error(f"Raw response: {raw_text[:500] if 'raw_text' in dir() else 'N/A'}")
+    except json.JSONDecodeError:
+        logger.error("[LAB] provider response was not valid JSON", exc_info=True)
         return {"status": "ERROR", "reason": "Failed to parse AI response"}
         
-    except Exception as e:
-        logger.error(f"Lab Strip Analysis Error: {e}", exc_info=True)
-        raise RuntimeError("Gemini lab request failed") from e
+    except Exception as exc:
+        logger.error(
+            "[LAB] provider request failed failure_category=%s",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        raise RuntimeError("AI lab request failed") from exc

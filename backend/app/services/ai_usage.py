@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta
 
 from fastapi import HTTPException, status
+from app.core.api_errors import ApiError
 from sqlalchemy.orm import Session
 
 from app.models.user import User
@@ -68,9 +69,10 @@ def enforce_ai_text_usage_available(
 
     if user.chat_blocked_until is not None:
         if now < user.chat_blocked_until:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="AI usage is temporarily limited. Please try again later.",
+            raise ApiError(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "cooldown_active",
+                "AI usage is temporarily limited. Please try again later.",
             )
         user.chat_blocked_until = None
 
@@ -86,9 +88,10 @@ def enforce_ai_text_usage_available(
         user.chat_blocked_until = now + timedelta(minutes=AI_COLD_CAP_MINUTES)
         db.add(user)
         db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="AI usage is temporarily limited. Please try again later.",
+        raise ApiError(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "cooldown_active",
+            "AI usage is temporarily limited. Please try again later.",
         )
 
     if user.plan in PAID_AI_PLANS:
@@ -104,16 +107,18 @@ def enforce_ai_text_usage_available(
             (user.monthly_chat_count or 0) >= _paid_message_limit(user.plan)
             and (user.rolling_chat_count or 0) >= PAID_POST_CAP_DAILY_LIMIT
         ):
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Your AI usage limit has been reached. Please try again later.",
+            raise ApiError(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "quota_exceeded",
+                "Your AI usage limit has been reached. Please try again later.",
             )
         return
 
     if (user.monthly_chat_count or 0) >= FREE_MONTHLY_MESSAGE_LIMIT:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Your AI usage limit has been reached. Please try again later.",
+        raise ApiError(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "quota_exceeded",
+            "Your AI usage limit has been reached. Please try again later.",
         )
 
 

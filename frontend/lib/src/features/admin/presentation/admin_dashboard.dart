@@ -8,6 +8,9 @@ import 'package:mediq_app/src/features/admin/presentation/content/admin_content_
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/shared/presentation/widgets/skeleton_loader.dart';
 import 'package:mediq_app/presentation/widgets/global_error_widget.dart';
+import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
+import 'package:mediq_app/src/core/media/sensitive_media_access.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 final adminStatsProvider = FutureProvider.autoDispose((ref) async {
   final dio = ref.watch(dioProvider);
@@ -92,8 +95,8 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text("$e")));
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(UIErrorFormatter.getMessage(e))));
       }
     }
   }
@@ -118,7 +121,8 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text("Reject failed: $e"), backgroundColor: Colors.red));
+            content: Text(UIErrorFormatter.getMessage(e)),
+            backgroundColor: Colors.red));
       }
     }
   }
@@ -239,45 +243,88 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
         "${two(local.hour)}:${two(local.minute)}";
   }
 
-  void _showLicenseDialog(String url) {
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: Theme.of(context).dialogBackgroundColor,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AppBar(
-              title: const Text("Medical License"),
-              leading: IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.pop(ctx)),
-              elevation: 0,
-              backgroundColor: Colors.transparent,
-              foregroundColor: Theme.of(context).iconTheme.color,
-            ),
-            InteractiveViewer(
-              child: Image.network(
-                url,
-                loadingBuilder: (ctx, child, loadingProgress) {
-                  if (loadingProgress == null) return child;
-                  return const SizedBox(
-                      height: 200,
-                      child: Center(child: CircularProgressIndicator()));
-                },
-                errorBuilder: (context, error, stackTrace) => const Padding(
-                  padding: EdgeInsets.all(20.0),
-                  child: Column(children: [
-                    Icon(Icons.broken_image, size: 50, color: Colors.grey),
-                    Text("Could not load image")
-                  ]),
+  Future<void> _openDoctorDocument(
+    int doctorId,
+    String documentKind,
+    String title,
+  ) async {
+    try {
+      final access = await SensitiveMediaAccessClient(ref.read(dioProvider))
+          .doctorDocument(
+        doctorId: doctorId,
+        documentKind: documentKind,
+      );
+      final url = access.url;
+      final format = access.format.toLowerCase();
+
+      if (format == 'pdf') {
+        final opened = await launchUrl(
+          Uri.parse(url),
+          mode: LaunchMode.externalApplication,
+        );
+        if (!opened) throw StateError('document viewer unavailable');
+        return;
+      }
+
+      if (!mounted) return;
+      final provider = NetworkImage(url);
+      await showDialog(
+        context: context,
+        builder: (ctx) => Dialog(
+          backgroundColor: Theme.of(context).dialogTheme.backgroundColor,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AppBar(
+                title: Text(title),
+                leading: IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx)),
+                elevation: 0,
+                backgroundColor: Colors.transparent,
+                foregroundColor: Theme.of(context).iconTheme.color,
+              ),
+              InteractiveViewer(
+                child: Image(
+                  image: provider,
+                  loadingBuilder: (ctx, child, loadingProgress) {
+                    if (loadingProgress == null) return child;
+                    return const SizedBox(
+                        height: 200,
+                        child: Center(child: CircularProgressIndicator()));
+                  },
+                  errorBuilder: (context, error, stackTrace) => Padding(
+                    padding: const EdgeInsets.all(20.0),
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.broken_image,
+                          size: 50, color: Colors.grey),
+                      const Text("This secure link expired or could not load."),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _openDoctorDocument(
+                            doctorId,
+                            documentKind,
+                            title,
+                          );
+                        },
+                        child: const Text("Request a fresh link"),
+                      ),
+                    ]),
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-    );
+      );
+      await provider.evict();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(UIErrorFormatter.getMessage(error))),
+      );
+    }
   }
 
   @override
@@ -502,8 +549,14 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                 padding: const EdgeInsets.all(16),
                 itemCount: doctors.length,
                 itemBuilder: (ctx, i) {
-                  final licenseData = doctors[i]['license_number'] ?? "";
-                  final bool isUrl = licenseData.toString().startsWith("http");
+                  final licenseNumber = doctors[i]['license_number'] ?? "";
+                  final hasLicense =
+                      doctors[i]['mdcn_license_available'] == true;
+                  final hasIndemnity =
+                      doctors[i]['indemnity_certificate_available'] == true;
+                  final needsMigration = doctors[i]
+                          ['verification_media_migration_required'] ==
+                      true;
                   final theme = Theme.of(ctx);
 
                   return Card(
@@ -521,77 +574,116 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                         ),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                          child: Row(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              if (isUrl)
-                                TextButton.icon(
-                                  onPressed: () =>
-                                      _showLicenseDialog(licenseData),
-                                  icon: const Icon(Icons.image, size: 18),
-                                  label: const Text("View License"),
-                                )
-                              else
-                                Text("License: $licenseData",
-                                    style: const TextStyle(color: Colors.grey)),
-                              const Spacer(),
-                              IconButton.filledTonal(
-                                  icon: const Icon(Icons.close),
-                                  tooltip: "Reject",
-                                  style: IconButton.styleFrom(
-                                    backgroundColor: theme.colorScheme.primary
-                                        .withOpacity(0.15),
-                                    foregroundColor: theme.colorScheme.primary,
-                                    elevation: 0,
-                                  ),
-                                  onPressed: () {
-                                    final reasonCtrl = TextEditingController();
-                                    showDialog(
-                                      context: ctx,
-                                      builder: (context) => AlertDialog(
-                                        title: const Text("Reject Application"),
-                                        content: TextField(
-                                          controller: reasonCtrl,
-                                          decoration: const InputDecoration(
-                                            hintText: "Enter rejection reason",
-                                          ),
-                                        ),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () =>
-                                                Navigator.pop(context),
-                                            child: const Text("Cancel"),
-                                          ),
-                                          ElevatedButton(
-                                            onPressed: () {
-                                              final reason =
-                                                  reasonCtrl.text.trim();
-                                              if (reason.isNotEmpty) {
-                                                Navigator.pop(context);
-                                                _rejectDoctor(
-                                                    doctors[i]['id'], reason);
-                                              }
-                                            },
-                                            style: ElevatedButton.styleFrom(
-                                                backgroundColor: Colors.red,
-                                                foregroundColor: Colors.white),
-                                            child: const Text("Confirm Reject"),
-                                          ),
-                                        ],
+                              Text("License: $licenseNumber",
+                                  style: const TextStyle(color: Colors.grey)),
+                              if (needsMigration)
+                                const Text(
+                                  "Documents require secure-media migration.",
+                                  style: TextStyle(color: Colors.orange),
+                                ),
+                              Wrap(
+                                spacing: 8,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  if (hasLicense)
+                                    TextButton.icon(
+                                      onPressed: () => _openDoctorDocument(
+                                        doctors[i]['id'],
+                                        'mdcn-license',
+                                        'Medical License',
                                       ),
-                                    );
-                                  }),
-                              const SizedBox(width: 8),
-                              IconButton.filledTonal(
-                                  icon: const Icon(Icons.check),
-                                  tooltip: "Verify",
-                                  style: IconButton.styleFrom(
-                                    backgroundColor: theme.colorScheme.primary
-                                        .withOpacity(0.15),
-                                    foregroundColor: theme.colorScheme.primary,
-                                    elevation: 0,
-                                  ),
-                                  onPressed: () =>
-                                      _verifyDoctor(doctors[i]['id'])),
+                                      icon: const Icon(Icons.image, size: 18),
+                                      label: const Text("View License"),
+                                    ),
+                                  if (hasIndemnity)
+                                    TextButton.icon(
+                                      onPressed: () => _openDoctorDocument(
+                                        doctors[i]['id'],
+                                        'indemnity-certificate',
+                                        'Indemnity Certificate',
+                                      ),
+                                      icon: const Icon(Icons.description,
+                                          size: 18),
+                                      label: const Text("View Indemnity"),
+                                    ),
+                                ],
+                              ),
+                              Row(
+                                children: [
+                                  const Spacer(),
+                                  IconButton.filledTonal(
+                                      icon: const Icon(Icons.close),
+                                      tooltip: "Reject",
+                                      style: IconButton.styleFrom(
+                                        backgroundColor: theme
+                                            .colorScheme.primary
+                                            .withOpacity(0.15),
+                                        foregroundColor:
+                                            theme.colorScheme.primary,
+                                        elevation: 0,
+                                      ),
+                                      onPressed: () {
+                                        final reasonCtrl =
+                                            TextEditingController();
+                                        showDialog(
+                                          context: ctx,
+                                          builder: (context) => AlertDialog(
+                                            title: const Text(
+                                                "Reject Application"),
+                                            content: TextField(
+                                              controller: reasonCtrl,
+                                              decoration: const InputDecoration(
+                                                hintText:
+                                                    "Enter rejection reason",
+                                              ),
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(context),
+                                                child: const Text("Cancel"),
+                                              ),
+                                              ElevatedButton(
+                                                onPressed: () {
+                                                  final reason =
+                                                      reasonCtrl.text.trim();
+                                                  if (reason.isNotEmpty) {
+                                                    Navigator.pop(context);
+                                                    _rejectDoctor(
+                                                        doctors[i]['id'],
+                                                        reason);
+                                                  }
+                                                },
+                                                style: ElevatedButton.styleFrom(
+                                                    backgroundColor: Colors.red,
+                                                    foregroundColor:
+                                                        Colors.white),
+                                                child: const Text(
+                                                    "Confirm Reject"),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      }),
+                                  const SizedBox(width: 8),
+                                  IconButton.filledTonal(
+                                      icon: const Icon(Icons.check),
+                                      tooltip: "Verify",
+                                      style: IconButton.styleFrom(
+                                        backgroundColor: theme
+                                            .colorScheme.primary
+                                            .withOpacity(0.15),
+                                        foregroundColor:
+                                            theme.colorScheme.primary,
+                                        elevation: 0,
+                                      ),
+                                      onPressed: () =>
+                                          _verifyDoctor(doctors[i]['id'])),
+                                ],
+                              ),
                             ],
                           ),
                         ),

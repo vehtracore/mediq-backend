@@ -38,6 +38,8 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
   late bool _cameraOff;
   bool _mediaReconnecting = false;
   bool _mediaUnavailable = false;
+  bool _permissionDenied = false;
+  bool _permissionPermanentlyDenied = false;
   bool _renewingToken = false;
   bool _exiting = false;
   bool _engineReleased = false;
@@ -64,10 +66,10 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
       return;
     }
 
-    if (!kIsWeb) {
-      await [Permission.microphone].request();
-      if (!widget.isVoiceCall) await [Permission.camera].request();
+    if (!kIsWeb && !await _requestMediaPermissions()) {
+      return;
     }
+    if (!mounted || _exiting) return;
 
     try {
       final data = await ref
@@ -114,10 +116,60 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
       );
       _scheduleTimeLimit(warningAt: warningAt, videoEndsAt: videoEndsAt);
       if (mounted) setState(() => _isLoading = false);
-    } catch (error) {
-      debugPrint('[VideoCall] Unable to join consultation: $error');
+    } catch (_) {
+      debugPrint('[VideoCall] Unable to join consultation.');
       if (mounted) _showJoinFailure();
     }
+  }
+
+  Future<bool> _requestMediaPermissions() async {
+    final permissions = <Permission>[
+      Permission.microphone,
+      if (!widget.isVoiceCall) Permission.camera,
+    ];
+    final statuses = await permissions.request();
+    if (!mounted || _exiting) return false;
+    final denied = statuses.values.any((status) => !status.isGranted);
+    if (!denied) {
+      setState(() {
+        _permissionDenied = false;
+        _permissionPermanentlyDenied = false;
+      });
+      return true;
+    }
+
+    final permanentlyDenied = statuses.values.any(
+      (status) => status.isPermanentlyDenied || status.isRestricted,
+    );
+    _videoPresence.onJoinFailed(
+      returningToChat: _session.isChatAttached,
+    );
+    setState(() {
+      _isLoading = false;
+      _mediaUnavailable = true;
+      _permissionDenied = true;
+      _permissionPermanentlyDenied = permanentlyDenied;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          widget.isVoiceCall
+              ? 'Microphone permission is required for this call.'
+              : 'Camera and microphone permissions are required for video.',
+        ),
+      ),
+    );
+    return false;
+  }
+
+  Future<void> _retryMediaSetup() async {
+    if (_isLoading || _exiting || _engine != null) return;
+    setState(() {
+      _isLoading = true;
+      _mediaUnavailable = false;
+    });
+    _videoPresence.onTransitionStarted();
+    await _initAgora();
   }
 
   RtcEngineEventHandler _eventHandler() => RtcEngineEventHandler(
@@ -206,8 +258,8 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
       if (!_exiting && _engine == engine) {
         await engine.renewToken(data['token'] as String);
       }
-    } catch (error) {
-      debugPrint('[VideoCall] Agora token renewal failed: $error');
+    } catch (_) {
+      debugPrint('[VideoCall] media token renewal failed.');
       if (mounted && !_exiting) {
         setState(() => _mediaUnavailable = true);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -290,7 +342,17 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
     final engine = _engine;
     if (engine == null) return;
     if (_cameraOff) {
-      await [Permission.camera].request();
+      final status = await Permission.camera.request();
+      if (!status.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Camera permission is required to enable video.'),
+            ),
+          );
+        }
+        return;
+      }
       await engine.enableVideo();
       await engine.startPreview();
       await engine.updateChannelMediaOptions(
@@ -379,6 +441,7 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
                         ? Icons.videocam_off_outlined
                         : Icons.person,
                     label: _waitingLabel(session),
+                    showPermissionActions: _permissionDenied,
                   ),
           ),
           Positioned(
@@ -472,6 +535,11 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
       return 'Video is reconnecting';
     }
     if (_mediaUnavailable) {
+      if (_permissionDenied) {
+        return _permissionPermanentlyDenied
+            ? 'Camera or microphone access is disabled in app settings.'
+            : 'Camera or microphone permission was denied.';
+      }
       return 'Video is unavailable. Chat is still available.';
     }
     final participant = session.peerParticipantLabel;
@@ -512,7 +580,11 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
     );
   }
 
-  Widget _buildPlaceholder({required IconData icon, required String label}) {
+  Widget _buildPlaceholder({
+    required IconData icon,
+    required String label,
+    required bool showPermissionActions,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 28),
       child: Column(
@@ -525,6 +597,18 @@ class _VideoCallScreenState extends ConsumerState<VideoCallScreen> {
             textAlign: TextAlign.center,
             style: const TextStyle(color: Colors.white70),
           ),
+          if (showPermissionActions) ...[
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: _retryMediaSetup,
+              child: const Text('Try again'),
+            ),
+            if (_permissionPermanentlyDenied)
+              const TextButton(
+                onPressed: openAppSettings,
+                child: Text('Open app settings'),
+              ),
+          ],
         ],
       ),
     );

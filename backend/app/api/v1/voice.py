@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.api.v1.ai_consent import require_active_ai_consent
 from app.core.database import get_db
+from app.core.api_errors import ApiError
 from app.core.limiter import limiter
 from app.models.user import User
 from app.services.ai_usage import enforce_ai_text_usage_available
@@ -260,13 +261,13 @@ async def _synthesise_yarngpt(text: str, voice: str) -> bytes:
 
     if response.status_code != 200:
         logger.error(
-            "[Voice] YarnGPT TTS error — status=%s body=%s",
-            response.status_code,
-            response.text[:500],
+            "[VOICE] TTS provider rejected request http_class=%sxx",
+            response.status_code // 100,
         )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="TTS service error.",
+        raise ApiError(
+            status.HTTP_502_BAD_GATEWAY,
+            "voice_unavailable",
+            "Voice playback is temporarily unavailable.",
         )
 
     return response.content
@@ -391,9 +392,10 @@ async def _transcribe_uploaded_voice(
             len(audio.data),
             type(exc).__name__,
         )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Voice transcription is temporarily unavailable.",
+        raise ApiError(
+            status.HTTP_502_BAD_GATEWAY,
+            "transcription_unavailable",
+            "We could not transcribe this recording. Retry or cancel it.",
         )
     finally:
         release_stt_request_lease(lease)
@@ -508,12 +510,12 @@ async def speak(
     except Exception as exc:
         _refund_audio_quota(db, current_user.id, char_count, counted_rolling)
         logger.error(
-            "[Voice] TTS error — user_id=%s provider=%s error=%s",
-            current_user.id,
+            "[VOICE] TTS failed provider=%s failure_category=%s",
             provider,
-            exc,
+            type(exc).__name__,
         )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="TTS service error.",
+        raise ApiError(
+            status.HTTP_502_BAD_GATEWAY,
+            "voice_unavailable",
+            "Voice playback is temporarily unavailable.",
         )

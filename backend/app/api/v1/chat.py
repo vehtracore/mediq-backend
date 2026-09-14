@@ -2,10 +2,10 @@ import logging
 import os
 import uuid
 import json
+from urllib.parse import parse_qs, urlparse
 
 import cloudinary
 import cloudinary.api
-import cloudinary.utils
 import cloudinary.uploader
 from fastapi import (
     APIRouter,
@@ -21,11 +21,12 @@ from fastapi import (
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from app.services import ai_service
 from app.core.database import get_db
+from app.core.api_errors import ApiError
 from app.models.user import User
 from app.models.vault import AIChatSummary
 from app.api import deps
@@ -43,6 +44,12 @@ from app.services.ai_request_guard import (
 )
 from app.services.ai_pdf import read_validated_ai_pdf
 from app.services.subscription_entitlement import has_active_paid_entitlement
+from app.services.media_service import (
+    SensitiveMediaAsset,
+    delete_sensitive_media,
+    generate_sensitive_access,
+    read_validated_upload,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -62,6 +69,7 @@ class ChatRequest(BaseModel):
     message: str
     image_url: Optional[str] = None
     image_public_id: Optional[str] = None
+    image_format: Optional[Literal["jpg", "jpeg", "png", "webp"]] = None
     history: Optional[list] = None
     language: Optional[str] = "English"
     conversation_memory: Optional[str] = None
@@ -80,6 +88,8 @@ class ChatResponse(BaseModel):
 class TemporaryImageResponse(BaseModel):
     url: str
     public_id: str
+    format: Literal["jpg", "jpeg", "png", "webp"]
+    expires_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -102,8 +112,6 @@ _BURST_WINDOW_MINUTES: int  = 15   # sliding window length
 _BURST_MSG_THRESHOLD: int = 15
 _COLD_CAP_MINUTES: int = 15
 
-_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
-_MAX_TEMP_IMAGE_BYTES = 5 * 1024 * 1024
 _TEMP_IMAGE_TTL = timedelta(hours=2)
 
 
@@ -164,9 +172,10 @@ def _get_owned_source_summary(
         else:
             source_updated_at = source_updated_at.astimezone(timezone.utc)
         if stored_updated_at != source_updated_at:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
+            raise ApiError(
+                status.HTTP_409_CONFLICT,
+                "stale_version",
+                (
                     "This saved conversation was updated elsewhere. Your current "
                     "chat is still available; refresh it before continuing."
                 ),
@@ -184,66 +193,71 @@ def _require_owned_temp_image(public_id: str, user_id: int) -> None:
 
 def _delete_temp_image(public_id: str, user_id: int) -> bool:
     _require_owned_temp_image(public_id, user_id)
-    try:
-        result = cloudinary.uploader.destroy(
-            public_id,
-            resource_type="image",
-            invalidate=True,
-        )
-        return result.get("result") in {"ok", "not found"}
-    except Exception:
-        logger.exception(
-            "[AI TEMP IMAGE] Cleanup failed for user_id=%s public_id=%s",
-            user_id,
-            public_id,
-        )
-        return False
+    for delivery_type in ("authenticated", "upload"):
+        try:
+            result = cloudinary.uploader.destroy(
+                public_id,
+                resource_type="image",
+                type=delivery_type,
+                invalidate=True,
+            )
+            if result.get("result") == "ok":
+                return True
+        except Exception as exc:
+            logger.error(
+                "[AI TEMP IMAGE] Cleanup failed user_id=%s failure_category=%s",
+                user_id,
+                type(exc).__name__,
+            )
+            return False
+    return True
 
 
 def cleanup_stale_temp_images() -> int:
     """Delete abandoned AI chat images older than the temporary retention TTL."""
     cutoff = datetime.now(timezone.utc) - _TEMP_IMAGE_TTL
     deleted_count = 0
-    next_cursor = None
+    for delivery_type in ("authenticated", "upload"):
+        next_cursor = None
+        while True:
+            options = {
+                "resource_type": "image",
+                "type": delivery_type,
+                "prefix": "mediq_ai_temp/",
+                "max_results": 500,
+            }
+            if next_cursor:
+                options["next_cursor"] = next_cursor
 
-    while True:
-        options = {
-            "resource_type": "image",
-            "type": "upload",
-            "prefix": "mediq_ai_temp/",
-            "max_results": 500,
-        }
-        if next_cursor:
-            options["next_cursor"] = next_cursor
+            result = cloudinary.api.resources(**options)
+            for resource in result.get("resources", []):
+                created_at = resource.get("created_at")
+                public_id = resource.get("public_id")
+                if not created_at or not public_id:
+                    continue
 
-        result = cloudinary.api.resources(**options)
-        for resource in result.get("resources", []):
-            created_at = resource.get("created_at")
-            public_id = resource.get("public_id")
-            if not created_at or not public_id:
-                continue
+                created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                if created > cutoff:
+                    continue
 
-            created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            if created > cutoff:
-                continue
+                try:
+                    deletion = cloudinary.uploader.destroy(
+                        public_id,
+                        resource_type="image",
+                        type=delivery_type,
+                        invalidate=True,
+                    )
+                    if deletion.get("result") in {"ok", "not found"}:
+                        deleted_count += 1
+                except Exception as exc:
+                    logger.error(
+                        "[AI TEMP IMAGE] Stale cleanup failed failure_category=%s",
+                        type(exc).__name__,
+                    )
 
-            try:
-                deletion = cloudinary.uploader.destroy(
-                    public_id,
-                    resource_type="image",
-                    invalidate=True,
-                )
-                if deletion.get("result") in {"ok", "not found"}:
-                    deleted_count += 1
-            except Exception:
-                logger.exception(
-                    "[AI TEMP IMAGE] Failed deleting stale public_id=%s",
-                    public_id,
-                )
-
-        next_cursor = result.get("next_cursor")
-        if not next_cursor:
-            break
+            next_cursor = result.get("next_cursor")
+            if not next_cursor:
+                break
 
     if deleted_count:
         logger.info(
@@ -266,25 +280,10 @@ async def upload_temporary_chat_image(
 ):
     require_active_ai_consent(current_user)
 
-    filename = (file.filename or "").lower()
-    has_allowed_extension = filename.endswith((".jpg", ".jpeg", ".png", ".webp"))
-    if file.content_type not in _ALLOWED_IMAGE_TYPES and not has_allowed_extension:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid image type. Use JPEG, PNG, or WebP.",
-        )
-
-    content = await file.read(_MAX_TEMP_IMAGE_BYTES + 1)
-    if not content:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded image is empty.",
-        )
-    if len(content) > _MAX_TEMP_IMAGE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Image exceeds the 5MB upload limit.",
-        )
+    content = await read_validated_upload(
+        file,
+        allowed_types={"image/jpeg", "image/png", "image/webp"},
+    )
 
     public_id = f"mediq_ai_temp/{current_user.id}/{uuid.uuid4()}"
     try:
@@ -292,21 +291,37 @@ async def upload_temporary_chat_image(
             content,
             public_id=public_id,
             resource_type="image",
+            type="authenticated",
             overwrite=False,
         )
-    except Exception:
-        logger.exception(
-            "[AI TEMP IMAGE] Upload failed for user_id=%s",
+        asset = SensitiveMediaAsset(
+            public_id=result["public_id"],
+            resource_type="image",
+            format=result["format"],
+            delivery_type="authenticated",
+        )
+        access = generate_sensitive_access(asset, ttl_seconds=15 * 60)
+    except Exception as exc:
+        if "asset" in locals():
+            delete_sensitive_media(asset)
+        logger.error(
+            "[AI TEMP IMAGE] Upload failed user_id=%s failure_category=%s",
             current_user.id,
+            type(exc).__name__,
         )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Temporary image upload failed.",
-        )
+        if isinstance(exc, HTTPException):
+            raise
+        raise ApiError(
+            status.HTTP_502_BAD_GATEWAY,
+            "media_upload_unavailable",
+            "MDQ+ could not securely store this image. Please try again.",
+        ) from exc
 
     return TemporaryImageResponse(
-        url=result["secure_url"],
-        public_id=result["public_id"],
+        url=access.url,
+        public_id=asset.public_id,
+        format=asset.format,
+        expires_at=access.expires_at,
     )
 
 
@@ -432,11 +447,28 @@ async def _analyze_chat_request(
 
     if has_image:
         _require_owned_temp_image(chat_request.image_public_id, current_user.id)
-        trusted_image_url = cloudinary.utils.cloudinary_url(
-            chat_request.image_public_id,
-            secure=True,
-            resource_type="image",
-        )[0]
+        image_format = chat_request.image_format
+        if not image_format and chat_request.image_url:
+            candidate = parse_qs(urlparse(chat_request.image_url).query).get(
+                "format",
+                [None],
+            )[0]
+            if candidate in {"jpg", "jpeg", "png", "webp"}:
+                image_format = candidate
+        if not image_format:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Temporary image format is required.",
+            )
+        trusted_image_url = generate_sensitive_access(
+            SensitiveMediaAsset(
+                public_id=chat_request.image_public_id,
+                resource_type="image",
+                format=image_format,
+                delivery_type="authenticated",
+            ),
+            ttl_seconds=15 * 60,
+        ).url
 
     # Guard: at least one of text or attachment must be present.
     if not chat_request.message.strip() and not has_heavy_attachment:
@@ -633,14 +665,15 @@ async def _analyze_chat_request(
                 document_bytes=document_bytes,
                 plan_category=plan_category,
             )
-        except ai_service.AIInputLimitError as exc:
+        except ai_service.AIInputLimitError:
             logger.info(
                 "[AI CHAT] plan=%s quota_outcome=not_consumed finish=input_limit",
                 plan_category,
             )
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=str(exc),
+            raise ApiError(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                "file_too_large",
+                "This attachment is too large to analyze.",
             )
         except ai_service.AIResponseCompletionError as exc:
             logger.info(
@@ -648,9 +681,10 @@ async def _analyze_chat_request(
                 plan_category,
                 exc.finish_category,
             )
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="AI service is temporarily unavailable. Please try again.",
+            raise ApiError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "analysis_unavailable",
+                "We couldn't analyze that right now. Please try again.",
             )
         except Exception:
             logger.info(
@@ -661,9 +695,10 @@ async def _analyze_chat_request(
                 "[AI CHAT] Gemini processing failed for user_id=%s",
                 current_user.id,
             )
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="AI service is temporarily unavailable. Please try again.",
+            raise ApiError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "analysis_unavailable",
+                "We couldn't analyze that right now. Please try again.",
             )
     finally:
         if chat_request.image_public_id:

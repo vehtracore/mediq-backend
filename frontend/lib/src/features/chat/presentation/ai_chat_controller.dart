@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http_parser/http_parser.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:mediq_app/src/core/api/api_error_mapper.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/chat/data/ai_pdf_attachment.dart';
 import 'package:mediq_app/src/features/lab/data/lab_result_model.dart';
@@ -48,19 +49,26 @@ class AiChatState {
 // 2. CONTROLLER
 class AiChatController extends StateNotifier<AiChatState> {
   final Dio _dio;
-  final String subscriptionTier; // "free", "premium", or "family"
+  String _subscriptionTier; // "free", "premium", or "family"
   final AiChatContinuation? continuation;
   String? _conversationMemory;
   final List<String> _unsummarizedTurns = [];
   int _requestSequence = 0;
   String? _pendingSaveRequestId;
 
-  AiChatController(this._dio, this.subscriptionTier, this.continuation)
+  AiChatController(this._dio, this._subscriptionTier, this.continuation)
       : super(AiChatState());
 
   String? get sourceSummaryId => continuation?.summaryId;
   bool get hasPaidContinuity =>
-      {'premium', 'family'}.contains(subscriptionTier);
+      {'premium', 'family'}.contains(_subscriptionTier);
+
+  /// Tier changes update policy for subsequent requests without replacing the
+  /// in-memory conversation. Profile restoration is deliberately not a chat
+  /// session lifecycle event.
+  void updateSubscriptionTier(String tier) {
+    if (tier.isNotEmpty) _subscriptionTier = tier;
+  }
 
   Map<String, dynamic> get _continuationRequestFields => {
         if (continuation != null) ...{
@@ -123,6 +131,7 @@ class AiChatController extends StateNotifier<AiChatState> {
   Future<void> sendMessage(String text,
       {String? imageUrl,
       String? imagePublicId,
+      String? imageFormat,
       AiPdfAttachment? document,
       String language = 'English'}) async {
     if (state.isLoading) return;
@@ -195,6 +204,7 @@ class AiChatController extends StateNotifier<AiChatState> {
             ...requestData,
             "image_url": imageUrl,
             "image_public_id": imagePublicId,
+            "image_format": imageFormat,
           },
           options: Options(headers: {'X-AI-Request-ID': requestId}),
         );
@@ -238,29 +248,32 @@ class AiChatController extends StateNotifier<AiChatState> {
         isLoading: false,
       );
     } on DioException catch (e) {
-      String errorMessage = "Connection error. Please try again.";
+      final failure = ApiErrorMapper.map(e);
+      if (!failure.shouldPresent) {
+        if (!mounted) return;
+        final newMessages = state.messages.map((message) {
+          if (message['id'] != tempId) return message;
+          return Map<String, dynamic>.from(message)..['isSending'] = false;
+        }).toList();
+        state = state.copyWith(messages: newMessages, isLoading: false);
+        return;
+      }
+      String errorMessage = failure.message;
 
       // PDF/provider failures get a stable message. Quota and ownership
       // responses remain actionable without exposing implementation details.
       if (document != null) {
-        final status = e.response?.statusCode;
-        if (status == 413) {
+        if (failure.statusCode == 413) {
           errorMessage = 'PDFs must be 8 MB or smaller.';
-        } else if (status == 429) {
-          final data = e.response?.data;
-          errorMessage = data is Map && data['detail'] is String
-              ? data['detail'] as String
-              : 'Your AI attachment limit has been reached.';
-        } else if (status == 404 && sourceSummaryId != null) {
+        } else if (failure.kind == ApiFailureKind.rateLimited) {
+          errorMessage = failure.message;
+        } else if (failure.statusCode == 404 && sourceSummaryId != null) {
           errorMessage = 'This saved conversation is no longer available.';
-        } else {
+        } else if (failure.kind != ApiFailureKind.offline &&
+            failure.kind != ApiFailureKind.timeout &&
+            failure.kind != ApiFailureKind.serverUnavailable) {
           errorMessage =
               'This PDF could not be processed. Please choose a valid PDF and try again.';
-        }
-      } else if (e.response != null && e.response?.data != null) {
-        final data = e.response?.data;
-        if (data is Map && data.containsKey('detail')) {
-          errorMessage = data['detail'];
         }
       }
 
@@ -278,7 +291,7 @@ class AiChatController extends StateNotifier<AiChatState> {
 
       state = state
           .copyWith(messages: [...newMessages, errorMsg], isLoading: false);
-    } catch (e) {
+    } catch (_) {
       debugPrint('[AiChatController] AI request failed.');
       final errorMsg = {
         'role': 'system',
@@ -310,8 +323,8 @@ class AiChatController extends StateNotifier<AiChatState> {
         '/api/v1/chat/image',
         queryParameters: {'public_id': publicId},
       );
-    } catch (e) {
-      debugPrint('[AiChatController] temporary image cleanup failed: $e');
+    } catch (_) {
+      debugPrint('[AiChatController] temporary image cleanup failed.');
     }
   }
 
@@ -369,8 +382,8 @@ class AiChatController extends StateNotifier<AiChatState> {
       if (!mounted) return;
       state = state
           .copyWith(messages: [...state.messages, aiMsg], isLoading: false);
-    } catch (e) {
-      debugPrint('[AiChatController] sendLabResult error: $e');
+    } catch (_) {
+      debugPrint('[AiChatController] lab-result analysis failed.');
       final errorMsg = {
         'role': 'system',
         'message': 'AI analysis is temporarily unavailable. Please try again.'
@@ -441,15 +454,32 @@ INSTRUCTION: Analyze these results. If any values are abnormal (Positive/High), 
 }
 
 // 3. PROVIDER
-// autoDispose ensures the session is wiped when user leaves the screen
+// autoDispose wipes an unsaved session only when its route is genuinely left.
+// Profile refreshes update policy in-place and must not recreate this notifier.
 final aiChatControllerProvider = StateNotifierProvider.autoDispose
     .family<AiChatController, AiChatState, AiChatContinuation?>(
         (ref, continuation) {
   final dio = ref.watch(dioProvider);
 
-  // Get User Tier (default to 'free' if loading)
-  final userAsync = ref.watch(userProvider);
+  // Read once for construction. A listener applies later profile/tier changes
+  // without making userProvider a provider-recreation dependency.
+  final userAsync = ref.read(userProvider);
   final tier = userAsync.value?.subscriptionTier ?? 'free';
+  final controller = AiChatController(dio, tier, continuation);
+  if (kDebugMode) {
+    debugPrint(
+      '[AI SESSION] created continuation=${continuation != null}',
+    );
+  }
+  ref.listen(userProvider, (_, next) {
+    final refreshedTier = next.valueOrNull?.subscriptionTier;
+    if (refreshedTier != null) {
+      controller.updateSubscriptionTier(refreshedTier);
+    }
+  });
+  ref.onDispose(() {
+    if (kDebugMode) debugPrint('[AI SESSION] disposed');
+  });
 
-  return AiChatController(dio, tier, continuation);
+  return controller;
 });

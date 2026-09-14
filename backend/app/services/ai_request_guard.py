@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from fastapi import HTTPException, status
+from app.core.api_errors import ApiError
 
 try:
     import redis
@@ -70,9 +71,10 @@ def ai_request_digest(request_id: str) -> str:
 
 
 def _idempotency_mismatch() -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail="This idempotency key was already used for a different summary save.",
+    return ApiError(
+        status.HTTP_409_CONFLICT,
+        "request_conflict",
+        "This idempotency key was already used for a different summary save.",
     )
 
 

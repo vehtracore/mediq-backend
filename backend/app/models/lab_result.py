@@ -16,6 +16,10 @@ class LabResult(Base):
     
     # --- IMAGE PROOF ---
     image_url = Column(String, nullable=True)  # Cloudinary URL of the scanned strip
+    image_public_id = Column(String, nullable=True)
+    image_resource_type = Column(String(16), nullable=True)
+    image_format = Column(String(16), nullable=True)
+    image_delivery_type = Column(String(16), nullable=True)
     
     # --- AI ANALYSIS ---
     raw_data = Column(JSON, nullable=True)  # Full AI response with all readings

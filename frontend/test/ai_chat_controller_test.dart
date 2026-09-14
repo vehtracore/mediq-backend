@@ -2,7 +2,11 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mediq_app/src/core/api/dio_client.dart';
+import 'package:mediq_app/src/features/auth/data/user_model.dart';
+import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/chat/data/ai_pdf_attachment.dart';
 import 'package:mediq_app/src/features/chat/presentation/ai_chat_controller.dart';
 
@@ -53,6 +57,40 @@ class _SwitchingAdapter implements HttpClientAdapter {
 }
 
 void main() {
+  test('profile restoration does not recreate an active AI session', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'));
+    final container = ProviderContainer(
+      overrides: [
+        dioProvider.overrideWithValue(dio),
+        userProvider.overrideWith((ref) async => User(
+              id: '7',
+              email: 'patient@example.test',
+              firstName: 'Test',
+              lastName: 'Patient',
+              role: 'patient',
+              subscriptionTier: 'premium',
+            )),
+      ],
+    );
+    addTearDown(container.dispose);
+    await container.read(userProvider.future);
+    final subscription = container.listen(
+      aiChatControllerProvider(null),
+      (_, __) {},
+      fireImmediately: true,
+    );
+    addTearDown(subscription.close);
+    final before = container.read(aiChatControllerProvider(null).notifier);
+
+    container.invalidate(userProvider);
+    await container.read(userProvider.future);
+    await Future<void>.delayed(Duration.zero);
+
+    final after = container.read(aiChatControllerProvider(null).notifier);
+    expect(identical(after, before), isTrue);
+    expect(after.hasPaidContinuity, isTrue);
+  });
+
   test('new chat without save makes no Vault mutation', () async {
     final adapter = _SwitchingAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))

@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../core/api/dio_client.dart';
+import '../../../core/utils/ui_error_formatter.dart';
 import '../../auth/data/auth_state_provider.dart';
 import '../../auth/presentation/user_controller.dart';
 import '../data/vault_record.dart';
@@ -113,11 +114,9 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
 
       _clearSelection();
     } on DioException catch (e) {
-      final detail =
-          e.response?.data is Map ? e.response!.data['detail'] : e.message;
-      _showSnack('Export failed: ${detail ?? 'Network error'}', isError: true);
+      _showSnack(UIErrorFormatter.getMessage(e), isError: true);
     } catch (e) {
-      _showSnack('Export failed: $e', isError: true);
+      _showSnack(UIErrorFormatter.getMessage(e), isError: true);
     } finally {
       if (mounted) setState(() => _isExporting = false);
     }
@@ -153,7 +152,7 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
         _showSnack('Record deleted successfully.', isError: false);
       }
     } catch (e) {
-      _showSnack('Delete failed: $e', isError: true);
+      _showSnack(UIErrorFormatter.getMessage(e), isError: true);
     } finally {
       if (mounted) setState(() => _isDeleting = false);
     }
@@ -275,7 +274,7 @@ class _VaultScreenState extends ConsumerState<VaultScreen> {
                   ),
                   error: (err, _) => SliverFillRemaining(
                     child: _ErrorState(
-                      message: err.toString().replaceFirst('Exception: ', ''),
+                      message: UIErrorFormatter.getMessage(err),
                       onRetry: () {
                         if (authUserId != null) {
                           ref.invalidate(vaultHistoryProvider(authUserId));

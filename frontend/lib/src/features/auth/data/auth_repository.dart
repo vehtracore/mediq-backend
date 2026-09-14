@@ -79,10 +79,10 @@ class AuthRepository {
       await _persistSession(response.session);
     } on supabase.AuthException catch (e) {
       throw AppException(e.message, originalException: e);
-    } catch (e) {
+    } catch (error) {
       throw AppException(
-        UIErrorFormatter.getMessage(e),
-        originalException: e,
+        UIErrorFormatter.getMessage(error),
+        originalException: error,
       );
     }
   }
@@ -123,7 +123,7 @@ class AuthRepository {
     try {
       await supabase.Supabase.instance.client.auth.signOut();
     } catch (e) {
-      debugPrint('Supabase logout error: $e');
+      debugPrint('[AUTH] Supabase logout reported an error.');
     }
 
     await _clearStoredSession();
@@ -292,15 +292,10 @@ class AuthRepository {
   /// Returns the updated Doctor profile (status will be 'pending').
   Future<Doctor> reapply({
     String? licenseNumber,
-    String? mdcnLicenseUrl,
-    String? indemnityCertUrl,
   }) async {
     try {
       final Map<String, dynamic> data = {};
       if (licenseNumber != null) data['license_number'] = licenseNumber;
-      if (mdcnLicenseUrl != null) data['mdcn_license_url'] = mdcnLicenseUrl;
-      if (indemnityCertUrl != null)
-        data['indemnity_cert_url'] = indemnityCertUrl;
 
       final response =
           await _dio.post('/api/v1/doctors/me/reapply', data: data);

@@ -6,6 +6,11 @@ MIGRATION = (
     / "migrations"
     / "add_private_consultation_presence.sql"
 )
+TIGHTENING_MIGRATION = (
+    Path(__file__).resolve().parents[1]
+    / "migrations"
+    / "tighten_private_consultation_presence.sql"
+)
 
 
 def _migration_sql() -> str:
@@ -38,3 +43,11 @@ def test_policy_denies_unlinked_identities_by_default() -> None:
     assert "create unique index if not exists uq_users_supabase_auth_id" in sql
     assert "grant execute on function public.is_consultation_realtime_member(text) to authenticated" in sql
     assert "grant select on public.appointments" not in sql
+
+
+def test_policy_denies_former_or_unpaid_consultation_participants() -> None:
+    sql = TIGHTENING_MIGRATION.read_text(encoding="utf-8").lower()
+
+    assert "appointment.status = 'confirmed'" in sql
+    assert "appointment.payment_status = 'paid'" in sql
+    assert "create or replace function public.is_consultation_realtime_member" in sql

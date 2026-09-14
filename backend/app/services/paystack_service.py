@@ -15,9 +15,8 @@ from the environment. The key is never hard-coded.
 
 Error handling
 --------------
-If Paystack returns a non-2xx response or a known error body, the service
-raises HTTPException(400) carrying Paystack's own human-readable message so
-the calling endpoint can surface it directly to the client.
+Provider responses are translated into stable MDQ-owned API errors. Raw
+provider messages remain outside the client contract.
 """
 
 import logging
@@ -28,7 +27,8 @@ from app.services.consultation_pricing import (
 )
 
 import httpx
-from fastapi import HTTPException
+
+from app.core.api_errors import ApiError
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -95,9 +95,8 @@ class PaystackService:
             The ``subaccount_code`` string from Paystack (e.g. "SUB_abc123").
 
         Raises:
-            HTTPException(400): If Paystack rejects the request. The detail
-                                field contains Paystack's own error message.
-            HTTPException(503): If a network-level failure prevents the call.
+            ApiError(400): If the provider rejects the payout details.
+            ApiError(503): If a network-level failure prevents the call.
         """
         endpoint = f"{PAYSTACK_BASE_URL}/subaccount"
         body = {
@@ -120,17 +119,14 @@ class PaystackService:
         except httpx.RequestError as exc:
             # Network-level failure (DNS, timeout, connection refused)
             logger.error(
-                "[PAYSTACK] ❌ Network error creating subaccount: %s: %s",
+                "[PAYSTACK] subaccount network failure_category=%s",
                 type(exc).__name__,
-                exc,
                 exc_info=True,
             )
-            raise HTTPException(
+            raise ApiError(
                 status_code=503,
-                detail=(
-                    "Could not reach Paystack. Please check your connection "
-                    "and try again."
-                ),
+                code="payment_service_unavailable",
+                message="Payout setup is temporarily unavailable. Please try again shortly.",
             ) from exc
 
         # ── Parse and validate Paystack's response ─────────────────────────────
@@ -140,17 +136,16 @@ class PaystackService:
             resp_json = {}
 
         paystack_status: bool = resp_json.get("status", False)
-        paystack_message: str = resp_json.get("message", "Unknown error from Paystack")
-
         if not response.is_success or not paystack_status:
             logger.error(
-                "[PAYSTACK] ❌ Subaccount creation failed | HTTP %s | message='%s'",
+                "[PAYSTACK] subaccount rejected http_status=%s",
                 response.status_code,
-                paystack_message,
             )
-            # Surface Paystack's own message — it's always user-readable
-            # (e.g. "Account number is invalid", "Bank code is invalid")
-            raise HTTPException(status_code=400, detail=paystack_message)
+            raise ApiError(
+                status_code=400,
+                code="invalid_payout_details",
+                message="We couldn't verify these payout details. Check them and try again.",
+            )
 
         subaccount_code: Optional[str] = (
             resp_json.get("data", {}).get("subaccount_code")
@@ -160,9 +155,10 @@ class PaystackService:
                 "[PAYSTACK] response omitted subaccount_code | HTTP %s",
                 response.status_code,
             )
-            raise HTTPException(
-                status_code=400,
-                detail="Paystack did not return a subaccount code. Contact support.",
+            raise ApiError(
+                status_code=502,
+                code="payment_service_unavailable",
+                message="Payout setup is temporarily unavailable. Please try again shortly.",
             )
 
         logger.info(
@@ -189,8 +185,8 @@ class PaystackService:
             (e.g. "ADEBAYO JOHN OLAWALE").
 
         Raises:
-            HTTPException(400): Account not found or bank/number invalid.
-            HTTPException(503): Network-level failure.
+            ApiError(400): Account not found or bank/number invalid.
+            ApiError(503): Network-level failure.
         """
         endpoint = f"{PAYSTACK_BASE_URL}/bank/resolve"
         params = {"account_number": account_number, "bank_code": bank_code}
@@ -208,14 +204,14 @@ class PaystackService:
                 )
         except httpx.RequestError as exc:
             logger.error(
-                "[PAYSTACK] ❌ Network error resolving account: %s: %s",
+                "[PAYSTACK] account-resolution network failure_category=%s",
                 type(exc).__name__,
-                exc,
                 exc_info=True,
             )
-            raise HTTPException(
+            raise ApiError(
                 status_code=503,
-                detail="Could not reach Paystack to verify your account. Please try again.",
+                code="payment_service_unavailable",
+                message="Account verification is temporarily unavailable. Please try again shortly.",
             ) from exc
 
         try:
@@ -224,24 +220,23 @@ class PaystackService:
             resp_json = {}
 
         paystack_status: bool = resp_json.get("status", False)
-        paystack_message: str = resp_json.get("message", "Unknown error from Paystack")
-
         if not response.is_success or not paystack_status:
             logger.warning(
-                "[PAYSTACK] ❌ Account resolution failed | HTTP %s | message='%s'",
+                "[PAYSTACK] account-resolution rejected http_status=%s",
                 response.status_code,
-                paystack_message,
             )
-            raise HTTPException(
+            raise ApiError(
                 status_code=400,
-                detail=paystack_message,  # e.g. "Could not resolve account name"
+                code="invalid_payout_details",
+                message="We couldn't verify that account. Check the bank and account number.",
             )
 
         account_name: Optional[str] = resp_json.get("data", {}).get("account_name")
         if not account_name:
-            raise HTTPException(
-                status_code=400,
-                detail="Paystack returned no account name. Check your account details.",
+            raise ApiError(
+                status_code=502,
+                code="payment_service_unavailable",
+                message="Account verification is temporarily unavailable. Please try again shortly.",
             )
 
         logger.info(
@@ -279,29 +274,29 @@ class PaystackService:
                 )
         except httpx.RequestError as exc:
             logger.error(
-                "[PAYSTACK] Transfer-recipient network error: %s",
-                exc,
+                "[PAYSTACK] transfer-recipient network failure_category=%s",
+                type(exc).__name__,
                 exc_info=True,
             )
-            raise HTTPException(
+            raise ApiError(
                 status_code=503,
-                detail="Payout service is temporarily unavailable.",
+                code="payment_service_unavailable",
+                message="Payout service is temporarily unavailable. Please try again shortly.",
             ) from exc
 
         payload = response.json()
         if not response.is_success or not payload.get("status"):
-            raise HTTPException(
+            raise ApiError(
                 status_code=400,
-                detail=payload.get(
-                    "message",
-                    "Paystack rejected the transfer recipient.",
-                ),
+                code="invalid_payout_details",
+                message="We couldn't verify these payout details. Check them and try again.",
             )
         recipient_code = (payload.get("data") or {}).get("recipient_code")
         if not recipient_code:
-            raise HTTPException(
+            raise ApiError(
                 status_code=502,
-                detail="Paystack did not return a transfer recipient code.",
+                code="payment_service_unavailable",
+                message="Payout service is temporarily unavailable. Please try again shortly.",
             )
         return str(recipient_code)
 
@@ -331,21 +326,22 @@ class PaystackService:
                 )
         except httpx.RequestError as exc:
             logger.error(
-                "[PAYSTACK] Transfer network error for reference=%s: %s",
-                reference,
-                exc,
+                "[PAYSTACK] transfer network failure_category=%s",
+                type(exc).__name__,
                 exc_info=True,
             )
-            raise HTTPException(
+            raise ApiError(
                 status_code=503,
-                detail="Payout service is temporarily unavailable.",
+                code="payment_service_unavailable",
+                message="Payout service is temporarily unavailable. Please try again shortly.",
             ) from exc
 
         payload = response.json()
         if not response.is_success or not payload.get("status"):
-            raise HTTPException(
+            raise ApiError(
                 status_code=400,
-                detail=payload.get("message", "Paystack rejected the transfer."),
+                code="payout_request_rejected",
+                message="The payout could not be submitted. Check its current status before trying again.",
             )
         return payload.get("data") or {}
 
@@ -375,14 +371,14 @@ class PaystackService:
                 )
         except httpx.RequestError as exc:
             logger.error(
-                "[PAYSTACK] Refund network error for transaction=%s: %s",
-                transaction_reference,
-                exc,
+                "[PAYSTACK] refund network failure_category=%s",
+                type(exc).__name__,
                 exc_info=True,
             )
-            raise HTTPException(
+            raise ApiError(
                 status_code=503,
-                detail="Refund service is temporarily unavailable.",
+                code="payment_service_unavailable",
+                message="Refund service is temporarily unavailable. Please try again shortly.",
             ) from exc
 
         try:
@@ -390,9 +386,10 @@ class PaystackService:
         except Exception:
             payload = {}
         if not response.is_success or not payload.get("status"):
-            raise HTTPException(
+            raise ApiError(
                 status_code=400,
-                detail=payload.get("message", "Paystack rejected the refund."),
+                code="refund_request_rejected",
+                message="The refund could not be submitted. Check its current status before trying again.",
             )
         return payload.get("data") or {}
 
@@ -419,8 +416,8 @@ class PaystackService:
             The parsed Paystack response body as a dict.
 
         Raises:
-            HTTPException(400): Paystack rejected the cancellation request.
-            HTTPException(503): Network-level failure reaching Paystack.
+            ApiError(400): The provider rejected the cancellation request.
+            ApiError(503): Network-level failure reaching the provider.
         """
         endpoint = f"{PAYSTACK_BASE_URL}/subscription/disable"
         body = {
@@ -440,17 +437,14 @@ class PaystackService:
                 )
         except httpx.RequestError as exc:
             logger.error(
-                "[PAYSTACK] ❌ Network error disabling subscription: %s: %s",
+                "[PAYSTACK] subscription-disable network failure_category=%s",
                 type(exc).__name__,
-                exc,
                 exc_info=True,
             )
-            raise HTTPException(
+            raise ApiError(
                 status_code=503,
-                detail=(
-                    "Could not reach Paystack to cancel your subscription. "
-                    "Please try again later."
-                ),
+                code="payment_service_unavailable",
+                message="Subscription changes are temporarily unavailable. Please try again shortly.",
             ) from exc
 
         try:
@@ -459,17 +453,15 @@ class PaystackService:
             resp_json = {}
 
         paystack_status: bool = resp_json.get("status", False)
-        paystack_message: str = resp_json.get("message", "Unknown error from Paystack")
-
         if not response.is_success or not paystack_status:
             logger.error(
-                "[PAYSTACK] subscription_disable_rejected http_status=%s code=%s",
+                "[PAYSTACK] subscription-disable rejected http_status=%s",
                 response.status_code,
-                subscription_code,
             )
-            raise HTTPException(
+            raise ApiError(
                 status_code=400,
-                detail='The payment provider could not cancel this subscription.',
+                code="subscription_change_rejected",
+                message="The subscription could not be cancelled. Check its current status before trying again.",
             )
 
         logger.info(
@@ -507,17 +499,14 @@ class PaystackService:
                 )
         except httpx.RequestError as exc:
             logger.error(
-                "[PAYSTACK] ❌ Network error enabling subscription: %s: %s",
+                "[PAYSTACK] subscription-enable network failure_category=%s",
                 type(exc).__name__,
-                exc,
                 exc_info=True,
             )
-            raise HTTPException(
+            raise ApiError(
                 status_code=503,
-                detail=(
-                    "Could not reach Paystack to restore your subscription. "
-                    "Please try again later."
-                ),
+                code="payment_service_unavailable",
+                message="Subscription changes are temporarily unavailable. Please try again shortly.",
             ) from exc
 
         try:
@@ -526,17 +515,15 @@ class PaystackService:
             resp_json = {}
 
         paystack_status: bool = resp_json.get("status", False)
-        paystack_message: str = resp_json.get("message", "Unknown error from Paystack")
-
         if not response.is_success or not paystack_status:
             logger.error(
-                "[PAYSTACK] subscription_enable_rejected http_status=%s code=%s",
+                "[PAYSTACK] subscription-enable rejected http_status=%s",
                 response.status_code,
-                subscription_code,
             )
-            raise HTTPException(
+            raise ApiError(
                 status_code=400,
-                detail='The payment provider could not restore this subscription.',
+                code="subscription_change_rejected",
+                message="The subscription could not be restored. Check its current status before trying again.",
             )
 
         logger.info(

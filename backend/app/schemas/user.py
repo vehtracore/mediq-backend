@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
-from typing import Optional
+from typing import Literal, Optional
 from datetime import date, datetime
 from uuid import UUID
 
@@ -16,10 +16,17 @@ class UserBase(BaseModel):
 # NOTE: password is optional — Supabase Auth owns the credential.
 # This field is retained temporarily for backward compatibility but ignored by the endpoint.
 class UserCreate(UserBase):
+    model_config = ConfigDict(extra="forbid")
+
     password: Optional[str] = None
+    # Public provisioning is patient-only. Doctor onboarding has a dedicated
+    # reviewed flow; admin roles are never accepted from a request body.
+    role: Literal["patient"] = "patient"
 
 # --- 🚀 UPDATED: User Update (Includes Medical & Settings) ---
 class UserUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     location: Optional[str] = None

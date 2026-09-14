@@ -10,8 +10,13 @@ final imageUploadServiceProvider = Provider((ref) => ImageUploadService(ref));
 class TemporaryAiImage {
   final String url;
   final String publicId;
+  final String format;
 
-  const TemporaryAiImage({required this.url, required this.publicId});
+  const TemporaryAiImage({
+    required this.url,
+    required this.publicId,
+    required this.format,
+  });
 }
 
 class ImageUploadService {
@@ -53,9 +58,10 @@ class ImageUploadService {
       return TemporaryAiImage(
         url: response.data['url'] as String,
         publicId: response.data['public_id'] as String,
+        format: response.data['format'] as String,
       );
-    } catch (e) {
-      debugPrint('Temporary AI image upload error: $e');
+    } catch (_) {
+      debugPrint('[AI IMAGE] temporary upload failed.');
       return null;
     }
   }
@@ -75,8 +81,8 @@ class ImageUploadService {
       final response = await dio.post('/api/v1/upload/', data: formData);
 
       return response.data['url'];
-    } catch (e) {
-      debugPrint("Upload Error: $e");
+    } catch (_) {
+      debugPrint('[IMAGE] upload failed.');
       return null;
     }
   }

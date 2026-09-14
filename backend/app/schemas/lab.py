@@ -37,7 +37,6 @@ class LabResultOut(BaseModel):
     """Output schema for LabResult database record"""
     id: int
     user_id: int
-    image_url: Optional[str] = None
     raw_data: Optional[Dict[str, Any]] = None
     is_verified: bool
     lighting_score: Optional[str] = None

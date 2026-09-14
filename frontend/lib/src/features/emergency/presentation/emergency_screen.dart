@@ -91,6 +91,7 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
   bool _servicesLoading = false;
   _NearbySearchState _searchState = _NearbySearchState.waiting;
   bool _alertAttempted = false;
+  bool _locationPermissionPermanentlyDenied = false;
 
   @override
   void initState() {
@@ -107,6 +108,7 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
         _dynamicServices = null;
         _searchState = _NearbySearchState.waiting;
         _locationMessage = 'Detecting location…';
+        _locationPermissionPermanentlyDenied = false;
       });
     }
     try {
@@ -132,8 +134,8 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
       if (permission == LocationPermission.deniedForever) {
         _setLocationUnavailable(
           'Location permission permanently denied. Open Settings to enable.',
+          showSettings: true,
         );
-        await locationService.openAppSettings();
         return;
       }
 
@@ -177,7 +179,10 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
     }
   }
 
-  void _setLocationUnavailable(String message) {
+  void _setLocationUnavailable(
+    String message, {
+    bool showSettings = false,
+  }) {
     if (!mounted) return;
     setState(() {
       _locationMessage = message;
@@ -185,6 +190,7 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
       _servicesLoading = false;
       _dynamicServices = [];
       _searchState = _NearbySearchState.locationUnavailable;
+      _locationPermissionPermanentlyDenied = showSettings;
     });
   }
 
@@ -372,6 +378,17 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
               loading: _gpsLoading,
               message: _locationMessage,
             ),
+            if (_locationPermissionPermanentlyDenied)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () => unawaited(
+                    ref.read(emergencyLocationProvider).openAppSettings(),
+                  ),
+                  icon: const Icon(Icons.settings_outlined),
+                  label: const Text('Open app settings'),
+                ),
+              ),
 
             const SizedBox(height: 28),
 
@@ -473,21 +490,29 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
     final isDark = theme.brightness == Brightness.dark;
 
     return InkWell(
+      key: ValueKey('emergency-service-card-$label'),
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Container(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
         decoration: BoxDecoration(
-          color: isDark ? theme.cardTheme.color : color.withValues(alpha: 0.08),
+          color: isDark
+              ? theme.colorScheme.surfaceContainerHigh
+              : theme.colorScheme.surfaceContainerLowest,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
+          border: Border.all(
+            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+          ),
         ),
         child: Row(
           children: [
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              child: Icon(icon, color: Colors.white, size: 24),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: isDark ? 0.20 : 0.10),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: color, size: 24),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -499,7 +524,7 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : color,
+                      color: theme.colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -626,12 +651,15 @@ class _NearbyLoadingBadge extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 6),
-          Text(
-            'Finding nearby services…',
-            style: TextStyle(
-              fontSize: 11,
-              color: Colors.orange[800],
-              fontWeight: FontWeight.w600,
+          Flexible(
+            child: Text(
+              'Finding nearby services…',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.orange[800],
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],
@@ -658,12 +686,15 @@ class _NearbyFoundBadge extends StatelessWidget {
         children: [
           const Icon(Icons.location_searching, size: 12, color: Colors.green),
           const SizedBox(width: 6),
-          Text(
-            'Nearby services found',
-            style: TextStyle(
-              fontSize: 11,
-              color: Colors.green[800],
-              fontWeight: FontWeight.w600,
+          Flexible(
+            child: Text(
+              'Nearby services found',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.green[800],
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],

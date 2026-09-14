@@ -510,7 +510,7 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text('Could not open link: $e'),
+              content: Text(UIErrorFormatter.getMessage(e)),
               backgroundColor: Colors.red),
         );
       }

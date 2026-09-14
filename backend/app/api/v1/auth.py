@@ -23,7 +23,7 @@ from app.services.notification_device_service import (
 )
 from app.api import deps
 
-from app.services.media_service import upload_image
+from app.services.media_service import delete_sensitive_media, upload_sensitive_media
 from app.core.limiter import limiter
 from app.services.email_guard import (
     email_test_endpoint_enabled,
@@ -156,18 +156,38 @@ def send_email(to_email: str, subject: str, body: str):
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("20/hour")
 @limiter.limit("3/minute")
-def create_user(request: Request, user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.email == user.email).first()
-    if db_user: raise HTTPException(400, detail="Email already registered")
+def create_user(
+    request: Request,
+    user: UserCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    identity: deps.SupabaseIdentity = Depends(deps.get_supabase_identity),
+):
+    if str(user.email).strip().lower() != identity.email:
+        raise HTTPException(403, detail="Signup identity does not match the authenticated account")
+
+    db_user = (
+        db.query(User)
+        .filter(
+            (User.supabase_auth_id == identity.auth_id)
+            | (func.lower(User.email) == identity.email)
+        )
+        .first()
+    )
+    if db_user:
+        if db_user.supabase_auth_id == identity.auth_id:
+            return db_user
+        raise HTTPException(409, detail="Email is already linked to another account")
     
     new_user = User(
-        email=user.email, 
+        email=identity.email,
+        supabase_auth_id=identity.auth_id,
         first_name=user.first_name, 
         last_name=user.last_name, 
         dob=user.dob, 
         location=user.location, 
         hashed_password="SUPABASE_MANAGED",   # Placeholder — password lives in Supabase Auth
-        role=user.role,
+        role="patient",
         is_verified=True,                      # Supabase handles email verification
         verification_token=None,
     )
@@ -248,11 +268,27 @@ async def register_doctor(
     mdcn_license: UploadFile = File(...),
     indemnity_certificate: UploadFile = File(...),
     db: Session = Depends(get_db),
+    identity: deps.SupabaseIdentity = Depends(deps.get_supabase_identity),
 ):
     email = email.strip().lower()
+    if email != identity.email:
+        raise HTTPException(403, detail="Doctor identity does not match the authenticated account")
     license_number = license_number.strip()
-    if db.query(User).filter(func.lower(User.email) == email).first():
-        raise HTTPException(400, detail="Email already registered")
+    existing_user = (
+        db.query(User)
+        .filter(
+            (User.supabase_auth_id == identity.auth_id)
+            | (func.lower(User.email) == email)
+        )
+        .first()
+    )
+    if existing_user is not None:
+        existing_doctor = (
+            db.query(Doctor).filter(Doctor.user_id == existing_user.id).first()
+        )
+        if existing_user.supabase_auth_id == identity.auth_id and existing_doctor:
+            return existing_user
+        raise HTTPException(409, detail="Email is already linked to another account")
     if (
         db.query(Doctor)
         .filter(func.lower(Doctor.license_number) == license_number.lower())
@@ -260,15 +296,27 @@ async def register_doctor(
     ):
         raise HTTPException(400, detail="License already registered")
 
-    # Upload both documents to Cloudinary
-    mdcn_license_url = await upload_image(mdcn_license, folder="mdq_plus/doctor_licenses")
-    indemnity_cert_url = await upload_image(indemnity_certificate, folder="mdq_plus/indemnity_certs")
+    # Upload both documents using authenticated delivery. Stable identifiers,
+    # never permanent delivery URLs, are stored in the application record.
+    mdcn_asset = await upload_sensitive_media(
+        mdcn_license,
+        media_class="doctor_license",
+    )
+    try:
+        indemnity_asset = await upload_sensitive_media(
+            indemnity_certificate,
+            media_class="doctor_indemnity",
+        )
+    except Exception:
+        delete_sensitive_media(mdcn_asset)
+        raise
 
     names = full_name.split(" ")
     
     # ✅ Doctor user is INACTIVE initially — password lives in Supabase Auth
     new_user = User(
         email=email, 
+        supabase_auth_id=identity.auth_id,
         first_name=names[0], 
         last_name=names[-1] if len(names)>1 else "", 
         hashed_password="SUPABASE_MANAGED",
@@ -280,15 +328,36 @@ async def register_doctor(
         verification_token=None,
     )
     db.add(new_user)
-    db.flush()
+    try:
+        db.flush()
+    except Exception as exc:
+        db.rollback()
+        delete_sensitive_media(mdcn_asset)
+        delete_sensitive_media(indemnity_asset)
+        logger.error(
+            "[DOCTOR REGISTRATION] Persistence failed failure_category=%s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Doctor application could not be saved. Please try again.",
+        ) from exc
 
     new_doctor = Doctor(
         user_id=new_user.id, 
         full_name=full_name, 
         specialty=specialty, 
         license_number=license_number,
-        mdcn_license_url=mdcn_license_url,
-        indemnity_cert_url=indemnity_cert_url,
+        mdcn_license_url=None,
+        indemnity_cert_url=None,
+        mdcn_license_public_id=mdcn_asset.public_id,
+        mdcn_license_resource_type=mdcn_asset.resource_type,
+        mdcn_license_format=mdcn_asset.format,
+        mdcn_license_delivery_type=mdcn_asset.delivery_type,
+        indemnity_cert_public_id=indemnity_asset.public_id,
+        indemnity_cert_resource_type=indemnity_asset.resource_type,
+        indemnity_cert_format=indemnity_asset.format,
+        indemnity_cert_delivery_type=indemnity_asset.delivery_type,
         is_verified=False, 
         is_available=False, 
         hourly_rate=4000.0,
@@ -297,8 +366,21 @@ async def register_doctor(
         status="pending" # ✅ Pending State
     )
     db.add(new_doctor)
-    db.commit()
-    db.refresh(new_user)
+    try:
+        db.commit()
+        db.refresh(new_user)
+    except Exception as exc:
+        db.rollback()
+        delete_sensitive_media(mdcn_asset)
+        delete_sensitive_media(indemnity_asset)
+        logger.error(
+            "[DOCTOR REGISTRATION] Persistence failed failure_category=%s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Doctor application could not be saved. Please try again.",
+        ) from exc
 
     # ✅ Email 1: Confirmation to Doctor
     background_tasks.add_task(
