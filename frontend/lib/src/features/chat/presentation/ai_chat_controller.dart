@@ -55,11 +55,13 @@ class AiChatController extends StateNotifier<AiChatState> {
   final List<String> _unsummarizedTurns = [];
   int _requestSequence = 0;
   String? _pendingSaveRequestId;
+  ApiFailure? _lastSaveFailure;
 
   AiChatController(this._dio, this._subscriptionTier, this.continuation)
       : super(AiChatState());
 
   String? get sourceSummaryId => continuation?.summaryId;
+  ApiFailure? get lastSaveFailure => _lastSaveFailure;
   bool get hasPaidContinuity =>
       {'premium', 'family'}.contains(_subscriptionTier);
 
@@ -424,6 +426,7 @@ INSTRUCTION: Analyze these results. If any values are abnormal (Positive/High), 
     if (!hasPaidContinuity) return false;
     if (state.isLoading) return false;
     state = state.copyWith(isLoading: true);
+    _lastSaveFailure = null;
 
     try {
       _pendingSaveRequestId ??= _nextRequestId();
@@ -444,8 +447,18 @@ INSTRUCTION: Analyze these results. If any values are abnormal (Positive/High), 
       if (!mounted) return false;
       state = state.copyWith(isLoading: false);
       return true;
+    } on DioException catch (e) {
+      _lastSaveFailure = ApiErrorMapper.map(e);
+      debugPrint(
+        '[AiChatController] summary save failed '
+        'status=${_lastSaveFailure?.statusCode} code=${_lastSaveFailure?.code}.',
+      );
+      if (!mounted) return false;
+      state = state.copyWith(isLoading: false);
+      return false;
     } catch (e) {
-      debugPrint('[AiChatController] summary save failed.');
+      _lastSaveFailure = ApiErrorMapper.map(e);
+      debugPrint('[AiChatController] summary save failed unexpectedly.');
       if (!mounted) return false;
       state = state.copyWith(isLoading: false);
       return false;

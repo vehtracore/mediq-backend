@@ -41,7 +41,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from sqlalchemy import or_
@@ -2631,6 +2631,23 @@ async def verify_transaction(
         )
 
     # â”€â”€ 2. Inspect Paystack's verdict â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    if resp.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+        raw_retry_after = resp.headers.get("Retry-After", "")
+        try:
+            retry_after = min(300, max(1, int(raw_retry_after)))
+        except (TypeError, ValueError):
+            retry_after = 60
+        logger.warning(
+            "[VERIFY] provider_rate_limited reference=%s retry_after=%s",
+            reference,
+            retry_after,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Payment verification is temporarily rate limited. Please try again shortly.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     if not paystack_data.get("status"):
         logger.warning(
             "[VERIFY] provider_rejected reference=%s http_status=%s",

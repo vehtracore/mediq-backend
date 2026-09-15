@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -62,6 +63,9 @@ class SensitiveMediaAsset:
     resource_type: str
     format: str
     delivery_type: str = "authenticated"
+    sha256_digest: str | None = None
+    size_bytes: int | None = None
+    mime_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -163,7 +167,6 @@ async def upload_image(
     """Validate and upload an image/PDF to an approved Cloudinary folder."""
     clean_folder = validate_upload_folder(folder)
     content = await read_validated_upload(file, allowed_types=allowed_types)
-
     try:
         response = cloudinary.uploader.upload(
             content,
@@ -200,6 +203,8 @@ async def upload_sensitive_media(
         raise ValueError("Unknown sensitive media class")
     folder, allowed_types = policy
     content = await read_validated_upload(file, allowed_types=allowed_types)
+    detected_type = detect_upload_media_type(content)
+    digest = hashlib.sha256(content).hexdigest()
 
     try:
         response = cloudinary.uploader.upload(
@@ -221,6 +226,9 @@ async def upload_sensitive_media(
             resource_type=resource_type,
             format=asset_format,
             delivery_type="authenticated",
+            sha256_digest=digest,
+            size_bytes=len(content),
+            mime_type=detected_type,
         )
     except HTTPException:
         raise

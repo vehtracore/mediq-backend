@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import inspect
 import io
 import logging
@@ -326,6 +327,9 @@ def test_sensitive_upload_uses_server_namespace_and_authenticated_delivery():
         )
 
     assert asset.public_id == provider_result["public_id"]
+    assert asset.sha256_digest == hashlib.sha256(PNG).hexdigest()
+    assert asset.size_bytes == len(PNG)
+    assert asset.mime_type == "image/png"
     assert uploader.call_args.kwargs["folder"] == "mdq_plus/doctor_licenses"
     assert uploader.call_args.kwargs["type"] == "authenticated"
     assert "public_id" not in uploader.call_args.kwargs

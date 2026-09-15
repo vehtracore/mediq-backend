@@ -5,12 +5,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mediq_app/src/core/api/api_constants.dart';
+import 'package:mediq_app/src/core/api/api_error_mapper.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/core/constants/api_keys.dart';
 import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
 import 'package:mediq_app/src/features/appointments/presentation/schedule_screen.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/patient_dashboard/patient_home_screen.dart';
+import 'package:mediq_app/src/features/payments/domain/payment_verification_policy.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Payment screen — secure server-side checkout flow.
@@ -70,7 +72,9 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
   String? _verificationMessage;
   String? _authorizationUrl;
   Timer? _verificationPollTimer;
-  int _verificationPollAttempts = 0;
+  final _verificationBudget = PaymentVerificationBudget();
+  DateTime? _lastVerificationRequestAt;
+  DateTime? _verificationNotBefore;
 
   /// The reference used for this checkout session (either pre-supplied by the
   /// backend or generated locally).
@@ -114,8 +118,15 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
         !_hasAutoVerifiedForCurrentCheckout &&
         !_isVerifying) {
       _hasAutoVerifiedForCurrentCheckout = true;
-      _verifyPayment();
+      unawaited(_verifyOnResume());
     }
+  }
+
+  Future<void> _verifyOnResume() async {
+    _verificationPollTimer?.cancel();
+    _verificationPollTimer = null;
+    await _verifyPayment();
+    _startVerificationPolling();
   }
 
   // ── Checkout logic ───────────────────────────────────────────────────────────
@@ -239,11 +250,12 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
         if (mounted) {
           setState(() {
             _awaitingWebhook = true;
+            _hasOpenedCheckout = true;
             _verificationMessage =
                 'This checkout already exists. Checking its payment status...';
           });
-          _startVerificationPolling();
           await _verifyPayment();
+          _startVerificationPolling();
         }
         return;
       }
@@ -280,27 +292,36 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
   }
 
   void _startVerificationPolling() {
-    _verificationPollTimer?.cancel();
-    _verificationPollAttempts = 0;
-    _verificationPollTimer =
-        Timer.periodic(const Duration(seconds: 3), (timer) async {
+    if (_verificationPollTimer?.isActive == true || !_awaitingWebhook) return;
+    final requestedDelay = _verificationBudget.nextAutomaticDelay;
+    if (requestedDelay == null) {
+      if (_verificationNotBefore?.isAfter(DateTime.now()) == true) return;
+      if (mounted) {
+        setState(() {
+          _verificationMessage =
+              'Payment is not confirmed yet. Use "Check payment status" after completing checkout.';
+        });
+      }
+      return;
+    }
+    final delay = PaymentVerificationPolicy.effectiveDelay(
+      requestedDelay: requestedDelay,
+      now: DateTime.now(),
+      lastRequestAt: _lastVerificationRequestAt,
+      notBefore: _verificationNotBefore,
+    );
+    _verificationPollTimer = Timer(delay, () async {
+      _verificationPollTimer = null;
       if (!mounted || !_awaitingWebhook) {
-        timer.cancel();
         return;
       }
-      if (_verificationPollAttempts >= 40) {
-        timer.cancel();
-        if (mounted) {
-          setState(() {
-            _verificationMessage =
-                'Payment is not confirmed yet. Use "Check payment status" after completing checkout.';
-          });
-        }
+      if (_isVerifying) {
+        _startVerificationPolling();
         return;
       }
-      if (_isVerifying) return;
-      _verificationPollAttempts += 1;
+      _verificationBudget.recordAutomaticAttempt();
       await _verifyPayment(silent: true);
+      _startVerificationPolling();
     });
   }
 
@@ -323,6 +344,24 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
 
   Future<void> _verifyPayment({bool silent = false}) async {
     if (_isVerifying || !mounted) return;
+
+    final now = DateTime.now();
+    final delay = PaymentVerificationPolicy.effectiveDelay(
+      requestedDelay: Duration.zero,
+      now: now,
+      lastRequestAt: _lastVerificationRequestAt,
+      notBefore: _verificationNotBefore,
+    );
+    if (delay > Duration.zero) {
+      if (!silent) {
+        setState(() {
+          _verificationMessage =
+              'Please wait ${delay.inSeconds + 1} seconds before checking again.';
+        });
+      }
+      return;
+    }
+    _lastVerificationRequestAt = now;
 
     setState(() {
       _isVerifying = true;
@@ -355,9 +394,15 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen>
         });
       }
     } on DioException catch (e) {
-      if (mounted && !silent) {
+      final failure = ApiErrorMapper.map(e);
+      if (failure.kind == ApiFailureKind.rateLimited) {
+        final retryAfter =
+            failure.retryAfter ?? PaymentVerificationPolicy.defaultRetryAfter;
+        _verificationNotBefore = DateTime.now().add(retryAfter);
+      }
+      if (mounted && (!silent || failure.kind == ApiFailureKind.rateLimited)) {
         setState(() {
-          _verificationMessage = UIErrorFormatter.getMessage(e);
+          _verificationMessage = failure.message;
         });
       }
     } catch (e) {

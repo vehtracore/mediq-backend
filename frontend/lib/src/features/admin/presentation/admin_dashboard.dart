@@ -20,8 +20,34 @@ final adminStatsProvider = FutureProvider.autoDispose((ref) async {
 
 final unverifiedDoctorsProvider = FutureProvider.autoDispose((ref) async {
   final dio = ref.watch(dioProvider);
-  final response = await dio.get('/api/v1/admin/doctors/pending');
-  return response.data;
+  final responses = await Future.wait([
+    dio.get('/api/v1/admin/verification-submissions/pending'),
+    dio.get('/api/v1/admin/doctors/pending'),
+  ]);
+  final submissions = List<dynamic>.from(responses[0].data as List);
+  final legacyDoctors = List<dynamic>.from(responses[1].data as List);
+  return [
+    ...submissions,
+    ...legacyDoctors.map((item) {
+      final doctor = Map<String, dynamic>.from(item as Map);
+      return {
+        'id': 'legacy-${doctor['id']}',
+        'doctor_id': doctor['id'],
+        'doctor_full_name': doctor['full_name'],
+        'specialty_snapshot': doctor['specialty'],
+        'license_number_snapshot': doctor['license_number'],
+        'submission_type': 'legacy application',
+        'submitted_at': null,
+        'documents': const [],
+        'legacy': true,
+        'mdcn_license_available': doctor['mdcn_license_available'],
+        'indemnity_certificate_available':
+            doctor['indemnity_certificate_available'],
+        'verification_media_migration_required':
+            doctor['verification_media_migration_required'],
+      };
+    }),
+  ];
 });
 
 /// Purpose: Drives the user management table in the Admin Dashboard, allowing administrators
@@ -83,9 +109,16 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
     super.dispose();
   }
 
-  Future<void> _verifyDoctor(int id) async {
+  Future<void> _verifyDoctor(Map<String, dynamic> submission) async {
     try {
-      await ref.read(dioProvider).put('/api/v1/admin/doctors/$id/verify');
+      if (submission['legacy'] == true) {
+        await ref
+            .read(dioProvider)
+            .put('/api/v1/admin/doctors/${submission['doctor_id']}/verify');
+      } else {
+        await ref.read(dioProvider).put(
+            '/api/v1/admin/verification-submissions/${submission['id']}/approve');
+      }
       // Ã¢Å“â€¦ FIX: Use invalidate() Ã¢â‚¬â€ consistent with _rejectDoctor
       ref.invalidate(unverifiedDoctorsProvider);
       ref.invalidate(adminStatsProvider);
@@ -101,12 +134,15 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
     }
   }
 
-  Future<void> _rejectDoctor(int id, String reason) async {
+  Future<void> _rejectDoctor(
+      Map<String, dynamic> submission, String reason) async {
     try {
-      await ref.read(dioProvider).post(
-        '/api/v1/admin/doctors/$id/reject',
-        data: {'rejection_reason': reason},
-      );
+      final path = submission['legacy'] == true
+          ? '/api/v1/admin/doctors/${submission['doctor_id']}/reject'
+          : '/api/v1/admin/verification-submissions/${submission['id']}/reject';
+      await ref
+          .read(dioProvider)
+          .post(path, data: {'rejection_reason': reason});
       // Ã¢Å“â€¦ FIX: Use invalidate() Ã¢â‚¬â€ the correct method for autoDispose providers.
       // ref.refresh() on an autoDispose provider can silently no-op if the
       // provider was already disposed. invalidate() guarantees a cache bust
@@ -244,16 +280,12 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
   }
 
   Future<void> _openDoctorDocument(
-    int doctorId,
-    String documentKind,
+    String documentId,
     String title,
   ) async {
     try {
       final access = await SensitiveMediaAccessClient(ref.read(dioProvider))
-          .doctorDocument(
-        doctorId: doctorId,
-        documentKind: documentKind,
-      );
+          .verificationDocument(documentId);
       final url = access.url;
       final format = access.format.toLowerCase();
 
@@ -303,8 +335,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                         onPressed: () {
                           Navigator.pop(ctx);
                           _openDoctorDocument(
-                            doctorId,
-                            documentKind,
+                            documentId,
                             title,
                           );
                         },
@@ -319,6 +350,39 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
         ),
       );
       await provider.evict();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(UIErrorFormatter.getMessage(error))),
+      );
+    }
+  }
+
+  Future<void> _openLegacyDoctorDocument(
+    int doctorId,
+    String documentKind,
+    String title,
+  ) async {
+    try {
+      final access = await SensitiveMediaAccessClient(ref.read(dioProvider))
+          .doctorDocument(
+        doctorId: doctorId,
+        documentKind: documentKind,
+      );
+      if (access.format.toLowerCase() == 'pdf') {
+        final opened = await launchUrl(
+          Uri.parse(access.url),
+          mode: LaunchMode.externalApplication,
+        );
+        if (!opened) throw StateError('document viewer unavailable');
+      } else if (mounted) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => Dialog(
+            child: InteractiveViewer(child: Image.network(access.url)),
+          ),
+        );
+      }
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -549,14 +613,23 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                 padding: const EdgeInsets.all(16),
                 itemCount: doctors.length,
                 itemBuilder: (ctx, i) {
-                  final licenseNumber = doctors[i]['license_number'] ?? "";
-                  final hasLicense =
-                      doctors[i]['mdcn_license_available'] == true;
-                  final hasIndemnity =
-                      doctors[i]['indemnity_certificate_available'] == true;
-                  final needsMigration = doctors[i]
-                          ['verification_media_migration_required'] ==
-                      true;
+                  final submission = Map<String, dynamic>.from(doctors[i]);
+                  final isLegacy = submission['legacy'] == true;
+                  final documents =
+                      (submission['documents'] as List? ?? const [])
+                          .map((item) => Map<String, dynamic>.from(item as Map))
+                          .toList();
+                  Map<String, dynamic>? documentOfKind(String kind) {
+                    for (final document in documents) {
+                      if (document['document_kind'] == kind) return document;
+                    }
+                    return null;
+                  }
+
+                  final license = documentOfKind('mdcn_license');
+                  final indemnity = documentOfKind('indemnity_certificate');
+                  final licenseNumber =
+                      submission['license_number_snapshot'] ?? "";
                   final theme = Theme.of(ctx);
 
                   return Card(
@@ -566,10 +639,10 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                         ListTile(
                           leading: const CircleAvatar(
                               child: Icon(Icons.local_hospital)),
-                          title: Text(doctors[i]['full_name'],
+                          title: Text(submission['doctor_full_name'],
                               style: theme.textTheme.bodyLarge),
                           subtitle: Text(
-                              doctors[i]['specialty'] ?? "Specialist",
+                              submission['specialty_snapshot'] ?? "Specialist",
                               style: theme.textTheme.bodyMedium),
                         ),
                         Padding(
@@ -579,35 +652,65 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                             children: [
                               Text("License: $licenseNumber",
                                   style: const TextStyle(color: Colors.grey)),
-                              if (needsMigration)
+                              Text(
+                                "${submission['submission_type']} • submitted ${_formatTimestamp(submission['submitted_at'])}",
+                                style: const TextStyle(color: Colors.grey),
+                              ),
+                              if (isLegacy)
                                 const Text(
-                                  "Documents require secure-media migration.",
+                                  'Legacy application: history is unknown and has not been inferred.',
                                   style: TextStyle(color: Colors.orange),
                                 ),
                               Wrap(
                                 spacing: 8,
                                 crossAxisAlignment: WrapCrossAlignment.center,
                                 children: [
-                                  if (hasLicense)
+                                  if (license != null)
                                     TextButton.icon(
                                       onPressed: () => _openDoctorDocument(
-                                        doctors[i]['id'],
-                                        'mdcn-license',
+                                        license['id'].toString(),
                                         'Medical License',
                                       ),
                                       icon: const Icon(Icons.image, size: 18),
                                       label: const Text("View License"),
                                     ),
-                                  if (hasIndemnity)
+                                  if (isLegacy &&
+                                      submission['mdcn_license_available'] ==
+                                          true)
+                                    TextButton.icon(
+                                      onPressed: () =>
+                                          _openLegacyDoctorDocument(
+                                        submission['doctor_id'] as int,
+                                        'mdcn-license',
+                                        'Medical License',
+                                      ),
+                                      icon: const Icon(Icons.image, size: 18),
+                                      label: const Text('View License'),
+                                    ),
+                                  if (indemnity != null)
                                     TextButton.icon(
                                       onPressed: () => _openDoctorDocument(
-                                        doctors[i]['id'],
-                                        'indemnity-certificate',
+                                        indemnity['id'].toString(),
                                         'Indemnity Certificate',
                                       ),
                                       icon: const Icon(Icons.description,
                                           size: 18),
                                       label: const Text("View Indemnity"),
+                                    ),
+                                  if (isLegacy &&
+                                      submission[
+                                              'indemnity_certificate_available'] ==
+                                          true)
+                                    TextButton.icon(
+                                      onPressed: () =>
+                                          _openLegacyDoctorDocument(
+                                        submission['doctor_id'] as int,
+                                        'indemnity-certificate',
+                                        'Indemnity Certificate',
+                                      ),
+                                      icon: const Icon(Icons.description,
+                                          size: 18),
+                                      label: const Text('View Indemnity'),
                                     ),
                                 ],
                               ),
@@ -653,8 +756,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                                                   if (reason.isNotEmpty) {
                                                     Navigator.pop(context);
                                                     _rejectDoctor(
-                                                        doctors[i]['id'],
-                                                        reason);
+                                                        submission, reason);
                                                   }
                                                 },
                                                 style: ElevatedButton.styleFrom(
@@ -681,7 +783,7 @@ class _AdminDashboardState extends ConsumerState<AdminDashboard> {
                                         elevation: 0,
                                       ),
                                       onPressed: () =>
-                                          _verifyDoctor(doctors[i]['id'])),
+                                          _verifyDoctor(submission)),
                                 ],
                               ),
                             ],

@@ -40,6 +40,15 @@ class SensitiveMediaAccessClient {
     );
   }
 
+  Future<SensitiveMediaAccess> verificationDocument(String documentId) async {
+    final response = await _dio.get(
+      '/api/v1/media/verification-documents/$documentId/access',
+    );
+    return SensitiveMediaAccess.fromJson(
+      Map<String, dynamic>.from(response.data as Map),
+    );
+  }
+
   Future<SensitiveMediaAccess> labImage(int recordId) async {
     final response = await _dio.get(
       '/api/v1/media/lab-images/$recordId/access',

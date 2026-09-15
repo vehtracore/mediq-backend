@@ -1,6 +1,8 @@
 
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+from datetime import datetime
 from typing import Literal, Optional
+from uuid import UUID
 
 class DoctorBase(BaseModel):
     full_name: str
@@ -72,6 +74,40 @@ class ReapplyRequest(BaseModel):
     """Payload a rejected doctor submits when re-applying for verification."""
     license_number: Optional[str] = None          # Corrected MDCN number
     model_config = ConfigDict(extra="forbid")
+
+
+class VerificationDocumentResponse(BaseModel):
+    id: UUID
+    document_kind: Literal["mdcn_license", "indemnity_certificate"]
+    format: str
+    mime_type: str
+    size_bytes: int
+    uploaded_at: datetime
+    sha256_digest: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VerificationSubmissionResponse(BaseModel):
+    id: UUID
+    doctor_id: int
+    submission_type: Literal[
+        "initial", "reapplication", "reverification", "legacy_import"
+    ]
+    status: Literal["pending", "approved", "rejected", "historical_unknown"]
+    submitted_at: datetime
+    reviewed_at: Optional[datetime] = None
+    reviewed_by_user_id: Optional[int] = None
+    rejection_reason: Optional[str] = None
+    supersedes_submission_id: Optional[UUID] = None
+    license_number_snapshot: str
+    specialty_snapshot: str
+    documents: list[VerificationDocumentResponse]
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminVerificationSubmissionResponse(VerificationSubmissionResponse):
+    doctor_full_name: str
+    doctor_user_id: int
 
 
 class PayoutSettingsRequest(BaseModel):

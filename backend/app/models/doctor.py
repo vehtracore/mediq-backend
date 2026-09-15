@@ -7,6 +7,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Uuid,
 )
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -49,6 +50,12 @@ class Doctor(Base):
     rejection_reason = Column(String, nullable=True)  # Admin's reason for rejection
     is_verified = Column(Boolean, default=False, index=True)
     documents_url = Column(String, nullable=True)
+    # Nullable during the additive transition. Legacy approved doctors remain
+    # governed by is_verified/status until an evidence package is imported.
+    current_verification_submission_id = Column(
+        Uuid(as_uuid=True),
+        nullable=True,
+    )
 
     # --- 💳 PAYSTACK SUBACCOUNT (added 2026-04-22) ---
     # Stored after a doctor completes bank onboarding. Used to route commission
@@ -86,4 +93,9 @@ class Doctor(Base):
             or (self.indemnity_cert_url and not self.indemnity_certificate_available)
             or (self.documents_url and not self.mdcn_license_available)
         )
+
+
+# Register the additive evidence tables whenever Doctor is imported so its
+# current_verification_submission_id foreign key can always resolve.
+from app.models import doctor_verification as _doctor_verification  # noqa: E402,F401
 

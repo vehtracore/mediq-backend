@@ -2,12 +2,14 @@
 import logging
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.doctor import Doctor
+from app.models.doctor_verification import DoctorVerificationSubmission
 from app.models.user import User
 from app.models.appointment import Appointment
 from app.models.consultation_payout import ConsultationPayout
@@ -16,7 +18,6 @@ from app.schemas.doctor import (
     DoctorUpdate,
     PayoutSettingsRequest,
     PublicDoctorResponse,
-    ReapplyRequest,
 )
 from app.api import deps
 from app.services.consultation_pricing import (
@@ -28,24 +29,30 @@ from app.services.consultation_payout_service import (
     PAYOUT_AMOUNT_SYNC_STATUSES,
     expected_consultation_payout_amount,
 )
+from app.services.doctor_verification_service import (
+    create_submission,
+    latest_terminal_submission,
+)
+from app.services.media_service import (
+    delete_sensitive_media,
+    upload_sensitive_media,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter()
 
-@router.post("/me/reapply", response_model=DoctorResponse)
-def reapply_for_verification(
-    payload: ReapplyRequest,
+@router.post("/me/reapply")
+@router.post("/me/verification-submissions")
+async def reapply_for_verification(
+    license_number: str | None = Form(None),
+    mdcn_license: UploadFile = File(...),
+    indemnity_certificate: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
+    current_user: User = Depends(deps.get_doctor_onboarding_user),
 ):
     """
-    Allows a rejected doctor to submit corrected registration details and re-apply.
-    Resets their status back to 'pending' for admin review.
-
-    Document replacement is intentionally not accepted as a client URL. The
-    existing restricted evidence remains attached until a versioned document
-    record workflow is approved.
+    Commit a new evidence package for a rejected applicant or active doctor.
     """
     if current_user.role != "doctor":
         raise HTTPException(status_code=403, detail="Only doctors can reapply")
@@ -54,33 +61,66 @@ def reapply_for_verification(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor profile not found")
 
-    if doctor.status != "rejected":
+    is_reapplication = doctor.status == "rejected" and not doctor.is_verified
+    is_reverification = (
+        doctor.status == "active"
+        and doctor.is_verified
+    )
+    if not (is_reapplication or is_reverification):
         raise HTTPException(
-            status_code=400,
-            detail=f"Cannot reapply: current status is '{doctor.status}'. Only rejected doctors may reapply."
+            status_code=409,
+            detail="Credentials cannot be submitted in the current account state.",
         )
 
-    # Apply any corrected fields the doctor provided
-    if payload.license_number:
-        # Ensure no other doctor is already using the new license number
-        existing = db.query(Doctor).filter(
-            Doctor.license_number == payload.license_number,
+    if db.query(DoctorVerificationSubmission.id).filter(
+        DoctorVerificationSubmission.doctor_id == doctor.id,
+        DoctorVerificationSubmission.status == "pending",
+    ).first() is not None:
+        raise HTTPException(status_code=409, detail="A verification submission is already pending review.")
+
+    normalized_license = (license_number or doctor.license_number or "").strip()
+    if not normalized_license:
+        raise HTTPException(status_code=422, detail="License number is required.")
+    existing = db.query(Doctor).filter(
+            func.lower(Doctor.license_number) == normalized_license.lower(),
             Doctor.id != doctor.id
         ).first()
-        if existing:
-            raise HTTPException(status_code=400, detail="That license number is already registered to another account")
-        doctor.license_number = payload.license_number
+    if existing:
+        raise HTTPException(status_code=400, detail="That license number is already registered to another account")
 
-    # Reset back to pending for admin re-review
-    doctor.status = "pending"
-    doctor.is_verified = False
-    doctor.rejection_reason = None   # Clear the old rejection reason
+    mdcn_asset = await upload_sensitive_media(mdcn_license, media_class="doctor_license")
+    try:
+        indemnity_asset = await upload_sensitive_media(
+            indemnity_certificate, media_class="doctor_indemnity"
+        )
+    except Exception:
+        delete_sensitive_media(mdcn_asset)
+        raise
 
     try:
+        previous = latest_terminal_submission(db, doctor.id)
+        submission = create_submission(
+            db,
+            doctor=doctor,
+            submission_type="reapplication" if is_reapplication else "reverification",
+            license_number=normalized_license,
+            specialty=doctor.specialty,
+            mdcn_asset=mdcn_asset,
+            indemnity_asset=indemnity_asset,
+            supersedes_submission_id=previous.id if previous else None,
+        )
+        if is_reapplication:
+            doctor.status = "pending"
+            doctor.rejection_reason = None
+            current_user.is_active = False
         db.commit()
-        db.refresh(doctor)
+        submission_id = submission.id
     except Exception as e:
         db.rollback()
+        delete_sensitive_media(mdcn_asset)
+        delete_sensitive_media(indemnity_asset)
+        if isinstance(e, HTTPException):
+            raise
         logger.error(
             "[DOCTOR REAPPLY] Persistence failed failure_category=%s",
             type(e).__name__,
@@ -90,7 +130,7 @@ def reapply_for_verification(
             detail="Application could not be resubmitted. Please try again.",
         ) from e
 
-    return doctor
+    return {"submission_id": submission_id, "status": "pending"}
 
 @router.get("/", response_model=List[PublicDoctorResponse])
 def read_doctors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):

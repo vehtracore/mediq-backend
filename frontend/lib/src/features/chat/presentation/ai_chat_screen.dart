@@ -626,12 +626,16 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
                     .read(aiChatControllerProvider(_continuation).notifier)
                     .saveSummary();
                 if (!mounted) return;
+                final saveFailure = ref
+                    .read(aiChatControllerProvider(_continuation).notifier)
+                    .lastSaveFailure;
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
                       success
                           ? '✅ Summary saved to Health Vault!'
-                          : 'Couldn’t save this chat. Please try again.',
+                          : saveFailure?.message ??
+                              'Couldn’t save this chat. Please try again.',
                     ),
                     duration: const Duration(seconds: 2),
                   ),

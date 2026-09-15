@@ -67,4 +67,21 @@ void main() {
     expect(access.expiresAt.toUtc(), DateTime.utc(2026, 9, 14, 12, 5));
     expect(access.expiresIn, lessThanOrEqualTo(300));
   });
+
+  test('admin viewer requests evidence by logical document UUID', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'));
+    final adapter = _SensitiveMediaAdapter();
+    dio.httpClientAdapter = adapter;
+
+    const documentId = '7a8eaf41-d45d-4459-9848-e0f16ec0bd99';
+    final access =
+        await SensitiveMediaAccessClient(dio).verificationDocument(documentId);
+
+    expect(
+      adapter.requests.single.path,
+      '/api/v1/media/verification-documents/$documentId/access',
+    );
+    expect(access.expiresIn, 300);
+    expect(adapter.requests.single.queryParameters, isEmpty);
+  });
 }

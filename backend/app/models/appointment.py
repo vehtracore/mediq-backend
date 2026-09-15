@@ -6,9 +6,11 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import relationship
 from datetime import datetime, timedelta, timezone
@@ -43,6 +45,19 @@ class Appointment(Base):
             "appointment_type IS NULL OR appointment_type IN "
             "('general_queue', 'specialist_scheduled', 'vip_request')",
             name="ck_appointments_appointment_type",
+        ),
+        Index(
+            "uq_appointments_one_active_general_queue_per_patient",
+            "patient_id",
+            unique=True,
+            postgresql_where=text(
+                "appointment_type = 'general_queue' "
+                "AND status IN ('pending', 'confirmed')"
+            ),
+            sqlite_where=text(
+                "appointment_type = 'general_queue' "
+                "AND status IN ('pending', 'confirmed')"
+            ),
         ),
     )
 

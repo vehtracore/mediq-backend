@@ -139,6 +139,32 @@ def get_supabase_identity(token: str = Depends(oauth2_scheme)) -> SupabaseIdenti
     )
 
 
+def get_doctor_onboarding_user(
+    identity: SupabaseIdentity = Depends(get_supabase_identity),
+    db: Session = Depends(get_db),
+) -> User:
+    """Narrow identity gate for credential submission and onboarding reads.
+
+    This deliberately does not grant operational doctor access. Routes using
+    it must be limited to the caller's own verification application.
+    """
+    from app.models.doctor import Doctor
+
+    user = (
+        db.query(User)
+        .filter(User.supabase_auth_id == identity.auth_id)
+        .first()
+    )
+    if user is None or user.role != "doctor" or user.is_banned:
+        raise HTTPException(status_code=403, detail="Doctor onboarding access denied")
+    owns_application = (
+        db.query(Doctor.id).filter(Doctor.user_id == user.id).first() is not None
+    )
+    if not owns_application:
+        raise HTTPException(status_code=403, detail="Doctor onboarding access denied")
+    return user
+
+
 def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),

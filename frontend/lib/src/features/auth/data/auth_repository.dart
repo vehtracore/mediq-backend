@@ -290,16 +290,41 @@ class AuthRepository {
 
   /// Submits corrected documents for a rejected doctor.
   /// Returns the updated Doctor profile (status will be 'pending').
-  Future<Doctor> reapply({
+  Future<void> reapply({
     String? licenseNumber,
+    required XFile mdcnLicense,
+    required XFile indemnityCertificate,
   }) async {
     try {
       final Map<String, dynamic> data = {};
       if (licenseNumber != null) data['license_number'] = licenseNumber;
-
-      final response =
-          await _dio.post('/api/v1/doctors/me/reapply', data: data);
-      return Doctor.fromJson(response.data);
+      if (kIsWeb) {
+        data['mdcn_license'] = MultipartFile.fromBytes(
+          await mdcnLicense.readAsBytes(),
+          filename: mdcnLicense.name.isEmpty ? 'license.jpg' : mdcnLicense.name,
+        );
+        data['indemnity_certificate'] = MultipartFile.fromBytes(
+          await indemnityCertificate.readAsBytes(),
+          filename: indemnityCertificate.name.isEmpty
+              ? 'indemnity.jpg'
+              : indemnityCertificate.name,
+        );
+      } else {
+        data['mdcn_license'] = await MultipartFile.fromFile(
+          mdcnLicense.path,
+          filename: mdcnLicense.name.isEmpty ? 'license.jpg' : mdcnLicense.name,
+        );
+        data['indemnity_certificate'] = await MultipartFile.fromFile(
+          indemnityCertificate.path,
+          filename: indemnityCertificate.name.isEmpty
+              ? 'indemnity.jpg'
+              : indemnityCertificate.name,
+        );
+      }
+      await _dio.post(
+        '/api/v1/doctors/me/verification-submissions',
+        data: FormData.fromMap(data),
+      );
     } catch (e) {
       throw AppException(
         UIErrorFormatter.getMessage(e),

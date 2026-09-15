@@ -24,6 +24,7 @@ from app.services.notification_device_service import (
 from app.api import deps
 
 from app.services.media_service import delete_sensitive_media, upload_sensitive_media
+from app.services.doctor_verification_service import create_submission
 from app.core.limiter import limiter
 from app.services.email_guard import (
     email_test_endpoint_enabled,
@@ -367,6 +368,16 @@ async def register_doctor(
     )
     db.add(new_doctor)
     try:
+        db.flush()
+        create_submission(
+            db,
+            doctor=new_doctor,
+            submission_type="initial",
+            license_number=license_number,
+            specialty=specialty,
+            mdcn_asset=mdcn_asset,
+            indemnity_asset=indemnity_asset,
+        )
         db.commit()
         db.refresh(new_user)
     except Exception as exc:

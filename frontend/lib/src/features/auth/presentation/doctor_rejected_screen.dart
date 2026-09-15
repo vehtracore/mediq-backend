@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import '../data/auth_repository.dart';
 import 'auth_controller.dart';
 import 'package:mediq_app/src/core/utils/ui_error_formatter.dart';
@@ -25,6 +26,8 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
   // Form
   final _formKey = GlobalKey<FormState>();
   final _licenseCtrl = TextEditingController();
+  XFile? _licenseDocument;
+  XFile? _indemnityDocument;
 
   // ── Colour palette ──────────────────────────────────────────────────────────
   static const _bgColor = Color(0xFF0D0D1A);
@@ -68,6 +71,11 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
   // ── Submit re-application ────────────────────────────────────────────────────
   Future<void> _submitReapplication() async {
     if (!_formKey.currentState!.validate()) return;
+    if (_licenseDocument == null || _indemnityDocument == null) {
+      setState(() => _errorMessage =
+          'Select both your corrected MDCN licence and indemnity certificate.');
+      return;
+    }
 
     setState(() {
       _isSubmitting = true;
@@ -79,6 +87,8 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
             licenseNumber: _licenseCtrl.text.trim().isEmpty
                 ? null
                 : _licenseCtrl.text.trim(),
+            mdcnLicense: _licenseDocument!,
+            indemnityCertificate: _indemnityDocument!,
           );
 
       if (!mounted) return;
@@ -335,13 +345,37 @@ class _DoctorRejectedScreenState extends ConsumerState<DoctorRejectedScreen> {
                                 ),
                               ),
                               const SizedBox(height: 8),
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: Text(
-                                  'To upload new documents, please contact support@mdqplus.com with your updated files.',
-                                  style: GoogleFonts.lato(
-                                      color: _textMuted, fontSize: 12),
-                                ),
+                              const SizedBox(height: 12),
+                              _DocumentPicker(
+                                label: 'Corrected MDCN licence',
+                                selectedName: _licenseDocument?.name,
+                                onPressed: _isSubmitting
+                                    ? null
+                                    : () async {
+                                        final selected = await ImagePicker()
+                                            .pickImage(
+                                                source: ImageSource.gallery);
+                                        if (selected != null && mounted) {
+                                          setState(() =>
+                                              _licenseDocument = selected);
+                                        }
+                                      },
+                              ),
+                              const SizedBox(height: 12),
+                              _DocumentPicker(
+                                label: 'Corrected indemnity certificate',
+                                selectedName: _indemnityDocument?.name,
+                                onPressed: _isSubmitting
+                                    ? null
+                                    : () async {
+                                        final selected = await ImagePicker()
+                                            .pickImage(
+                                                source: ImageSource.gallery);
+                                        if (selected != null && mounted) {
+                                          setState(() =>
+                                              _indemnityDocument = selected);
+                                        }
+                                      },
                               ),
                             ],
                           ),
@@ -435,6 +469,34 @@ class _SectionHeader extends StatelessWidget {
         fontSize: 11,
         fontWeight: FontWeight.w600,
         letterSpacing: 1.4,
+      ),
+    );
+  }
+}
+
+class _DocumentPicker extends StatelessWidget {
+  const _DocumentPicker({
+    required this.label,
+    required this.selectedName,
+    required this.onPressed,
+  });
+
+  final String label;
+  final String? selectedName;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: const Icon(Icons.upload_file),
+      label: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(selectedName == null ? label : '$label: $selectedName'),
+      ),
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size(double.infinity, 52),
+        foregroundColor: const Color(0xFF4A90E2),
       ),
     );
   }

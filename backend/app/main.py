@@ -101,7 +101,20 @@ from app.core.scheduler import (
 )
 from app.services.support_email_service import support_email_readiness
 
-Base.metadata.create_all(bind=engine)
+# Verification-history DDL is intentionally migration-only. Excluding these
+# tables prevents an application start from applying the staged migration.
+_MIGRATION_ONLY_TABLES = {
+    "doctor_verification_submissions",
+    "doctor_verification_documents",
+}
+Base.metadata.create_all(
+    bind=engine,
+    tables=[
+        table
+        for table in Base.metadata.sorted_tables
+        if table.name not in _MIGRATION_ONLY_TABLES
+    ],
+)
 
 
 # ---------------------------------------------------------------------------

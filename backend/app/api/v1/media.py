@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
 from pydantic import BaseModel
@@ -10,6 +11,10 @@ from app.core.api_errors import ApiError
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.doctor import Doctor
+from app.models.doctor_verification import (
+    DoctorVerificationDocument,
+    DoctorVerificationSubmission,
+)
 from app.models.lab_result import LabResult
 from app.models.user import User
 from app.services import media_service
@@ -95,6 +100,49 @@ def access_doctor_document(
 
     response.headers["Cache-Control"] = "no-store, private"
     return _access_response(_doctor_document_asset(doctor, document_kind))
+
+
+@router.get(
+    "/verification-documents/{document_id}/access",
+    response_model=SensitiveMediaAccessResponse,
+)
+@limiter.limit("60/minute")
+def access_verification_document(
+    request: Request,
+    response: Response,
+    document_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """Resolve one logical evidence document, then issue short-lived access."""
+    record = (
+        db.query(DoctorVerificationDocument, DoctorVerificationSubmission, Doctor)
+        .join(
+            DoctorVerificationSubmission,
+            DoctorVerificationSubmission.id
+            == DoctorVerificationDocument.submission_id,
+        )
+        .join(Doctor, Doctor.id == DoctorVerificationSubmission.doctor_id)
+        .filter(DoctorVerificationDocument.id == document_id)
+        .first()
+    )
+    if record is None:
+        raise ApiError(404, "media_not_found", "The requested file was not found.")
+    document, _submission, doctor = record
+    if current_user.role != "admin" and not (
+        current_user.role == "doctor" and doctor.user_id == current_user.id
+    ):
+        raise ApiError(404, "media_not_found", "The requested file was not found.")
+
+    response.headers["Cache-Control"] = "no-store, private"
+    return _access_response(
+        media_service.SensitiveMediaAsset(
+            public_id=document.cloudinary_public_id,
+            resource_type=document.resource_type,
+            format=document.format,
+            delivery_type=document.delivery_type,
+        )
+    )
 
 
 @router.get(

@@ -656,6 +656,19 @@ def book_appointment(
 @router.post("/book-general", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
 def book_general_consultation(req: GeneralBookRequest, db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
     require_patient_role(current_user)
+    existing = (
+        db.query(Appointment)
+        .filter(
+            Appointment.patient_id == current_user.id,
+            Appointment.appointment_type == APPOINTMENT_TYPE_GENERAL_QUEUE,
+            Appointment.status.in_(("pending", "confirmed")),
+        )
+        .order_by(Appointment.id.asc())
+        .first()
+    )
+    if existing is not None:
+        return map_appt(existing)
+
     patient_price = 4000.0
     platform_commission, doctor_payout = calculate_consultation_split(
         patient_price
@@ -668,15 +681,35 @@ def book_general_consultation(req: GeneralBookRequest, db: Session = Depends(get
         commission=platform_commission, payout=doctor_payout,
     )
     db.add(new_appointment)
-    db.commit()
-    db.refresh(new_appointment)
-
-    # ── Generate and persist the Paystack reference ────────────────────────
-    epoch_ms = int(time.time() * 1000)
-    new_appointment.paystack_reference = (
-        f"MDQ-gp_consult-{new_appointment.id}-{current_user.id}-{epoch_ms}"
-    )
-    db.commit()
+    try:
+        # Flush once to allocate the row ID, then persist the appointment and
+        # its one checkout reference atomically.
+        db.flush()
+        epoch_ms = int(time.time() * 1000)
+        new_appointment.paystack_reference = (
+            f"MDQ-gp_consult-{new_appointment.id}-{current_user.id}-{epoch_ms}"
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        existing = (
+            db.query(Appointment)
+            .filter(
+                Appointment.patient_id == current_user.id,
+                Appointment.appointment_type == APPOINTMENT_TYPE_GENERAL_QUEUE,
+                Appointment.status.in_(("pending", "confirmed")),
+            )
+            .order_by(Appointment.id.asc())
+            .first()
+        )
+        if existing is None:
+            raise
+        logger.info(
+            "[GENERAL QUEUE] Reused concurrent active appointment patient_id=%s appointment_id=%s",
+            current_user.id,
+            existing.id,
+        )
+        return map_appt(existing)
     db.refresh(new_appointment)
 
     return map_appt(new_appointment, "General Practitioner")

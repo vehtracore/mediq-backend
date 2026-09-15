@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mediq_app/src/core/api/api_error_mapper.dart';
 import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
@@ -13,6 +14,7 @@ import 'package:mediq_app/src/features/chat/presentation/ai_chat_controller.dart
 class _SwitchingAdapter implements HttpClientAdapter {
   bool fail = false;
   bool staleSave = false;
+  int? saveFailureStatus;
   final requests = <RequestOptions>[];
 
   @override
@@ -22,6 +24,22 @@ class _SwitchingAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     requests.add(options);
+    if (saveFailureStatus != null &&
+        options.method == 'POST' &&
+        options.path == '/api/v1/vault/ai-summary/save') {
+      return ResponseBody.fromString(
+        jsonEncode({
+          'error': {
+            'code': 'internal_error',
+            'message': "We couldn't complete that request. Please try again.",
+          }
+        }),
+        saveFailureStatus!,
+        headers: {
+          Headers.contentTypeHeader: ['application/json'],
+        },
+      );
+    }
     if (staleSave &&
         options.method == 'POST' &&
         options.path == '/api/v1/vault/ai-summary/save') {
@@ -124,6 +142,25 @@ void main() {
     final saveRequest = adapter.requests.last;
     expect(saveRequest.path, '/api/v1/vault/ai-summary/save');
     expect(saveRequest.data.containsKey('summary_text'), isFalse);
+  });
+
+  test('paid save parses the safe backend error contract for retry', () async {
+    final adapter = _SwitchingAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))
+      ..httpClientAdapter = adapter;
+    final controller = AiChatController(dio, 'family', null);
+
+    await controller.sendMessage('I have a headache');
+    final messagesBeforeSave = controller.state.messages;
+    adapter.saveFailureStatus = 500;
+
+    expect(await controller.saveSummary(), isFalse);
+    expect(controller.state.messages, equals(messagesBeforeSave));
+    expect(controller.lastSaveFailure?.kind, ApiFailureKind.unexpected);
+    expect(
+      controller.lastSaveFailure?.message,
+      "We couldn't complete that request. Please try again.",
+    );
   });
 
   test('continued save updates the same Vault summary instead of creating one',

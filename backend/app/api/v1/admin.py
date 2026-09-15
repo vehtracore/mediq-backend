@@ -3,15 +3,19 @@ from app.api.v1.auth import send_email  # Import email helper
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
-from pydantic import BaseModel
+from uuid import UUID
+from pydantic import BaseModel, Field
 from app.core.database import get_db
 from app.models.user import User
 from app.models.doctor import Doctor
+from app.models.doctor_verification import (
+    DoctorVerificationSubmission,
+)
 from app.models.appointment import Appointment, resolve_appointment_type
 from app.models.audit import AuditLog
 from app.models.consultation_payout import ConsultationPayout
 from app.schemas.user import UserResponse
-from app.schemas.doctor import DoctorResponse
+from app.schemas.doctor import AdminVerificationSubmissionResponse, DoctorResponse
 from app.api import deps
 from app.services.consultation_payout_service import (
     appointment_has_blocking_refund_or_dispute,
@@ -23,6 +27,10 @@ from app.services.consultation_payout_service import (
 from app.services.consultation_refund_service import (
     eligible_consultation_refund_amount,
     validate_admin_refund_approval,
+)
+from app.services.doctor_verification_service import (
+    decide_submission,
+    submission_documents,
 )
 
 router = APIRouter()
@@ -41,6 +49,11 @@ class AdminStats(BaseModel):
     active_appointments: int
     pending_payout_approvals: int
     pending_refund_approvals: int
+
+
+class RejectDoctorRequest(BaseModel):
+    rejection_reason: str = Field(min_length=1, max_length=1000)
+    model_config = {"extra": "forbid"}
 
 @router.get("/stats", response_model=AdminStats)
 def get_admin_stats(db: Session = Depends(get_db), admin: User = Depends(get_current_admin)):
@@ -77,7 +90,16 @@ def get_admin_stats(db: Session = Depends(get_db), admin: User = Depends(get_cur
 
     subscribed_users = primary_subscribers + dependents_covered
 
-    pending_verifications = db.query(Doctor).filter(Doctor.is_verified == False).count()
+    versioned_pending = db.query(DoctorVerificationSubmission).filter(
+        DoctorVerificationSubmission.status == "pending"
+    ).count()
+    legacy_pending = db.query(Doctor).filter(
+        Doctor.status == "pending",
+        ~db.query(DoctorVerificationSubmission.id)
+        .filter(DoctorVerificationSubmission.doctor_id == Doctor.id)
+        .exists(),
+    ).count()
+    pending_verifications = versioned_pending + legacy_pending
 
     # --- Total Completed Consultations ---
     # Count of all appointments that have reached a terminal "completed" state.
@@ -135,12 +157,174 @@ def get_pending_doctors(db: Session = Depends(get_db), admin: User = Depends(get
     # ✅ FIX: Filter on status == 'pending', NOT just is_verified == False.
     # A rejected doctor also has is_verified=False, so the old filter was
     # returning them — making the rejection look like it never happened.
-    return db.query(Doctor).filter(Doctor.status == "pending").all()
+    return db.query(Doctor).filter(
+        Doctor.status == "pending",
+        ~db.query(DoctorVerificationSubmission.id)
+        .filter(DoctorVerificationSubmission.doctor_id == Doctor.id)
+        .exists(),
+    ).all()
+
+
+def _submission_response(
+    db: Session, submission: DoctorVerificationSubmission
+) -> dict:
+    doctor = db.query(Doctor).filter(Doctor.id == submission.doctor_id).one()
+    documents = submission_documents(db, submission.id)
+    return {
+        "id": submission.id,
+        "doctor_id": doctor.id,
+        "doctor_user_id": doctor.user_id,
+        "doctor_full_name": doctor.full_name,
+        "submission_type": submission.submission_type,
+        "status": submission.status,
+        "submitted_at": submission.submitted_at,
+        "reviewed_at": submission.reviewed_at,
+        "reviewed_by_user_id": submission.reviewed_by_user_id,
+        "rejection_reason": submission.rejection_reason,
+        "supersedes_submission_id": submission.supersedes_submission_id,
+        "license_number_snapshot": submission.license_number_snapshot,
+        "specialty_snapshot": submission.specialty_snapshot,
+        "documents": documents,
+    }
+
+
+@router.get(
+    "/verification-submissions/pending",
+    response_model=List[AdminVerificationSubmissionResponse],
+)
+def get_pending_verification_submissions(
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    submissions = (
+        db.query(DoctorVerificationSubmission)
+        .filter(DoctorVerificationSubmission.status == "pending")
+        .order_by(DoctorVerificationSubmission.submitted_at.asc())
+        .all()
+    )
+    return [_submission_response(db, item) for item in submissions]
+
+
+@router.get(
+    "/verification-submissions/{submission_id}",
+    response_model=AdminVerificationSubmissionResponse,
+)
+def get_verification_submission(
+    submission_id: UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    submission = db.query(DoctorVerificationSubmission).filter(
+        DoctorVerificationSubmission.id == submission_id
+    ).first()
+    if submission is None:
+        raise HTTPException(status_code=404, detail="Verification submission not found")
+    return _submission_response(db, submission)
+
+
+@router.get(
+    "/doctors/{doctor_id}/verification-submissions",
+    response_model=List[AdminVerificationSubmissionResponse],
+)
+def get_doctor_verification_history(
+    doctor_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    if db.query(Doctor.id).filter(Doctor.id == doctor_id).first() is None:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    submissions = db.query(DoctorVerificationSubmission).filter(
+        DoctorVerificationSubmission.doctor_id == doctor_id
+    ).order_by(DoctorVerificationSubmission.submitted_at.asc()).all()
+    return [_submission_response(db, item) for item in submissions]
+
+
+@router.put("/verification-submissions/{submission_id}/approve")
+def approve_verification_submission(
+    submission_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    try:
+        submission, doctor, user = decide_submission(
+            db,
+            submission_id=submission_id,
+            admin=admin,
+            decision="approved",
+        )
+        doctor_name = doctor.full_name
+        user_email = user.email
+        db.add(AuditLog(
+            admin_id=admin.id,
+            resource=f"DoctorVerificationSubmission:{submission.id}",
+            reason="Approved doctor credential evidence submission",
+        ))
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Could not persist verification decision.") from exc
+
+    background_tasks.add_task(
+        send_email,
+        user_email,
+        "MDQ+: Credential Verification Approved",
+        f"Congratulations {doctor_name}! Your submitted professional credentials have been approved.",
+    )
+    return {"submission_id": submission.id, "status": "approved"}
+
+
+@router.post("/verification-submissions/{submission_id}/reject")
+def reject_verification_submission(
+    submission_id: UUID,
+    payload: RejectDoctorRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    try:
+        submission, doctor, user = decide_submission(
+            db,
+            submission_id=submission_id,
+            admin=admin,
+            decision="rejected",
+            rejection_reason=payload.rejection_reason,
+        )
+        doctor_name = doctor.full_name
+        user_email = user.email
+        db.add(AuditLog(
+            admin_id=admin.id,
+            resource=f"DoctorVerificationSubmission:{submission.id}",
+            reason="Rejected doctor credential evidence submission",
+        ))
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Could not persist verification decision.") from exc
+
+    background_tasks.add_task(
+        send_email,
+        user_email,
+        "MDQ+: Credential Verification Not Approved",
+        f"Dear {doctor_name}, your credential submission was not approved. Reason: {payload.rejection_reason}",
+    )
+    return {"submission_id": submission.id, "status": "rejected"}
 
 @router.put("/doctors/{doctor_id}/verify")
 def verify_doctor(doctor_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), admin: User = Depends(get_current_admin)):
     doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
     if not doctor: raise HTTPException(404, "Doctor not found")
+    if db.query(DoctorVerificationSubmission.id).filter(
+        DoctorVerificationSubmission.doctor_id == doctor.id,
+        DoctorVerificationSubmission.status == "pending",
+    ).first() is not None:
+        raise HTTPException(409, "Review the specific verification submission UUID")
     
     user = db.query(User).filter(User.id == doctor.user_id).first()
     if not user: raise HTTPException(404, "User for doctor not found")
@@ -168,10 +352,6 @@ def verify_doctor(doctor_id: int, background_tasks: BackgroundTasks, db: Session
     return {"message": "Doctor verified and account activated."}
 
 
-# --- Pydantic Schema for Rejection ---
-class RejectDoctorRequest(BaseModel):
-    rejection_reason: str
-
 @router.post("/doctors/{doctor_id}/reject")
 def reject_doctor(
     doctor_id: int,
@@ -191,6 +371,11 @@ def reject_doctor(
     doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
+    if db.query(DoctorVerificationSubmission.id).filter(
+        DoctorVerificationSubmission.doctor_id == doctor.id,
+        DoctorVerificationSubmission.status == "pending",
+    ).first() is not None:
+        raise HTTPException(409, "Review the specific verification submission UUID")
 
     user = db.query(User).filter(User.id == doctor.user_id).first()
     if not user:
