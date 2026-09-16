@@ -47,13 +47,15 @@ def _configured_sender() -> str | None:
     return configured
 
 
-def support_email_readiness() -> SupportEmailReadiness:
+def support_email_readiness(
+    *, recipient_email: str | None = None
+) -> SupportEmailReadiness:
     issues: list[str] = []
     if not email_delivery_enabled():
         issues.append("EMAIL_DELIVERY_ENABLED_FALSE")
     if not get_resend_api_key():
         issues.append("RESEND_API_KEY_MISSING")
-    if normalize_email_address(os.getenv("SUPPORT_EMAIL_TO", "")) is None:
+    if normalize_email_address(recipient_email or os.getenv("SUPPORT_EMAIL_TO", "")) is None:
         issues.append("SUPPORT_EMAIL_TO_MISSING_OR_INVALID")
     if _configured_sender() is None:
         issues.append("RESEND_FROM_EMAIL_MISSING_OR_INVALID")
@@ -123,13 +125,17 @@ def send_support_email(
     subject: str,
     message: str,
     submitted_at: datetime,
+    email_subject: str | None = None,
+    recipient_email: str | None = None,
 ) -> str:
     """Wait for Resend acceptance and return its message identifier."""
-    readiness = support_email_readiness()
+    readiness = support_email_readiness(recipient_email=recipient_email)
     if not readiness.ready:
         raise SupportEmailDeliveryError("configuration")
 
-    reservation = reserve_support_email_send(os.getenv("SUPPORT_EMAIL_TO", ""))
+    reservation = reserve_support_email_send(
+        recipient_email or os.getenv("SUPPORT_EMAIL_TO", "")
+    )
     if reservation.recipient is None:
         raise SupportEmailDeliveryError(reservation.failure_category or "unknown")
 
@@ -143,7 +149,7 @@ def send_support_email(
         "from": sender,
         "to": [reservation.recipient],
         "reply_to": reply_to,
-        "subject": f"MDQ+ Support Request - {reference[:8].upper()}",
+        "subject": email_subject or f"MDQ+ Support Request - {reference[:8].upper()}",
         "html": _email_html(
             request_id=request_id,
             user_name=user_name,

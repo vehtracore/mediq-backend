@@ -18,6 +18,7 @@ logger = logging.getLogger("uvicorn.error")
 
 class NotificationType:
     CONSULTATION_REQUEST = "consultation_request"
+    CONSULTATION_TIME_PROPOSED = "consultation_time_proposed"
     CONSULTATION_PAYMENT_CONFIRMED = "consultation_payment_confirmed"
     CONSULTATION_ASSIGNED = "consultation_assigned"
     CONSULTATION_CONFIRMED = "consultation_confirmed"
@@ -48,6 +49,11 @@ _TEMPLATES: dict[str, NotificationTemplate] = {
     NotificationType.CONSULTATION_REQUEST: NotificationTemplate(
         "New consultation request",
         "A new consultation request is waiting for your review.",
+        _CONSULTATION_CHANNEL,
+    ),
+    NotificationType.CONSULTATION_TIME_PROPOSED: NotificationTemplate(
+        "Consultation time proposed",
+        "Your doctor proposed a time for your consultation. Review it and complete payment.",
         _CONSULTATION_CHANNEL,
     ),
     NotificationType.CONSULTATION_PAYMENT_CONFIRMED: NotificationTemplate(

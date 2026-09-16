@@ -66,6 +66,14 @@ class ConsultationRefundTests(unittest.TestCase):
             ),
             4000,
         )
+        for refund_status in ("approved", "processing"):
+            with self.subTest(refund_status=refund_status):
+                self.assertEqual(
+                    eligible_consultation_refund_amount(
+                        _appointment(status="completed", refund_status=refund_status)
+                    ),
+                    4000,
+                )
 
     def test_refund_requires_paid_transaction_reference_and_amount(self):
         cases = (

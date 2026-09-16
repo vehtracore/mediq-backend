@@ -26,6 +26,7 @@ from app.services.consultation_payout_service import (
 )
 from app.services.consultation_refund_service import (
     eligible_consultation_refund_amount,
+    payout_precludes_refund,
     validate_admin_refund_approval,
 )
 from app.services.doctor_verification_service import (
@@ -586,19 +587,36 @@ def approve_consultation_payout(
     admin: User = Depends(get_current_admin),
 ):
     """Approve an eligible payout for the transfer worker."""
+    appointment_id = (
+        db.query(ConsultationPayout.appointment_id)
+        .filter(ConsultationPayout.id == payout_id)
+        .scalar()
+    )
+    if appointment_id is None:
+        raise HTTPException(status_code=404, detail="Payout not found.")
+    # Both financial approvals lock this appointment first. The opposite
+    # decision is read again under that lock before either approval commits.
+    appointment = (
+        db.query(Appointment)
+        .filter(Appointment.id == appointment_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
     payout = (
         db.query(ConsultationPayout)
         .filter(ConsultationPayout.id == payout_id)
+        .populate_existing()
         .with_for_update()
         .first()
     )
     if payout is None:
         raise HTTPException(status_code=404, detail="Payout not found.")
-    appointment = (
-        db.query(Appointment)
-        .filter(Appointment.id == payout.appointment_id)
-        .first()
-    )
+    if appointment is not None and appointment_has_blocking_refund_or_dispute(appointment):
+        raise HTTPException(
+            status_code=409,
+            detail="This payout is blocked by a pending refund or dispute review.",
+        )
     doctor = db.query(Doctor).filter(Doctor.id == payout.doctor_id).first()
     if not validate_admin_payout_decision(
         payout,
@@ -755,11 +773,24 @@ def approve_consultation_refund(
     appointment = (
         db.query(Appointment)
         .filter(Appointment.id == appointment_id)
+        .populate_existing()
         .with_for_update()
         .first()
     )
     if appointment is None:
         raise HTTPException(status_code=404, detail="Appointment not found.")
+    payout = (
+        db.query(ConsultationPayout)
+        .filter(ConsultationPayout.appointment_id == appointment_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if payout_precludes_refund(payout):
+        raise HTTPException(
+            status_code=409,
+            detail="This refund is blocked because a doctor payout was already approved.",
+        )
     if not validate_admin_refund_approval(appointment):
         return _serialize_refund(appointment, db)
 

@@ -26,13 +26,30 @@ final doctorStatsProvider = FutureProvider.autoDispose((ref) async {
 });
 
 class DoctorHomeScreen extends ConsumerStatefulWidget {
-  const DoctorHomeScreen({super.key});
+  const DoctorHomeScreen({super.key, this.initialTab = 0});
+
+  final int initialTab;
   @override
   ConsumerState<DoctorHomeScreen> createState() => _DoctorHomeScreenState();
 }
 
 class _DoctorHomeScreenState extends ConsumerState<DoctorHomeScreen> {
-  int _selectedIndex = 0;
+  late int _selectedIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedIndex = widget.initialTab;
+  }
+
+  @override
+  void didUpdateWidget(covariant DoctorHomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialTab != widget.initialTab) {
+      _selectedIndex = widget.initialTab;
+    }
+  }
+
   static const List<Widget> _pages = [
     _DoctorDashboardTab(),
     DoctorRequestsScreen(),

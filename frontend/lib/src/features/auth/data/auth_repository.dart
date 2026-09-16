@@ -28,6 +28,13 @@ class SupportSubmissionResult {
   bool get isSent => status == 'sent';
 }
 
+class DoctorEmailVerificationRequiredException extends AppException {
+  DoctorEmailVerificationRequiredException()
+      : super(
+          'Verify your email using the Supabase message, then return here and tap Submit Application again. Your form and selected documents are still ready.',
+        );
+}
+
 class AuthRepository {
   final Dio _dio;
   AuthRepository(this._dio);
@@ -342,7 +349,7 @@ class AuthRepository {
     required XFile mdcnLicense,
     required XFile indemnityCertificate,
   }) async {
-    var supabaseIdentityCreated = false;
+    var authenticatedForRegistration = false;
     try {
       final normalizedEmail = email.trim().toLowerCase();
 
@@ -355,26 +362,50 @@ class AuthRepository {
       final isExistingApplication = preflightResponse.data is Map &&
           preflightResponse.data['existing_application'] == true;
 
-      // Supabase owns the password and sends the verification email when
-      // Confirm Email is enabled for the project.
-      final authResponse = await supabase.Supabase.instance.client.auth.signUp(
-        email: normalizedEmail,
-        password: password,
-        data: {
-          'role': 'doctor',
-          'full_name': fullName.trim(),
-        },
-      );
-      if (authResponse.user == null) {
+      if (isExistingApplication) {
         throw AppException(
-          'Could not create your secure sign-in account. Please try again.',
+          'An application already exists for this email and licence. Sign in to review its status or resubmit a rejected application.',
         );
       }
-      supabaseIdentityCreated = true;
 
-      if (isExistingApplication) {
-        return;
+      // The registration endpoint requires a real Supabase access token.
+      // With email confirmation enabled, signUp creates the identity but
+      // returns no session. On the next attempt, signIn succeeds after the
+      // applicant follows the confirmation link, so the documents remain in
+      // this screen until an authenticated upload can finish.
+      final auth = supabase.Supabase.instance.client.auth;
+      var session = auth.currentSession;
+      if (session?.user.email?.toLowerCase() != normalizedEmail) {
+        try {
+          final signedIn = await auth.signInWithPassword(
+            email: normalizedEmail,
+            password: password,
+          );
+          session = signedIn.session;
+        } on supabase.AuthRetryableFetchException {
+          rethrow;
+        } on supabase.AuthException {
+          final signedUp = await auth.signUp(
+            email: normalizedEmail,
+            password: password,
+            data: {
+              'role': 'doctor',
+              'full_name': fullName.trim(),
+            },
+          );
+          if (signedUp.user == null) {
+            throw AppException(
+              'Could not create your secure sign-in account. Please try again.',
+            );
+          }
+          session = signedUp.session;
+        }
       }
+      if (session == null ||
+          session.user.email?.toLowerCase() != normalizedEmail) {
+        throw DoctorEmailVerificationRequiredException();
+      }
+      authenticatedForRegistration = true;
 
       final Map<String, dynamic> mapData = {
         'full_name': fullName.trim(),
@@ -413,6 +444,8 @@ class AuthRepository {
 
       final formData = FormData.fromMap(mapData);
       await _dio.post('/api/v1/auth/doctor/register', data: formData);
+    } on DoctorEmailVerificationRequiredException {
+      rethrow;
     } on supabase.AuthException catch (e) {
       throw AppException(e.message, originalException: e);
     } catch (e) {
@@ -421,7 +454,7 @@ class AuthRepository {
         originalException: e,
       );
     } finally {
-      if (supabaseIdentityCreated) {
+      if (authenticatedForRegistration) {
         try {
           await supabase.Supabase.instance.client.auth.signOut();
         } catch (_) {

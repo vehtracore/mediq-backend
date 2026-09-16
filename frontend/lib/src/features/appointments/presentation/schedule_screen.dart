@@ -249,74 +249,6 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
     );
   }
 
-  Future<void> _showComplaintDialog() async {
-    final reasonController = TextEditingController();
-    final submitted = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text("Report consultation issue"),
-        content: TextField(
-          controller: reasonController,
-          maxLength: 1000,
-          maxLines: 4,
-          decoration: const InputDecoration(
-            hintText: "Briefly explain what went wrong",
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text("Submit"),
-          ),
-        ],
-      ),
-    );
-
-    final reason = reasonController.text.trim();
-    reasonController.dispose();
-    if (submitted != true) return;
-
-    if (reason.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please describe the issue briefly.")),
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
-    try {
-      await ref.read(appointmentRepositoryProvider).raiseAppointmentComplaint(
-            id: widget.appointment.id,
-            reason: reason,
-          );
-      ref.invalidate(myAppointmentsProvider);
-      ref.invalidate(nextAppointmentProvider);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Issue submitted for admin review."),
-          backgroundColor: Colors.green,
-        ),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(UIErrorFormatter.getMessage(error)),
-          backgroundColor: Colors.red,
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final appointment = widget.appointment;
@@ -468,7 +400,8 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  if (appointment.canPatientCancel)
+                  if (appointment.canPatientCancel &&
+                      appointment.status != 'awaiting_payment')
                     TextButton(
                         onPressed: () async {
                           final confirm = await showDialog<bool>(
@@ -692,18 +625,6 @@ class _AppointmentCardState extends ConsumerState<_AppointmentCard> {
                       backgroundColor: Colors.grey.withOpacity(0.12),
                       labelStyle: TextStyle(color: Colors.grey.shade600),
                       side: BorderSide.none,
-                    ),
-                  ],
-                  if (appointment.canPatientReportIssue) ...[
-                    const SizedBox(width: 8),
-                    OutlinedButton.icon(
-                      onPressed: _isLoading ? null : _showComplaintDialog,
-                      icon: const Icon(Icons.report_problem_outlined, size: 16),
-                      label: const Text("Report Issue"),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: theme.colorScheme.error,
-                        side: BorderSide(color: theme.colorScheme.error),
-                      ),
                     ),
                   ],
                   if (isCompleted && !appointment.hasReview) ...[

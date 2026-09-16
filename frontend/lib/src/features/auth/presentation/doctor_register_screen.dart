@@ -194,6 +194,21 @@ class _DoctorRegisterScreenState extends ConsumerState<DoctorRegisterScreen> {
           ],
         ),
       );
+    } on DoctorEmailVerificationRequiredException catch (e) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Verify your email'),
+          content: Text(e.message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

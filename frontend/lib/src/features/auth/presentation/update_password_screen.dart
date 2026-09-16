@@ -34,6 +34,11 @@ class _UpdatePasswordScreenState extends State<UpdatePasswordScreen> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    if (Supabase.instance.client.auth.currentSession == null) {
+      setState(() => _errorMessage =
+          'This reset link is invalid or expired. Request a new link from the sign-in screen.');
+      return;
+    }
 
     setState(() {
       _isLoading = true;
@@ -60,7 +65,8 @@ class _UpdatePasswordScreenState extends State<UpdatePasswordScreen> {
     } on AuthException catch (e) {
       setState(() => _errorMessage = e.message);
     } catch (e) {
-      setState(() => _errorMessage = 'An unexpected error occurred. Please try again.');
+      setState(() =>
+          _errorMessage = 'An unexpected error occurred. Please try again.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -78,7 +84,10 @@ class _UpdatePasswordScreenState extends State<UpdatePasswordScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded),
-          onPressed: () => context.go('/auth'),
+          onPressed: () async {
+            await Supabase.instance.client.auth.signOut();
+            if (mounted) context.go('/auth');
+          },
         ),
       ),
       body: SafeArea(
@@ -189,7 +198,8 @@ class _UpdatePasswordScreenState extends State<UpdatePasswordScreen> {
                         Expanded(
                           child: Text(
                             _errorMessage!,
-                            style: TextStyle(color: colorScheme.onErrorContainer),
+                            style:
+                                TextStyle(color: colorScheme.onErrorContainer),
                           ),
                         ),
                       ],

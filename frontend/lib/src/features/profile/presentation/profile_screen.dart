@@ -6,7 +6,9 @@ import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/auth/presentation/auth_controller.dart';
 import 'package:mediq_app/src/features/auth/presentation/profile_recovery_view.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
-import 'package:mediq_app/src/features/profile/presentation/support_contact_sheet.dart';
+import 'package:mediq_app/src/features/appointments/data/appointment_repository.dart';
+import 'package:mediq_app/src/features/appointments/presentation/schedule_screen.dart';
+import 'package:mediq_app/src/features/profile/presentation/customer_service_sheet.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
@@ -145,8 +147,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 const SizedBox(height: 12),
                 _buildProfileItem(context,
                     icon: Icons.support_agent,
-                    text: "Contact Support", onTap: () {
-                  _showSupportModal(context, ref);
+                    text: "Customer Service", onTap: () {
+                  _showCustomerServiceModal(context, ref);
                 }),
                 const Divider(height: 32),
                 // ── Logout ─────────────────────────────────────────────────
@@ -644,34 +646,57 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  // ── Contact Support modal ─────────────────────────────────────────────────
+  // ── Customer Service modal ────────────────────────────────────────────────
 
-  Future<void> _showSupportModal(BuildContext context, WidgetRef ref) async {
-    final sent = await showModalBottomSheet<bool>(
+  Future<void> _showCustomerServiceModal(
+      BuildContext context, WidgetRef ref) async {
+    final result = await showModalBottomSheet<dynamic>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (sheetContext) => SupportContactSheet(
-        onSend: ({
-          required requestId,
-          required subject,
-          required message,
-        }) =>
-            ref.read(authControllerProvider.notifier).sendSupportMessage(
-                  requestId: requestId,
-                  subject: subject,
-                  message: message,
-                ),
+      builder: (sheetContext) => FractionallySizedBox(
+        heightFactor: 0.85,
+        child: CustomerServiceSheet(
+          onSendMessage: ({
+            required requestId,
+            required subject,
+            required message,
+          }) =>
+              ref.read(authControllerProvider.notifier).sendSupportMessage(
+                    requestId: requestId,
+                    subject: subject,
+                    message: message,
+                  ),
+          loadAppointments: () =>
+              ref.read(appointmentRepositoryProvider).getMyAppointments(),
+          onSendDispute: ({required appointmentId, required reason}) async {
+            await ref
+                .read(appointmentRepositoryProvider)
+                .raiseAppointmentComplaint(
+                  id: appointmentId,
+                  reason: reason,
+                );
+            ref.invalidate(myAppointmentsProvider);
+          },
+        ),
       ),
     );
 
-    if (sent == true && context.mounted) {
+    if (result == true && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
             'Message sent successfully. We will get back to you soon.',
           ),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } else if (result == 'refund' && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content:
+              Text('Refund or dispute request submitted for admin review.'),
           backgroundColor: Colors.green,
         ),
       );

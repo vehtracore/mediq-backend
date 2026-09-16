@@ -12,7 +12,9 @@ import 'package:mediq_app/src/features/profile/presentation/profile_screen.dart'
 import 'package:mediq_app/src/features/vault/presentation/vault_screen.dart';
 
 class PatientHomeScreen extends ConsumerStatefulWidget {
-  const PatientHomeScreen({super.key});
+  const PatientHomeScreen({super.key, this.initialTab = 0});
+
+  final int initialTab;
   @override
   ConsumerState<PatientHomeScreen> createState() => _PatientHomeScreenState();
 }
@@ -23,6 +25,18 @@ class _PatientHomeScreenState extends ConsumerState<PatientHomeScreen> {
   final DraggableScrollableController _sheetController =
       DraggableScrollableController();
   bool _showFab = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialTab != 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ref.read(homeTabIndexProvider.notifier).state = widget.initialTab;
+        }
+      });
+    }
+  }
 
   @override
   void dispose() {

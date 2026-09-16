@@ -3,12 +3,25 @@ class NotificationIntent {
 
   final String route;
 
-  static NotificationIntent? fromData(Map<String, dynamic> data) {
+  static NotificationIntent? fromData(Map<String, dynamic> data,
+      {String? role}) {
     final type = data['type']?.toString();
     if (type == null || type.isEmpty) return null;
 
+    if (type == 'consultation_time_proposed' && role != 'doctor') {
+      return const NotificationIntent('/patient_home?tab=schedule');
+    }
+
+    if (role == 'doctor') {
+      const requestTypes = {'consultation_request', 'vip_request_received'};
+      if (requestTypes.contains(type)) {
+        return const NotificationIntent('/doctor_home?tab=requests');
+      }
+    }
+
     const appointmentTypes = {
       'consultation_request',
+      'consultation_time_proposed',
       'consultation_payment_confirmed',
       'consultation_assigned',
       'consultation_confirmed',
@@ -27,6 +40,9 @@ class NotificationIntent {
       'appointment_booked',
     };
     if (appointmentTypes.contains(type)) {
+      if (role == 'doctor') {
+        return const NotificationIntent('/doctor_home?tab=schedule');
+      }
       final id = int.tryParse(data['appointment_id']?.toString() ?? '');
       return id != null && id > 0
           ? NotificationIntent('/appointment/$id')

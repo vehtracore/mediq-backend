@@ -21,7 +21,7 @@ from app.models.doctor import Doctor
 from app.models.notification import Notification
 from app.models.notification_device_token import NotificationDeviceToken
 from app.models.review import Review
-from app.schemas.appointment import ReferralRequest
+from app.schemas.appointment import AppointmentProposeRequest, ReferralRequest
 from app.models.user import User
 from app.services.notification_device_service import (
     claim_device_token,
@@ -84,6 +84,36 @@ class ReliableNotificationTests(unittest.TestCase):
             token=token,
             platform='android',
         )
+
+    @patch('app.api.v1.appointments.require_vip_requested_doctor')
+    @patch('app.services.notification_service.notification_transport.send_multicast_notification')
+    def test_vip_proposal_notifies_patient_after_status_commit(self, _send, _doctor_gate):
+        appointment = Appointment(
+            id=42,
+            patient_id=1,
+            doctor_id=7,
+            appointment_type='vip_request',
+            status='pending',
+            payment_status='unpaid',
+            start_time=None,
+        )
+        self.db.add(appointment)
+        self.db.commit()
+
+        appointments.propose_appointment_time(
+            42,
+            AppointmentProposeRequest(
+                proposed_time=datetime.now(timezone.utc) + timedelta(days=1)
+            ),
+            db=self.db,
+            current_user=self.db.get(User, 2),
+        )
+
+        self.assertEqual(self.db.get(Appointment, 42).status, 'awaiting_payment')
+        event = self.db.query(Notification).one()
+        self.assertEqual(event.user_id, 1)
+        self.assertEqual(event.type, NotificationType.CONSULTATION_TIME_PROPOSED)
+        self.assertEqual(event.navigation_data, {'appointment_id': '42'})
 
     def test_same_token_reassigned_between_accounts_has_one_owner(self):
         self._claim(1, '11111111-1111-4111-8111-111111111111', 'shared-token')

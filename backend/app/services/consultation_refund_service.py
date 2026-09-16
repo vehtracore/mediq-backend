@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.models.appointment import Appointment
+from app.models.consultation_payout import ConsultationPayout
 from app.services.consultation_pricing import naira_to_kobo
 from app.services.paystack_service import paystack_service
 
@@ -20,13 +21,19 @@ REFUND_STATUS_APPROVED = "approved"
 TRANSFERABLE_REFUND_STATUSES = frozenset({REFUND_STATUS_APPROVED})
 
 
+def payout_precludes_refund(payout: ConsultationPayout | None) -> bool:
+    """An approved or initiated payout cannot become a patient refund."""
+    return payout is not None and payout.status not in {"awaiting_admin", "rejected"}
+
+
 def eligible_consultation_refund_amount(
     appointment: Appointment,
 ) -> Decimal | None:
     """Return the full paid amount when a consultation refund is eligible."""
     patient_complaint_or_dispute = (
         appointment.status == "completed"
-        and appointment.refund_status == REFUND_STATUS_AWAITING_ADMIN
+        and appointment.refund_status
+        in {REFUND_STATUS_AWAITING_ADMIN, REFUND_STATUS_APPROVED, "processing"}
     )
     if (
         appointment.status not in REFUND_ELIGIBLE_APPOINTMENT_STATUSES
@@ -105,6 +112,18 @@ async def process_approved_consultation_refunds() -> None:
 
             appointment = db.get(Appointment, appointment_id)
             if appointment is None:
+                continue
+            payout = (
+                db.query(ConsultationPayout)
+                .filter(ConsultationPayout.appointment_id == appointment_id)
+                .first()
+            )
+            if payout_precludes_refund(payout):
+                appointment.refund_status = "needs_attention"
+                appointment.refund_last_error = (
+                    "Refund blocked because a doctor payout was already approved."
+                )
+                db.commit()
                 continue
             amount = eligible_consultation_refund_amount(appointment)
             if amount is None:

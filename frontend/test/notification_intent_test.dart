@@ -13,6 +13,30 @@ void main() {
       '/appointment/42',
     );
     expect(
+      NotificationIntent.fromData({
+        'type': 'consultation_time_proposed',
+        'appointment_id': '42',
+      }, role: 'patient')
+          ?.route,
+      '/patient_home?tab=schedule',
+    );
+    expect(
+      NotificationIntent.fromData({
+        'type': 'consultation_request',
+        'appointment_id': '42',
+      }, role: 'doctor')
+          ?.route,
+      '/doctor_home?tab=requests',
+    );
+    expect(
+      NotificationIntent.fromData({
+        'type': 'consultation_confirmed',
+        'appointment_id': '42',
+      }, role: 'doctor')
+          ?.route,
+      '/doctor_home?tab=schedule',
+    );
+    expect(
       NotificationIntent.fromData({'type': 'subscription_expired'})?.route,
       '/subscription',
     );
@@ -54,5 +78,17 @@ void main() {
     coordinator.updateSessionReady(true);
     expect(navigated, ['/appointment/9']);
     expect(coordinator.pendingIntent, isNull);
+  });
+
+  test('pending doctor intent resolves after role restoration', () {
+    final coordinator = NotificationNavigationCoordinator();
+    final navigated = <String>[];
+    coordinator.submit({
+      'type': 'consultation_confirmed',
+      'appointment_id': '9',
+    });
+    coordinator.attachNavigator(navigated.add);
+    coordinator.updateSessionReady(true, role: 'doctor');
+    expect(navigated, ['/doctor_home?tab=schedule']);
   });
 }

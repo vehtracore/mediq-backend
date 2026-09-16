@@ -1,9 +1,11 @@
 import 'package:flutter/foundation.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 import '../../features/auth/data/auth_state_provider.dart';
+import '../../features/auth/data/profile_exception.dart';
 import '../../features/auth/data/shell_identity.dart';
 import '../../features/auth/presentation/user_controller.dart';
 import '../../features/auth/presentation/profile_recovery_view.dart';
@@ -113,7 +115,7 @@ String? authRedirectDecision({
   if (authLoading) {
     return preserveAuthenticatedRoute || location == '/' ? null : '/';
   }
-  if (passwordRecovery) {
+  if (passwordRecovery && hasSession) {
     return location == '/update-password' ? null : '/update-password';
   }
 
@@ -133,7 +135,11 @@ String? authRedirectDecision({
   }
 
   if (roleLoading) {
-    return preserveAuthenticatedRoute || location == '/' ? null : '/';
+    return preserveAuthenticatedRoute ||
+            location == '/' ||
+            location == '/doctor_register'
+        ? null
+        : '/';
   }
 
   if (role == null ||
@@ -141,7 +147,11 @@ String? authRedirectDecision({
     // A transient profile failure is not evidence that an already-open route
     // became invalid. At cold start the user remains on the authenticated
     // recovery/splash route until an authoritative role is available.
-    return preserveAuthenticatedRoute || location == '/' ? null : '/';
+    return preserveAuthenticatedRoute ||
+            location == '/' ||
+            location == '/doctor_register'
+        ? null
+        : '/';
   }
 
   if ((isPublicRoute || location == '/') &&
@@ -168,6 +178,17 @@ String? authRedirectDecision({
   }
 
   return null;
+}
+
+bool shouldResumeDoctorRegistration(
+    String? metadataRole, Object? profileError) {
+  if (metadataRole != 'doctor' ||
+      profileError is! ProfileAuthoritativeException) {
+    return false;
+  }
+  final cause = profileError.cause;
+  return cause is DioException &&
+      (cause.response?.statusCode == 401 || cause.response?.statusCode == 404);
 }
 
 final goRouterProvider = Provider<GoRouter>((ref) {
@@ -226,6 +247,13 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       }
       final preserveAuthenticatedRoute =
           session != null && establishedAuthenticatedUserId == session.user.id;
+      if (session != null &&
+          shouldResumeDoctorRegistration(
+            session.user.userMetadata?['role'] as String?,
+            ref.read(userProvider).error,
+          )) {
+        return loc == '/doctor_register' ? null : '/doctor_register';
+      }
       final decision = authRedirectDecision(
         location: loc,
         authLoading: authState.isLoading,
@@ -257,10 +285,19 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/login', builder: (context, state) => const AuthScreen()),
       GoRoute(
           path: '/patient_home',
-          builder: (context, state) => const PatientHomeScreen()),
+          builder: (context, state) => PatientHomeScreen(
+                initialTab:
+                    state.uri.queryParameters['tab'] == 'schedule' ? 1 : 0,
+              )),
       GoRoute(
           path: '/doctor_home',
-          builder: (context, state) => const DoctorHomeScreen()),
+          builder: (context, state) => DoctorHomeScreen(
+                initialTab: switch (state.uri.queryParameters['tab']) {
+                  'requests' => 1,
+                  'schedule' => 2,
+                  _ => 0,
+                },
+              )),
       GoRoute(
           path: '/doctor_register',
           builder: (context, state) => const DoctorRegisterScreen()),

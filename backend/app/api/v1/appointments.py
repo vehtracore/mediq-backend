@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from typing import List
 from datetime import datetime, timezone, timedelta
+from uuid import uuid4
 from pydantic import BaseModel
 import logging
 import time
@@ -21,6 +22,8 @@ from app.models.appointment import (
 from app.models.doctor import Doctor
 from app.models.user import User
 from app.models.review import Review
+from app.models.support_message import SupportMessage
+from app.models.consultation_payout import ConsultationPayout
 from app.models.vault import ConsultationRecord
 from app.schemas.appointment import SlotCreate, SlotResponse, AppointmentCreate, AppointmentResponse, AppointmentUpdate, GeneralBookRequest, ReferralRequest, ReferralResponse, AppointmentProposeRequest, VIPBookRequest, ReferralCreate
 from app.services.consultation_pricing import (
@@ -29,7 +32,12 @@ from app.services.consultation_pricing import (
 )
 from app.services.consultation_completion import complete_consultation
 from app.services.consultation_payout_service import consultation_payout_hold_until
-from app.services.consultation_refund_service import REFUND_STATUS_AWAITING_ADMIN
+from app.services.consultation_refund_service import (
+    REFUND_STATUS_AWAITING_ADMIN,
+    payout_precludes_refund,
+)
+from app.services import support_email_service
+from app.api.v1.support import _claim_email_attempt
 from app.api import deps
 from app.services.notification_service import NotificationType, notify_user
 from app.core.limiter import limiter
@@ -1514,6 +1522,11 @@ def propose_appointment_time(
     appt.status = "awaiting_payment"
     db.commit()
     db.refresh(appt)
+    _notify_patient(
+        db,
+        appt,
+        notification_type=NotificationType.CONSULTATION_TIME_PROPOSED,
+    )
 
     p_name = f"{appt.patient.first_name} {appt.patient.last_name}" if appt.patient else "Unknown"
     
@@ -1551,7 +1564,13 @@ def raise_appointment_complaint(
     current_user: User = Depends(deps.get_current_user),
 ):
     """Allow a patient to raise a refund/dispute review within the 24h hold."""
-    appt = db.query(Appointment).filter(Appointment.id == appt_id).first()
+    appt = (
+        db.query(Appointment)
+        .filter(Appointment.id == appt_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
     if not appt:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1590,10 +1609,46 @@ def raise_appointment_complaint(
             detail="This consultation has already been reported and reviewed.",
         )
 
+    payout = (
+        db.query(ConsultationPayout)
+        .filter(ConsultationPayout.appointment_id == appt_id)
+        .first()
+    )
+    if payout_precludes_refund(payout):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This consultation already has an approved doctor payout.",
+        )
+
     appt.refund_status = REFUND_STATUS_AWAITING_ADMIN
     appt.refund_amount = appt.amount
     appt.refund_last_error = f"Patient complaint: {reason}"
     db.commit()
+    try:
+        email_record = SupportMessage(
+            request_id=uuid4(),
+            user_id=current_user.id,
+            subject=f"Consultation Refund / Dispute — #{appt.id}",
+            message=(
+                f"Appointment: #{appt.id}\n"
+                f"Payment reference: {appt.paystack_reference or 'Unavailable'}\n"
+                "Refund status: Awaiting Admin Review\n"
+                f"Reason: {reason}"
+            ),
+            email_status="pending",
+        )
+        db.add(email_record)
+        db.commit()
+        _send_consultation_dispute_email(db, email_record, current_user, appt.id)
+    except Exception as exc:
+        # The committed refund review is authoritative even if email tracking
+        # or delivery fails. Never expose clinical or complaint text in logs.
+        db.rollback()
+        logger.warning(
+            "[DISPUTE EMAIL] Delivery tracking failed appointment_id=%s category=%s",
+            appt_id,
+            type(exc).__name__,
+        )
     return {
         "status": "submitted",
         "appointment_id": appt.id,
@@ -1833,3 +1888,50 @@ async def send_specialist_referral(
         "patient_name": patient_name,
         "specialist_type": payload.specialist_type,
     }
+
+
+def _send_consultation_dispute_email(
+    db: Session, submission: SupportMessage, patient: User, appointment_id: int
+) -> None:
+    """Reuse the durable support-email claim and provider delivery path."""
+    if not _claim_email_attempt(db, submission):
+        return
+    patient_name = (
+        f"{patient.first_name or ''} {patient.last_name or ''}".strip() or "Unknown"
+    )
+    try:
+        provider_id = support_email_service.send_support_email(
+            request_id=submission.request_id,
+            user_name=patient_name,
+            user_email=patient.email or "",
+            user_role=patient.role or "unknown",
+            subject=submission.subject,
+            message=submission.message,
+            submitted_at=submission.created_at,
+            email_subject=submission.subject,
+            recipient_email="mdqplus.info@gmail.com",
+        )
+    except Exception as exc:
+        category = (
+            exc.category
+            if isinstance(exc, support_email_service.SupportEmailDeliveryError)
+            else "unknown"
+        )
+        submission.email_status = "failed"
+        submission.failure_category = category
+        submission.provider_message_id = None
+        submission.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        logger.warning(
+            "[DISPUTE EMAIL] Delivery failed appointment_id=%s category=%s",
+            appointment_id,
+            category,
+        )
+        return
+
+    submission.email_status = "sent"
+    submission.provider_message_id = provider_id
+    submission.failure_category = None
+    submission.sent_at = datetime.now(timezone.utc)
+    submission.updated_at = submission.sent_at
+    db.commit()

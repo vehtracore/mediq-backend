@@ -13,10 +13,14 @@ class SupportContactSheet extends StatefulWidget {
     super.key,
     required this.onSend,
     this.createRequestId,
+    this.initialSubject,
+    this.onBack,
   });
 
   final SupportMessageSender onSend;
   final String Function()? createRequestId;
+  final String? initialSubject;
+  final VoidCallback? onBack;
 
   static String _newRequestId() => const Uuid().v4();
 
@@ -39,6 +43,7 @@ class _SupportContactSheetState extends State<SupportContactSheet> {
   @override
   void initState() {
     super.initState();
+    _subjectController.text = widget.initialSubject ?? '';
     _subjectController.addListener(_draftChanged);
     _messageController.addListener(_draftChanged);
   }
@@ -117,9 +122,19 @@ class _SupportContactSheetState extends State<SupportContactSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Contact Support',
-              style: Theme.of(context).textTheme.titleLarge,
+            Row(
+              children: [
+                if (widget.onBack != null)
+                  IconButton(
+                    tooltip: 'Back',
+                    onPressed: widget.onBack,
+                    icon: const Icon(Icons.arrow_back),
+                  ),
+                Text(
+                  'Customer Service',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ],
             ),
             const SizedBox(height: 16),
             TextField(

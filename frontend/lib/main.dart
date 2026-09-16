@@ -246,8 +246,13 @@ class _MDQAppState extends ConsumerState<MDQApp> with WidgetsBindingObserver {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      notificationNavigation.attachNavigator(goRouter.go);
-      notificationNavigation.updateSessionReady(notificationSessionReady);
+      notificationNavigation.attachNavigator((route) {
+        goRouter.push(route);
+      });
+      notificationNavigation.updateSessionReady(
+        notificationSessionReady,
+        role: fetchedUser?.role,
+      );
       if (_firebaseReady) {
         final service = ref.read(notificationServiceProvider);
         unawaited(service.initialize(
@@ -259,7 +264,10 @@ class _MDQAppState extends ConsumerState<MDQApp> with WidgetsBindingObserver {
           onForegroundMessage: (message) {
             ref.invalidate(notificationsProvider);
             ref.invalidate(unreadNotificationCountProvider);
-            final intent = NotificationIntent.fromData(message.data);
+            final intent = NotificationIntent.fromData(
+              message.data,
+              role: fetchedUser?.role,
+            );
             final currentPath =
                 goRouter.routerDelegate.currentConfiguration.uri.path;
             if (intent?.route == currentPath) return;

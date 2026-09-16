@@ -1,5 +1,7 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mediq_app/src/core/router/app_router.dart';
+import 'package:mediq_app/src/features/auth/data/profile_exception.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 String? _redirect({
@@ -67,6 +69,11 @@ void main() {
 
   test('password recovery unlatches on completion sign-out and later login',
       () {
+    expect(_redirect(passwordRecovery: true), '/update-password');
+    expect(
+      _redirect(passwordRecovery: true, hasSession: false),
+      '/auth',
+    );
     var recovery = nextPasswordRecoveryState(
       false,
       AuthChangeEvent.passwordRecovery,
@@ -77,6 +84,28 @@ void main() {
     expect(recovery, isFalse);
     expect(
       nextPasswordRecoveryState(recovery, AuthChangeEvent.signedIn),
+      isFalse,
+    );
+  });
+
+  test(
+      'verified doctor identity with no local application resumes registration',
+      () {
+    final request = RequestOptions(path: '/api/v1/auth/me');
+    final missingProfile = ProfileAuthoritativeException(
+      'Profile not found',
+      cause: DioException(
+        requestOptions: request,
+        response: Response(requestOptions: request, statusCode: 401),
+      ),
+    );
+    expect(shouldResumeDoctorRegistration('doctor', missingProfile), isTrue);
+    expect(shouldResumeDoctorRegistration('patient', missingProfile), isFalse);
+    expect(
+      shouldResumeDoctorRegistration(
+        'doctor',
+        const ProfileTemporaryException('Network unavailable'),
+      ),
       isFalse,
     );
   });
