@@ -70,6 +70,7 @@ firebase-admin
 apscheduler==3.11.0
 fpdf2
 pypdf==6.16.2
+defusedxml==0.7.1
 mutagen==1.47.0
 
 

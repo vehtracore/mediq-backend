@@ -2,6 +2,8 @@ import logging
 import os
 import uuid
 import json
+import hashlib
+import asyncio
 from urllib.parse import parse_qs, urlparse
 
 import cloudinary
@@ -25,10 +27,18 @@ from typing import Literal, Optional
 from uuid import UUID
 
 from app.services import ai_service
+from app.services.ai_interaction import InteractionResponse
+from app.services.ai_assessment import (
+    assessment_snapshot, aware, cancel_assessment, owned_session, resumable_assessment,
+)
+from app.services.ai_orchestrator import InteractionInput, run_interaction
+from app.services.ai_provider import AIErrorCategory, AIProviderError
 from app.core.database import get_db
 from app.core.api_errors import ApiError
 from app.models.user import User
 from app.models.vault import AIChatSummary
+from app.models.ai_chat_receipt import AIChatRequestReceipt
+from app.models.lab_result import LabResult
 from app.api import deps
 from app.api.v1.ai_consent import require_active_ai_consent
 from app.core.limiter import limiter
@@ -39,8 +49,12 @@ from app.services.ai_usage import (
 )
 from app.services.ai_request_guard import (
     AIRequestLease,
-    acquire_ai_request_lease,
-    release_ai_request_lease,
+)
+from app.services.ai_request_guard import ai_request_digest
+from fastapi.responses import JSONResponse
+from app.services.ai_chat_operation import (
+    acquire_chat_operation, chat_operation_status, finish_chat_operation,
+    require_chat_operation_owner, start_chat_operation,
 )
 from app.services.ai_pdf import read_validated_ai_pdf
 from app.services.subscription_entitlement import has_active_paid_entitlement
@@ -67,6 +81,9 @@ cloudinary.config(
 
 class ChatRequest(BaseModel):
     message: str
+    interaction_id: Optional[UUID] = None
+    expected_state_version: Optional[int] = None
+    lab_result_id: Optional[int] = None
     image_url: Optional[str] = None
     image_public_id: Optional[str] = None
     image_format: Optional[Literal["jpg", "jpeg", "png", "webp"]] = None
@@ -77,12 +94,6 @@ class ChatRequest(BaseModel):
     update_memory: bool = False
     source_summary_id: Optional[UUID] = None
     source_summary_updated_at: Optional[datetime] = None
-
-
-class ChatResponse(BaseModel):
-    response: str
-    usage_notice: Optional[str] = None
-    memory_summary: Optional[str] = None
 
 
 class TemporaryImageResponse(BaseModel):
@@ -115,24 +126,110 @@ _COLD_CAP_MINUTES: int = 15
 _TEMP_IMAGE_TTL = timedelta(hours=2)
 
 
-def require_ai_request_slot(
-    x_ai_request_id: Optional[str] = Header(
-        default=None,
-        alias="X-AI-Request-ID",
-        min_length=8,
-        max_length=128,
-    ),
+class CancelAssessmentRequest(BaseModel):
+    expected_state_version: int
+
+
+def _chat_fingerprint(payload: ChatRequest, document_bytes: bytes | None = None) -> str:
+    content = payload.model_dump(mode="json")
+    if document_bytes is not None:
+        content["document_sha256"] = hashlib.sha256(document_bytes).hexdigest()
+    serialized = json.dumps(content, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+async def _run_chat_operation(
+    request: Request, chat_request: ChatRequest, db: Session,
+    current_user: User, request_id: str, document_bytes: bytes | None = None,
+):
+    fingerprint = _chat_fingerprint(chat_request, document_bytes)
+    receipt = _get_chat_receipt(db, current_user.id, request_id)
+    if receipt is not None:
+        if receipt.request_fingerprint != fingerprint:
+            raise ApiError(409, "request_conflict", "This request ID was used for different content.")
+        return InteractionResponse(**receipt.response_json)
+    operation = acquire_chat_operation(db, current_user.id, request_id, fingerprint)
+    if operation.disposition == "replay":
+        # A committed receipt is the only source of clinical response content.
+        receipt = _get_chat_receipt(db, current_user.id, request_id)
+        if receipt is not None:
+            return InteractionResponse(**receipt.response_json)
+        raise ApiError(503, "operation_unavailable", "The request status could not be confirmed. Please try again.")
+    if operation.disposition == "active":
+        return JSONResponse(status_code=202, content={"status": "processing", "request_id": request_id})
+    if not start_chat_operation(db, operation):
+        receipt = _get_chat_receipt(db, current_user.id, request_id)
+        if receipt is not None:
+            return InteractionResponse(**receipt.response_json)
+        return JSONResponse(status_code=202, content={"status": "processing", "request_id": request_id})
+    receipt = _get_chat_receipt(db, current_user.id, request_id)
+    if receipt is not None:
+        finish_chat_operation(db, operation, succeeded=False)
+        return InteractionResponse(**receipt.response_json)
+    lease = AIRequestLease(current_user.id, operation.owner, None)
+    try:
+        result = await asyncio.wait_for(
+            _analyze_chat_request(
+                request, chat_request, db, current_user, lease,
+                document_bytes=document_bytes, operation=operation,
+            ),
+            timeout=270,
+        )
+    except asyncio.TimeoutError as exc:
+        try:
+            finish_chat_operation(db, operation, succeeded=False)
+        except Exception:
+            logger.exception("[AI CHAT] operation release failed request_id=%s", request_id)
+        raise ApiError(504, "ai_operation_timeout", "This request took too long. Please try again.") from exc
+    except BaseException as exc:
+        try:
+            finish_chat_operation(db, operation, succeeded=False)
+        except Exception:
+            logger.exception("[AI CHAT] operation release failed request_id=%s", request_id)
+        raise
+    try:
+        finish_chat_operation(db, operation, succeeded=True)
+    except Exception:
+        logger.exception("[AI CHAT] result cache unavailable request_id=%s", request_id)
+    return result
+
+
+@router.get("/request-status/{request_id}")
+def get_chat_request_status(
+    request_id: str,
+    db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
-    """Allow only one AI analyze request per user and reject request retries."""
-    lease = acquire_ai_request_lease(
-        current_user.id,
-        x_ai_request_id,
+    receipt = _get_chat_receipt(db, current_user.id, request_id)
+    if receipt is not None:
+        return {"status": "succeeded", "response": receipt.response_json}
+    return chat_operation_status(db, current_user.id, request_id)
+
+
+def _get_chat_receipt(db: Session, user_id: int, request_id: str):
+    return (
+        db.query(AIChatRequestReceipt)
+        .filter(
+            AIChatRequestReceipt.patient_id == user_id,
+            AIChatRequestReceipt.request_digest == ai_request_digest(request_id),
+            AIChatRequestReceipt.expires_at > datetime.now(timezone.utc),
+        )
+        .first()
     )
-    try:
-        yield lease
-    finally:
-        release_ai_request_lease(lease)
+
+
+def _get_owned_lab_context(db: Session, record_id: int, user_id: int) -> dict:
+    record = db.query(LabResult).filter(
+        LabResult.id == record_id,
+        LabResult.user_id == user_id,
+    ).first()
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="This lab result is no longer available.")
+    if not isinstance(record.raw_data, dict) or record.raw_data.get("status") != "SUCCESS":
+        raise ApiError(status.HTTP_422_UNPROCESSABLE_ENTITY, "lab_context_unavailable",
+                       "This lab result could not be interpreted. Please choose another result.")
+    return record.raw_data
 
 
 def _paid_message_thresholds(plan: str) -> tuple[int, int]:
@@ -342,21 +439,54 @@ def delete_temporary_chat_image(
 # Chat endpoint
 # ---------------------------------------------------------------------------
 
-@router.post("/analyze", response_model=ChatResponse)
+@router.get("/assessment/current")
+def get_current_assessment(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    require_active_ai_consent(current_user)
+    session = resumable_assessment(db, current_user.id)
+    return {"assessment": assessment_snapshot(session) if session else None}
+
+
+@router.get("/assessment/{assessment_id}")
+def get_assessment(
+    assessment_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    require_active_ai_consent(current_user)
+    session = owned_session(db, current_user.id, str(assessment_id))
+    if aware(session.expires_at) <= datetime.now(timezone.utc):
+        raise ApiError(404, "assessment_not_found", "This assessment is no longer available.")
+    return assessment_snapshot(session)
+
+
+@router.post("/assessment/{assessment_id}/cancel")
+def cancel_current_assessment(
+    assessment_id: UUID,
+    payload: CancelAssessmentRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+    x_ai_request_id: str = Header(alias="X-AI-Request-ID", min_length=8, max_length=128),
+):
+    require_active_ai_consent(current_user)
+    return cancel_assessment(
+        db, patient_id=current_user.id, assessment_id=str(assessment_id),
+        expected_version=payload.expected_state_version, request_id=x_ai_request_id,
+    )
+
+@router.post("/analyze", response_model=InteractionResponse)
 @limiter.limit("30/minute")
 async def analyze_symptoms(
     request: Request,
     chat_request: ChatRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
-    request_lease: AIRequestLease = Depends(require_ai_request_slot),
+    x_ai_request_id: str = Header(alias="X-AI-Request-ID", min_length=8, max_length=128),
 ):
-    return await _analyze_chat_request(
-        request,
-        chat_request,
-        db,
-        current_user,
-        request_lease,
+    return await _run_chat_operation(
+        request, chat_request, db, current_user, x_ai_request_id,
     )
 
 
@@ -368,12 +498,13 @@ async def _analyze_chat_request(
     request_lease: AIRequestLease,
     *,
     document_bytes: bytes | None = None,
+    operation=None,
 ):
     """
     AI Symptom Checker / Chat endpoint.
 
     Enforces a three-layer, plan-aware quota system before forwarding the
-    request to the Gemini AI service:
+    request to the configured AI provider:
 
     Layer 0 — Global Cold-Cap (anti-spam)
         Any user who sends 15 messages within a 15-minute window is
@@ -390,7 +521,7 @@ async def _analyze_chat_request(
         rolling 24 hours.
 
     Layer 3 — AI call & counter commit
-        Counters are only incremented after a successful Gemini response so
+        Counters are only incremented after a successful AI response so
         that network/API failures do not penalise the user's allowance.
     """
 
@@ -407,6 +538,11 @@ async def _analyze_chat_request(
     has_document = document_bytes is not None
     has_heavy_attachment = has_image or has_document
     trusted_image_url = None
+
+    lab_context = None
+    if chat_request.lab_result_id is not None:
+        lab_context = _get_owned_lab_context(
+            db, chat_request.lab_result_id, current_user.id)
 
     if has_image and has_document:
         raise HTTPException(
@@ -471,7 +607,8 @@ async def _analyze_chat_request(
         ).url
 
     # Guard: at least one of text or attachment must be present.
-    if not chat_request.message.strip() and not has_heavy_attachment:
+    if (not chat_request.message.strip() and not has_heavy_attachment
+            and lab_context is None and chat_request.interaction_id is None):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Message or Image is required",
@@ -616,7 +753,7 @@ async def _analyze_chat_request(
             )
 
     # =========================================================================
-    # LAYER 3 — Call Gemini and commit counters on success
+    # LAYER 3 — Call the provider and commit counters on success
     # =========================================================================
 
     user_age = "Unknown"
@@ -652,19 +789,29 @@ async def _analyze_chat_request(
 
     try:
         try:
-            ai_result = await ai_service.get_medical_response(
-                chat_request.message,
+            interaction = await run_interaction(InteractionInput(
+                request_id=operation.request_id if operation is not None else str(uuid.uuid4()),
+                interaction_id=str(chat_request.interaction_id) if chat_request.interaction_id else None,
+                message=chat_request.message,
+                language=target_language,
                 history=entitled_history,
                 image_url=trusted_image_url,
                 user_context=user_context,
-                target_language=target_language,
                 conversation_memory=entitled_conversation_memory,
                 memory_source=entitled_memory_source,
                 update_memory=entitled_update_memory,
                 historical_saved_context=historical_saved_context,
                 document_bytes=document_bytes,
+                lab_context=lab_context,
                 plan_category=plan_category,
-            )
+                db=db,
+                patient_id=current_user.id,
+                expected_state_version=chat_request.expected_state_version,
+                attachment_id=(chat_request.image_public_id or
+                               f"lab:{chat_request.lab_result_id}" if chat_request.lab_result_id else
+                               "pdf:current-request" if document_bytes is not None else None),
+                source_summary_id=str(chat_request.source_summary_id) if chat_request.source_summary_id else None,
+            ))
         except ai_service.AIInputLimitError:
             logger.info(
                 "[AI CHAT] plan=%s quota_outcome=not_consumed finish=input_limit",
@@ -686,13 +833,34 @@ async def _analyze_chat_request(
                 "analysis_unavailable",
                 "We couldn't analyze that right now. Please try again.",
             )
+        except AIProviderError as exc:
+            logger.info(
+                "[AI CHAT] plan=%s quota_outcome=not_consumed error_category=%s",
+                plan_category, exc.category.value,
+            )
+            if exc.category == AIErrorCategory.MEDIA_PROCESSING_FAILED:
+                raise ApiError(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, "media_processing_failed",
+                    "This image could not be processed. Please try another image.",
+                ) from exc
+            if exc.category == AIErrorCategory.INPUT_TOO_LARGE:
+                raise ApiError(
+                    status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "file_too_large",
+                    "This attachment is too large to analyze.",
+                ) from exc
+            raise ApiError(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "analysis_unavailable",
+                "We couldn't analyze that right now. Please try again.",
+            ) from exc
+        except ApiError:
+            raise
         except Exception:
             logger.info(
                 "[AI CHAT] plan=%s quota_outcome=not_consumed finish=abnormal",
                 plan_category,
             )
             logger.exception(
-                "[AI CHAT] Gemini processing failed for user_id=%s",
+                "[AI CHAT] Provider processing failed for user_id=%s",
                 current_user.id,
             )
             raise ApiError(
@@ -707,11 +875,16 @@ async def _analyze_chat_request(
                 current_user.id,
             )
 
-    # ── Increment all relevant counters (only reached on Gemini success) ─────
-    current_user.burst_chat_count = (current_user.burst_chat_count or 0) + 1
+    # ── Increment all relevant counters (only reached on AI success) ─────
+    is_assessment = interaction.assessment_id is not None
+    charge_usage = not is_assessment or interaction.result_kind.value in {"ASSESSMENT_RESULT", "URGENT"}
+    if charge_usage:
+        current_user.burst_chat_count = (current_user.burst_chat_count or 0) + 1
 
     usage_notice = None
-    if has_paid_entitlement:
+    if not charge_usage:
+        pass
+    elif has_paid_entitlement:
         monthly_soft_limit, monthly_warning_at = _paid_message_thresholds(
             plan_category
         )
@@ -736,29 +909,38 @@ async def _analyze_chat_request(
                 "your monthly allowance resets."
             )
 
-        if has_heavy_attachment:
+        if has_heavy_attachment and not is_assessment:
             current_user.monthly_chat_image_count = (
                 current_user.monthly_chat_image_count or 0
             ) + 1
     else:
         current_user.monthly_chat_count = (current_user.monthly_chat_count or 0) + 1
-        if has_heavy_attachment:
+        if has_heavy_attachment and not is_assessment:
             current_user.monthly_chat_image_count = (current_user.monthly_chat_image_count or 0) + 1
 
     db.add(current_user)
+    result = interaction.model_copy(update={"usage_notice": usage_notice})
+    if operation is not None:
+        require_chat_operation_owner(db, operation)
+        committed_at = datetime.now(timezone.utc)
+        db.add(AIChatRequestReceipt(
+            patient_id=current_user.id,
+            request_digest=ai_request_digest(operation.request_id),
+            request_fingerprint=operation.fingerprint,
+            response_json=result.model_dump(),
+            created_at=committed_at,
+            expires_at=committed_at + (timedelta(hours=72) if is_assessment else timedelta(minutes=10)),
+        ))
     db.commit()
     request_lease.completed = True
     logger.info(
-        "[AI CHAT] plan=%s quota_outcome=consumed response_chars=%s",
+        "[AI CHAT] plan=%s quota_outcome=%s response_chars=%s",
         plan_category,
-        len(ai_result.text),
+        "consumed" if charge_usage else "deferred",
+        len(str(result.result.model_dump())),
     )
 
-    return ChatResponse(
-        response=ai_result.text,
-        usage_notice=usage_notice,
-        memory_summary=ai_result.memory_update,
-    )
+    return result
 
 
 def _parse_document_history(raw_history: str) -> list:
@@ -777,7 +959,7 @@ def _parse_document_history(raw_history: str) -> list:
     return history
 
 
-@router.post("/analyze-document", response_model=ChatResponse)
+@router.post("/analyze-document", response_model=InteractionResponse)
 @limiter.limit("10/hour")
 async def analyze_document(
     request: Request,
@@ -785,6 +967,9 @@ async def analyze_document(
     message: str = Form(""),
     history: str = Form("[]"),
     language: str = Form("English"),
+    interaction_id: Optional[UUID] = Form(None),
+    expected_state_version: Optional[int] = Form(None),
+    lab_result_id: Optional[int] = Form(None),
     conversation_memory: Optional[str] = Form(None),
     memory_source: Optional[str] = Form(None),
     update_memory: bool = Form(False),
@@ -792,7 +977,7 @@ async def analyze_document(
     source_summary_updated_at: Optional[datetime] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
-    request_lease: AIRequestLease = Depends(require_ai_request_slot),
+    x_ai_request_id: str = Header(alias="X-AI-Request-ID", min_length=8, max_length=128),
 ):
     """Validate and analyse one temporary PDF without persisting its bytes."""
     require_active_ai_consent(current_user)
@@ -801,17 +986,16 @@ async def analyze_document(
         message=message.strip() or "Analyse and explain this PDF document.",
         history=_parse_document_history(history),
         language=language,
+        interaction_id=interaction_id,
+        expected_state_version=expected_state_version,
+        lab_result_id=lab_result_id,
         conversation_memory=conversation_memory,
         memory_source=memory_source,
         update_memory=update_memory,
         source_summary_id=source_summary_id,
         source_summary_updated_at=source_summary_updated_at,
     )
-    return await _analyze_chat_request(
-        request,
-        chat_request,
-        db,
-        current_user,
-        request_lease,
+    return await _run_chat_operation(
+        request, chat_request, db, current_user, x_ai_request_id,
         document_bytes=document_bytes,
     )

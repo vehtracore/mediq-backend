@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from fastapi import HTTPException, UploadFile, status
 from mutagen.mp4 import MP4
 from openai import AsyncOpenAI
+from app.core.api_errors import ApiError
 
 
 logger = logging.getLogger(__name__)
@@ -104,9 +105,18 @@ def require_voice_input_capability(language: str | None) -> tuple[str, VoiceInpu
 
 
 def _invalid_audio() -> HTTPException:
-    return HTTPException(
+    return ApiError(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail="This audio file could not be processed. Use an M4A or WAV recording.",
+        code="invalid_audio_container",
+        message="This recording is incomplete or invalid. Please record it again.",
+    )
+
+
+def _unsupported_audio() -> HTTPException:
+    return ApiError(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        code="unsupported_audio_format",
+        message="This recording format is unsupported. Use M4A/AAC or WAV/PCM.",
     )
 
 
@@ -130,6 +140,8 @@ def _m4a_duration(data: bytes) -> float:
     try:
         parsed = MP4(io.BytesIO(data))
         duration = float(parsed.info.length)
+        if not str(parsed.info.codec).startswith("mp4a"):
+            raise _unsupported_audio()
         if parsed.info.channels <= 0 or parsed.info.sample_rate <= 0:
             raise _invalid_audio()
         return duration
@@ -163,18 +175,18 @@ def validate_voice_audio_bytes(
 
     if is_wav:
         if not safe_name.endswith(".wav") or safe_type not in _WAV_CONTENT_TYPES:
-            raise _invalid_audio()
+            raise _unsupported_audio()
         duration = _wav_duration(data)
         provider_filename = "mdq_voice.wav"
         provider_content_type = "audio/wav"
     elif is_m4a:
         if not safe_name.endswith(".m4a") or safe_type not in _M4A_CONTENT_TYPES:
-            raise _invalid_audio()
+            raise _unsupported_audio()
         duration = _m4a_duration(data)
         provider_filename = "mdq_voice.m4a"
         provider_content_type = "audio/mp4"
     else:
-        raise _invalid_audio()
+        raise _unsupported_audio()
 
     if not math.isfinite(duration) or duration < MIN_STT_AUDIO_SECONDS:
         raise HTTPException(

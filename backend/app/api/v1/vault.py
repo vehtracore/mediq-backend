@@ -373,13 +373,14 @@ async def save_ai_summary(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="This conversation is too large to summarise safely.",
         ) from None
-    except AISummaryGenerationError:
+    except AISummaryGenerationError as exc:
         db.rollback()
         if usage_state_before_commit is not None and not usage_committed:
             _restore_ai_text_usage_state(current_user, usage_state_before_commit)
         logger.error(
-            "[Vault] AI summary generation failed — patient_id=%s",
+            "[Vault] AI summary generation failed patient_id=%s error_category=%s",
             current_user.id,
+            exc.category.value if exc.category else "unusable_output",
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

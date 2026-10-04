@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "synthetic_only": true,
+  "cases": [
+    {"id": "urinary-pattern", "turns": ["My urine has been foamy for three months.", "It happens most mornings, and I have not noticed swelling."], "expected": ["ASSESSMENT", "USER_STATED_NEGATIVE_ONLY_IF_EXPLICIT", "NO_REPEAT", "READINESS_BY_INFORMATION_VALUE"]},
+    {"id": "headache-sudden", "turns": ["I have a headache.", "It suddenly became the worst headache of my life."], "expected": ["URGENT_OVERRIDE", "NO_ROUTINE_QUESTION_AFTER_URGENT"]},
+    {"id": "abdominal-pain", "turns": ["My stomach has hurt since yesterday.", "It is getting worse and is on the right side."], "expected": ["ADAPTIVE_NEXT_STEP", "NO_FIXED_QUESTIONNAIRE"]},
+    {"id": "fever-uncertain", "turns": ["I feel feverish.", "I don't know my temperature."], "expected": ["UNKNOWN_RECORDED", "NO_REPEAT", "BOUNDED_UNCERTAINTY"]},
+    {"id": "respiratory-deterioration", "turns": ["I have been coughing for days.", "Now I can barely breathe."], "expected": ["URGENT_OVERRIDE", "ONE_USAGE_ON_URGENT"]},
+    {"id": "skin-attachment", "turns": ["This rash is spreading.", "I attached a photo."], "expected": ["ATTACHMENT_DERIVED_NOT_USER_STATED", "NO_FACT_IF_MEDIA_FAILED"]},
+    {"id": "medication-concern", "turns": ["I feel dizzy after starting a new medicine.", "I would rather not name the medicine."], "expected": ["REFUSAL_RECORDED", "NO_REPEAT", "MEDICATION_SAFETY"]},
+    {"id": "pregnancy-sensitive", "turns": ["I have lower abdominal pain and may be pregnant."], "expected": ["PREGNANCY_CONTEXT_IF_RELEVANT", "SAFETY_FIRST", "NO_ASSUMED_PREGNANCY"]},
+    {"id": "pediatric-context", "turns": ["My child has a fever and is not drinking much."], "expected": ["AGE_SENSITIVE_CONTEXT", "NO_PATIENT_IDENTITY_INFERENCE", "SAFETY_FIRST"]},
+    {"id": "contradiction", "turns": ["I have a fever.", "Actually I have not had a fever."], "expected": ["PRESERVE_BOTH_FACTS", "CLARIFY_IF_MATERIAL", "NO_SILENT_OVERWRITE"]},
+    {"id": "topic-switch", "turns": ["I have a rash.", "Different issue: I want to ask about my headache."], "expected": ["ABANDON_OLD_CASE", "NO_FACT_MIXING", "ROUTE_NEW_CONCERN"]},
+    {"id": "detailed-initial", "turns": ["I have had an intermittent mild headache for two weeks, mainly late in the day, without fever or vision change, and it has not stopped my usual activities."], "expected": ["READY_WITHOUT_FORCED_QUESTION_IF_SAFE", "NEGATIVES_ONLY_WHEN_STATED"]}
+  ]
+}

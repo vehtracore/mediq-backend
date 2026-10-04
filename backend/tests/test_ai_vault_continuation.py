@@ -27,6 +27,7 @@ from app.services.ai_summary_service import (
     SummaryGenerationResult,
     SummaryTurn,
 )
+from tests.ai_provider_fakes import install_model
 
 
 def _record(*, patient_id: int = 7, text: str = "Summary A"):
@@ -836,7 +837,7 @@ class _FakeModel:
         self.generated_prompts = []
 
     async def count_tokens_async(self, contents):
-        text = str(contents[0])
+        text = str(contents[0]["parts"][0])
         return SimpleNamespace(total_tokens=max(1, len(text) // self.token_divisor))
 
     def start_chat(self, history):
@@ -845,8 +846,7 @@ class _FakeModel:
 
 def test_single_pass_summary_sends_every_turn_once(monkeypatch) -> None:
     model = _FakeModel(token_divisor=20)
-    monkeypatch.setattr(ai_summary_service.ai_service, "GEMINI_API_KEY", "test")
-    monkeypatch.setattr(ai_summary_service.ai_service, "heavy_model", model)
+    install_model(monkeypatch, ai_summary_service, "summary", model)
     turns = [
         SummaryTurn("user", "EARLY fact"),
         SummaryTurn("assistant", "MIDDLE advice"),
@@ -864,8 +864,7 @@ def test_single_pass_summary_sends_every_turn_once(monkeypatch) -> None:
 
 def test_multi_chunk_summary_includes_every_turn_and_middle_fact(monkeypatch) -> None:
     model = _FakeModel(token_divisor=4)
-    monkeypatch.setattr(ai_summary_service.ai_service, "GEMINI_API_KEY", "test")
-    monkeypatch.setattr(ai_summary_service.ai_service, "heavy_model", model)
+    install_model(monkeypatch, ai_summary_service, "summary", model)
     turns = [
         SummaryTurn(
             "user" if index % 2 == 0 else "assistant",
@@ -882,7 +881,7 @@ def test_multi_chunk_summary_includes_every_turn_and_middle_fact(monkeypatch) ->
     combined_chunks = "\n".join(chunk_prompts)
     assert result.chunk_count > 1
     assert result.generation_calls <= ai_summary_service.MAX_GENERATION_CALLS
-    assert result.provider_calls <= ai_summary_service.MAX_GEMINI_CALLS
+    assert result.provider_calls <= ai_summary_service.MAX_PROVIDER_CALLS
     for index in range(14):
         assert f"TURN_{index}_FACT" in combined_chunks
     assert "TURN_7_FACT" in combined_chunks
@@ -891,8 +890,7 @@ def test_multi_chunk_summary_includes_every_turn_and_middle_fact(monkeypatch) ->
 
 def test_excessive_chunk_count_is_rejected(monkeypatch) -> None:
     model = _FakeModel(token_divisor=1)
-    monkeypatch.setattr(ai_summary_service.ai_service, "GEMINI_API_KEY", "test")
-    monkeypatch.setattr(ai_summary_service.ai_service, "heavy_model", model)
+    install_model(monkeypatch, ai_summary_service, "summary", model)
     turns = [SummaryTurn("user", "x" * 1_900) for _ in range(5)]
 
     with pytest.raises(AISummaryInputError, match="too many chunks"):
@@ -905,8 +903,7 @@ def test_final_summary_output_is_bounded_without_chopping(monkeypatch) -> None:
         token_divisor=20,
         response_text="x" * (ai_summary_service.MAX_FINAL_SUMMARY_CHARS + 1),
     )
-    monkeypatch.setattr(ai_summary_service.ai_service, "GEMINI_API_KEY", "test")
-    monkeypatch.setattr(ai_summary_service.ai_service, "heavy_model", model)
+    install_model(monkeypatch, ai_summary_service, "summary", model)
 
     with pytest.raises(AISummaryGenerationError, match="unusable"):
         asyncio.run(
@@ -918,8 +915,7 @@ def test_final_summary_output_is_bounded_without_chopping(monkeypatch) -> None:
 
 def test_empty_model_output_is_rejected(monkeypatch) -> None:
     model = _FakeModel(token_divisor=20, response_text="")
-    monkeypatch.setattr(ai_summary_service.ai_service, "GEMINI_API_KEY", "test")
-    monkeypatch.setattr(ai_summary_service.ai_service, "heavy_model", model)
+    install_model(monkeypatch, ai_summary_service, "summary", model)
 
     with pytest.raises(AISummaryGenerationError, match="unusable"):
         asyncio.run(
@@ -931,8 +927,7 @@ def test_empty_model_output_is_rejected(monkeypatch) -> None:
 
 def test_intermediate_chunk_summaries_are_not_persisted(monkeypatch) -> None:
     model = _FakeModel(token_divisor=4)
-    monkeypatch.setattr(ai_summary_service.ai_service, "GEMINI_API_KEY", "test")
-    monkeypatch.setattr(ai_summary_service.ai_service, "heavy_model", model)
+    install_model(monkeypatch, ai_summary_service, "summary", model)
     turns = [
         {
             "role": "user" if index % 2 == 0 else "assistant",

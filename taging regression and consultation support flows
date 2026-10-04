@@ -1,0 +1,17 @@
+warning: in the working copy of 'backend/app/api/v1/admin.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/api/v1/appointments.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/consultation_refund_service.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/notification_service.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/support_email_service.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/test_consultation_refund.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/test_notifications.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/ios/Runner/Info.plist', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/lib/main.dart', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/lib/src/core/router/app_router.dart', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/lib/src/features/auth/data/auth_repository.dart', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/lib/src/features/notifications/navigation/notification_intent.dart', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/lib/src/features/notifications/navigation/notification_navigation_coordinator.dart', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/lib/src/features/profile/presentation/profile_screen.dart', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/lib/src/features/profile/presentation/support_contact_sheet.dart', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/test/auth_router_policy_test.dart', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/test/notification_intent_test.dart', LF will be replaced by CRLF the next time Git touches it

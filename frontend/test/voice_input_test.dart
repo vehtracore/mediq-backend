@@ -463,7 +463,8 @@ void main() {
     final directory = await Directory.systemTemp.createTemp('mdq_voice_test_');
     addTearDown(() => directory.delete(recursive: true));
     final file = File('${directory.path}${Platform.pathSeparator}fixture.m4a');
-    await file.writeAsBytes([0, 1, 2]);
+    await file.writeAsBytes(
+        await File('../backend/tests/fixtures/voice_aac.m4a').readAsBytes());
 
     expect(
       await api.transcribe(
@@ -502,7 +503,8 @@ void main() {
     final directory = await Directory.systemTemp.createTemp('mdq_limit_test_');
     addTearDown(() => directory.delete(recursive: true));
     final file = File('${directory.path}${Platform.pathSeparator}fixture.m4a');
-    await file.writeAsBytes([0, 1, 2]);
+    await file.writeAsBytes(
+        await File('../backend/tests/fixtures/voice_aac.m4a').readAsBytes());
 
     await expectLater(
       api.transcribe(

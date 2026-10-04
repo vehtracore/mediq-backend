@@ -13,6 +13,7 @@ import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/core/constants/mdq_ai_assets.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/chat/data/ai_pdf_attachment.dart';
+import 'package:mediq_app/src/features/chat/data/ai_interaction.dart';
 import 'package:mediq_app/src/features/chat/data/image_upload_service.dart';
 import 'package:mediq_app/src/features/chat/data/voice_input_capability.dart';
 import 'package:mediq_app/src/features/chat/data/voice_input_service.dart';
@@ -23,6 +24,7 @@ import 'package:mediq_app/src/features/vault/data/vault_repository.dart';
 import 'package:go_router/go_router.dart';
 import '../../lab/data/lab_result_model.dart';
 import 'widgets/lab_result_bubble.dart';
+import 'widgets/ai_interaction_bubbles.dart';
 import 'widgets/markdown_bubble.dart';
 
 class AiChatScreen extends ConsumerStatefulWidget {
@@ -205,6 +207,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
           _hasAiConsent = true;
           _checkingConsent = false;
         });
+        if (_continuation == null) unawaited(controller.restoreAssessment());
         return;
       }
 
@@ -225,6 +228,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
         _hasAiConsent = true;
         _checkingConsent = false;
       });
+      if (_continuation == null) unawaited(controller.restoreAssessment());
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -905,7 +909,38 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
                               );
                             }
 
-                            return _buildMessageBubble(
+                            final interaction = msg['interaction'];
+                            if (interaction is AiAssessmentQuestionResult) {
+                              return AiAssessmentQuestionBubble(
+                                result: interaction,
+                                canCancel: index ==
+                                        chatState.messages.lastIndexWhere(
+                                          (entry) => entry['interaction']
+                                              is AiAssessmentQuestionResult,
+                                        ) &&
+                                    ref
+                                        .read(aiChatControllerProvider(
+                                                _continuation)
+                                            .notifier)
+                                        .hasActiveAssessment,
+                                onCancel: () {
+                                  unawaited(ref
+                                      .read(aiChatControllerProvider(
+                                              _continuation)
+                                          .notifier)
+                                      .cancelAssessment());
+                                },
+                              );
+                            }
+                            if (interaction is AiAssessmentResult) {
+                              return AiAssessmentResultBubble(
+                                  result: interaction);
+                            }
+                            if (interaction is AiUrgentResult) {
+                              return AiUrgentBubble(result: interaction);
+                            }
+
+                            final messageBubble = _buildMessageBubble(
                               msg['message'],
                               isMe,
                               imageUrl: msg['image'],
@@ -914,6 +949,21 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
                               theme: theme,
                               isDark: isDark,
                             );
+                            if (interaction is AiMessageResult &&
+                                interaction.sources.isNotEmpty) {
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  messageBubble,
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 12),
+                                    child: AiSourcesSection(
+                                        sources: interaction.sources),
+                                  ),
+                                ],
+                              );
+                            }
+                            return messageBubble;
                           },
                         ),
             ),
@@ -922,6 +972,21 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
                 padding: const EdgeInsets.all(8.0),
                 child: Text("MDQ+ is analyzing...",
                     style: TextStyle(color: theme.hintColor)),
+              ),
+            if (!chatState.isLoading &&
+                ref
+                    .read(aiChatControllerProvider(_continuation).notifier)
+                    .assessmentReady)
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: FilledButton.icon(
+                  onPressed: () => unawaited(ref
+                      .read(aiChatControllerProvider(_continuation).notifier)
+                      .finishAssessment()),
+                  icon: const Icon(Icons.assignment_turned_in_outlined),
+                  label: const Text('Finish assessment'),
+                ),
               ),
 
             // --- STAGED IMAGE PREVIEW ---
@@ -1074,7 +1139,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen>
                                   : (_stagedImageUrl != null ||
                                           _stagedPdf != null
                                       ? "Add a message..."
-                                      : "Describe symptoms..."),
+                                      : "Ask about your health..."),
                           hintStyle: TextStyle(
                               color: voiceState.phase ==
                                       VoiceInputPhase.recording

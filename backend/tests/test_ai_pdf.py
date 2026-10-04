@@ -10,12 +10,16 @@ from pypdf import PdfWriter
 
 from app.api.v1 import chat
 from app.services import ai_service
+from app.services import ai_orchestrator
+from app.services.ai_interaction import InteractionMode
+from app.services.ai_router import RouterDecision
 from app.services.ai_request_guard import AIRequestLease
 from app.services.ai_pdf import (
     MAX_AI_PDF_BYTES,
     read_validated_ai_pdf,
     validate_ai_pdf_bytes,
 )
+from tests.ai_provider_fakes import install_model, scope_json
 
 
 def _pdf_bytes(*, pages: int = 1, password: str | None = None) -> bytes:
@@ -96,7 +100,7 @@ class _FakeChat:
         if self.error:
             raise self.error
         return SimpleNamespace(
-            text="[MODE: SIMPLE] Safe response",
+            text=scope_json("Safe response"),
             candidates=[SimpleNamespace(finish_reason="STOP")],
             usage_metadata=SimpleNamespace(candidates_token_count=12),
         )
@@ -115,10 +119,9 @@ class _FakeModel:
 
 def test_pdf_provider_failure_does_not_retry_without_document(monkeypatch) -> None:
     chat = _FakeChat(error=ValueError("provider rejected document"))
-    monkeypatch.setattr(ai_service, "GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(ai_service, "heavy_model", _FakeModel(chat))
+    install_model(monkeypatch, ai_service, "heavy", _FakeModel(chat))
 
-    with pytest.raises(RuntimeError, match="Gemini request failed"):
+    with pytest.raises(RuntimeError, match="transient_provider_failure"):
         asyncio.run(
             ai_service.get_medical_response(
                 "Explain my results",
@@ -135,8 +138,7 @@ def test_pdf_provider_failure_does_not_retry_without_document(monkeypatch) -> No
 
 def test_saved_historical_context_is_not_rolling_memory_truncated(monkeypatch) -> None:
     chat = _FakeChat()
-    monkeypatch.setattr(ai_service, "GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(ai_service, "standard_model", _FakeModel(chat))
+    install_model(monkeypatch, ai_service, "standard", _FakeModel(chat))
     historical = "H" * (ai_service.MAX_MEMORY_CHARS + 800)
 
     result = asyncio.run(
@@ -173,8 +175,7 @@ def test_existing_image_prompt_path_remains_operational(monkeypatch) -> None:
     import httpx
 
     chat = _FakeChat()
-    monkeypatch.setattr(ai_service, "GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(ai_service, "heavy_model", _FakeModel(chat))
+    install_model(monkeypatch, ai_service, "heavy", _FakeModel(chat))
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
 
     result = asyncio.run(
@@ -234,6 +235,10 @@ def test_successful_pdf_chat_uses_existing_image_named_attachment_counter(
         return SimpleNamespace(text="Safe response", memory_update=None)
 
     monkeypatch.setattr(ai_service, "get_medical_response", _response)
+    async def conversation(_value):
+        return RouterDecision(mode=InteractionMode.CONVERSATION, confidence=1,
+                              reason_codes=["test_conversation"])
+    monkeypatch.setattr(ai_orchestrator, "route_interaction", conversation)
     user = _chat_user()
     db = _UsageDb()
     lease = AIRequestLease(user.id, "owner", "request")
@@ -249,7 +254,7 @@ def test_successful_pdf_chat_uses_existing_image_named_attachment_counter(
         )
     )
 
-    assert result.response == "Safe response"
+    assert result.result.text == "Safe response"
     assert calls[0]["document_bytes"].startswith(b"%PDF-")
     assert user.monthly_chat_count == 1
     assert user.monthly_chat_image_count == 1

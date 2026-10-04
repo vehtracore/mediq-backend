@@ -167,6 +167,63 @@ class DioVoiceTranscriptionApi implements VoiceTranscriptionPort {
 
   DioVoiceTranscriptionApi(this._dio);
 
+  Future<({String filename, MediaType contentType})> _recordingFormat(
+      String path) async {
+    final file = File(path);
+    if (!await file.exists()) {
+      throw const VoiceTranscriptionException(
+        message: 'The recording was not saved. Please record it again.',
+        canRetry: false,
+      );
+    }
+    // The recorder's stop future must complete before this check. A short
+    // settling window also covers devices that flush their muxer on close.
+    var size = await file.length();
+    for (var attempt = 0; attempt < 5; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final next = await file.length();
+      if (next == size && next >= 12) break;
+      size = next;
+    }
+    if (size < 12) {
+      throw const VoiceTranscriptionException(
+        message: 'The recording is incomplete. Please record it again.',
+        canRetry: false,
+      );
+    }
+    final reader = await file.open();
+    late final List<int> header;
+    try {
+      header = await reader.read(12);
+    } finally {
+      await reader.close();
+    }
+    final isM4a = header.length >= 12 &&
+        header[4] == 0x66 &&
+        header[5] == 0x74 &&
+        header[6] == 0x79 &&
+        header[7] == 0x70;
+    final isWav = header.length >= 12 &&
+        String.fromCharCodes(header.sublist(0, 4)) == 'RIFF' &&
+        String.fromCharCodes(header.sublist(8, 12)) == 'WAVE';
+    if (isM4a && path.toLowerCase().endsWith('.m4a')) {
+      return (
+        filename: 'mdq_voice.m4a',
+        contentType: MediaType('audio', 'mp4')
+      );
+    }
+    if (isWav && path.toLowerCase().endsWith('.wav')) {
+      return (
+        filename: 'mdq_voice.wav',
+        contentType: MediaType('audio', 'wav')
+      );
+    }
+    throw const VoiceTranscriptionException(
+      message: 'This recording format is unsupported. Please record it again.',
+      canRetry: false,
+    );
+  }
+
   @override
   Future<String> transcribe({
     required String path,
@@ -179,6 +236,7 @@ class DioVoiceTranscriptionApi implements VoiceTranscriptionPort {
     final cancelToken = CancelToken();
     _cancelToken = cancelToken;
     try {
+      final format = await _recordingFormat(path);
       final response = await _dio.post<Map<String, dynamic>>(
         '/api/v1/voice/transcribe',
         data: FormData.fromMap({
@@ -186,8 +244,8 @@ class DioVoiceTranscriptionApi implements VoiceTranscriptionPort {
           'request_identifier': requestId,
           'file': await MultipartFile.fromFile(
             path,
-            filename: 'mdq_voice.m4a',
-            contentType: MediaType('audio', 'mp4'),
+            filename: format.filename,
+            contentType: format.contentType,
           ),
         }),
         options: Options(

@@ -81,7 +81,7 @@ from app.core.api_errors import (
 from app.core.database import engine, Base, SessionLocal
 
 # ✅ KEEP "app." prefix because your main.py is inside the app folder
-from app.api.v1 import auth, chat, ai_consent, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab, vault, voice, notifications, ai_report
+from app.api.v1 import auth, chat, ai_consent, doctors, appointments, admin, content, subscription, reviews, media, video, chat_socket, upload, lab, vault, voice, notifications, ai_report, clinical_ops
 
 from app.api.v1 import emergency
 from app.api.v1 import payments
@@ -106,6 +106,9 @@ from app.services.support_email_service import support_email_readiness
 _MIGRATION_ONLY_TABLES = {
     "doctor_verification_submissions",
     "doctor_verification_documents",
+    "ai_assessments",
+    "ai_assessment_facts",
+    "ai_assessment_questions",
 }
 Base.metadata.create_all(
     bind=engine,
@@ -724,6 +727,22 @@ async def _run_ai_temp_cleanup_async():
         )
 
 
+async def _run_clinical_source_update_job_async():
+    from app.services.clinical_source_updates import run_due_source_checks
+    from app.services.medlineplus_corpus import run_due_medlineplus_check
+
+    try:
+        await run_due_source_checks()
+    except Exception as exc:
+        _sched_log.warning('[KNOWLEDGE] daily_source_check_failed category=%s',
+                           type(exc).__name__)
+    try:
+        await run_due_medlineplus_check()
+    except Exception as exc:
+        _sched_log.warning('[KNOWLEDGE] medlineplus_check_failed category=%s',
+                           type(exc).__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan: start AsyncIOScheduler on boot, stop on shutdown.
@@ -736,7 +755,19 @@ async def lifespan(app: FastAPI):
       • notification_cleanup    — daily 00:15 UTC  (90-day retention cleanup)
       • support_message_cleanup — daily 00:30 UTC  (30-day retention cleanup)
       • ai_temp_image_cleanup   — hourly           (delete abandoned AI images)
+      • clinical_source_updates — daily 03:15 UTC  (review signals only)
     """
+    from app.services.ai_provider import get_clinical_ai_provider
+
+    get_clinical_ai_provider().validate_capabilities()
+    from app.services.clinical_embedding import EmbeddingUnavailable, get_embedding_provider
+    from app.services.clinical_knowledge import KnowledgeConfig
+
+    if KnowledgeConfig.from_env().enabled:
+        try:
+            get_embedding_provider()
+        except EmbeddingUnavailable as exc:
+            logger.warning("[KNOWLEDGE] retrieval configured but unavailable: %s", exc)
     scheduler = AsyncIOScheduler(timezone="UTC")
 
     support_readiness = support_email_readiness()
@@ -846,6 +877,33 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
+    from app.services.ai_chat_operation import cleanup_expired_chat_receipts
+    from app.services.ai_assessment import cleanup_assessments
+
+    scheduler.add_job(
+        cleanup_expired_chat_receipts,
+        trigger=IntervalTrigger(minutes=1),
+        id="ai_chat_receipt_cleanup",
+        name="Expired AI chat receipt cleanup",
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
+        cleanup_assessments,
+        trigger=IntervalTrigger(hours=1),
+        id="ai_assessment_cleanup",
+        name="Temporary AI assessment cleanup",
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
+        _run_clinical_source_update_job_async,
+        trigger=CronTrigger(hour=3, minute=15, timezone='UTC'),
+        id='clinical_source_updates',
+        name='Daily clinical source update review signals',
+        replace_existing=True,
+    )
+
     scheduler.start()
     _sched_log.info(
         "[SCHEDULER] AsyncIOScheduler started. "
@@ -948,6 +1006,8 @@ app.include_router(voice.router, prefix="/api/v1/voice", tags=["Voice"])
 app.include_router(ai_report.router, prefix="/api/v1/chat", tags=["AI Health Assistant"])
 app.include_router(support.router, prefix="/api/v1/support", tags=["Support"])
 app.include_router(notifications.router, prefix="/api/v1/notifications", tags=["Notifications"])
+app.include_router(clinical_ops.router, prefix="/api/v1/internal/clinical",
+                   tags=["Internal Clinical Operations"])
 
 # --- STATIC FILES ---
 static_dir = "static"

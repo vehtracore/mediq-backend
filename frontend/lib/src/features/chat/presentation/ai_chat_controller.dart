@@ -8,6 +8,7 @@ import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/core/api/api_error_mapper.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/chat/data/ai_pdf_attachment.dart';
+import 'package:mediq_app/src/features/chat/data/ai_interaction.dart';
 import 'package:mediq_app/src/features/lab/data/lab_result_model.dart';
 
 @immutable
@@ -31,17 +32,35 @@ class AiChatContinuation {
 }
 
 // 1. STATE
+enum AiRequestPhase {
+  idle,
+  sending,
+  processing,
+  delayed,
+  succeeded,
+  failed,
+  cancelled,
+}
+
 class AiChatState {
   final List<Map<String, dynamic>> messages;
   final bool isLoading;
+  final AiRequestPhase requestPhase;
 
-  AiChatState({this.messages = const [], this.isLoading = false});
+  AiChatState({
+    this.messages = const [],
+    this.isLoading = false,
+    this.requestPhase = AiRequestPhase.idle,
+  });
 
   AiChatState copyWith(
-      {List<Map<String, dynamic>>? messages, bool? isLoading}) {
+      {List<Map<String, dynamic>>? messages,
+      bool? isLoading,
+      AiRequestPhase? requestPhase}) {
     return AiChatState(
       messages: messages ?? this.messages,
       isLoading: isLoading ?? this.isLoading,
+      requestPhase: requestPhase ?? this.requestPhase,
     );
   }
 }
@@ -49,21 +68,154 @@ class AiChatState {
 // 2. CONTROLLER
 class AiChatController extends StateNotifier<AiChatState> {
   final Dio _dio;
+  final Duration operationPollInterval;
   String _subscriptionTier; // "free", "premium", or "family"
   final AiChatContinuation? continuation;
   String? _conversationMemory;
+  String? _activeAssessmentId;
+  int? _assessmentVersion;
+  bool _assessmentReady = false;
   final List<String> _unsummarizedTurns = [];
   int _requestSequence = 0;
   String? _pendingSaveRequestId;
   ApiFailure? _lastSaveFailure;
 
-  AiChatController(this._dio, this._subscriptionTier, this.continuation)
+  AiChatController(this._dio, this._subscriptionTier, this.continuation,
+      {this.operationPollInterval = const Duration(seconds: 3)})
       : super(AiChatState());
 
   String? get sourceSummaryId => continuation?.summaryId;
   ApiFailure? get lastSaveFailure => _lastSaveFailure;
   bool get hasPaidContinuity =>
       {'premium', 'family'}.contains(_subscriptionTier);
+
+  bool get hasActiveAssessment => _activeAssessmentId != null;
+  bool get assessmentReady => _assessmentReady && _activeAssessmentId != null;
+
+  Future<void> cancelAssessment() async {
+    final id = _activeAssessmentId;
+    final version = _assessmentVersion;
+    if (state.isLoading || id == null || version == null) return;
+    state = state.copyWith(isLoading: true);
+    try {
+      await _dio.post('/api/v1/chat/assessment/$id/cancel',
+          data: {'expected_state_version': version},
+          options: Options(headers: {'X-AI-Request-ID': _nextRequestId()}));
+      if (!mounted) return;
+      _activeAssessmentId = null;
+      _assessmentVersion = null;
+      _assessmentReady = false;
+      state = state.copyWith(messages: [
+        ...state.messages,
+        {'role': 'system', 'message': 'Assessment ended.'}
+      ], isLoading: false);
+    } on DioException catch (error) {
+      if (ApiErrorMapper.map(error).code == 'stale_version') {
+        await restoreAssessment(force: true);
+      } else if (mounted) {
+        state = state.copyWith(isLoading: false);
+      }
+    }
+  }
+
+  Future<void> restoreAssessment({bool force = false}) async {
+    if (!force && state.messages.isNotEmpty) return;
+    try {
+      final response = await _dio
+          .get<Map<String, dynamic>>('/api/v1/chat/assessment/current');
+      if (!mounted) return;
+      final snapshot = response.data?['assessment'];
+      if (snapshot is! Map) {
+        if (force) {
+          _activeAssessmentId = null;
+          _assessmentVersion = null;
+          _assessmentReady = false;
+          state = state.copyWith(isLoading: false);
+        }
+        return;
+      }
+      final data = Map<String, dynamic>.from(snapshot);
+      final status = data['status'];
+      _activeAssessmentId = status == 'COMPLETED' || status == 'URGENT'
+          ? null
+          : data['assessment_id'] as String?;
+      _assessmentVersion = data['state_version'] as int?;
+      _assessmentReady = status == 'READY';
+      final messages = <Map<String, dynamic>>[
+        {'role': 'user', 'message': data['presenting_concern'] as String},
+      ];
+      for (final item in (data['questions'] as List? ?? const [])) {
+        if (item is! Map) continue;
+        final question = item['question'];
+        if (question is String) {
+          messages.add({
+            'role': 'ai',
+            'message': question,
+            'interaction': AiAssessmentQuestionResult(question, true)
+          });
+        }
+        final answer = item['answer'];
+        if (answer is String && answer.isNotEmpty) {
+          messages.add({'role': 'user', 'message': answer});
+        }
+      }
+      final lastResponse = data['response'];
+      if (lastResponse is Map) {
+        final interaction = AiInteractionResponse.fromJson(
+            Map<String, dynamic>.from(lastResponse));
+        if (interaction.result is! AiAssessmentQuestionResult ||
+            messages.length == 1) {
+          messages.add({
+            'role': 'ai',
+            'message': interaction.result.visibleText,
+            'interaction': interaction.result
+          });
+        }
+      }
+      state = state.copyWith(messages: [
+        ...messages,
+        if (_assessmentReady)
+          {'role': 'system', 'message': 'This assessment is ready to finish.'},
+      ], isLoading: false);
+    } catch (_) {
+      if (mounted && force) state = state.copyWith(isLoading: false);
+    }
+  }
+
+  Future<void> finishAssessment() async {
+    final id = _activeAssessmentId;
+    final version = _assessmentVersion;
+    if (state.isLoading || !_assessmentReady || id == null || version == null)
+      return;
+    state = state.copyWith(
+        isLoading: true, requestPhase: AiRequestPhase.processing);
+    final requestId = _nextRequestId();
+    try {
+      var response = await _dio.post('/api/v1/chat/analyze',
+          data: {
+            'message': '',
+            'interaction_id': id,
+            'expected_state_version': version
+          },
+          options: Options(headers: {'X-AI-Request-ID': requestId}));
+      if (response.statusCode == 202)
+        response = await _waitForChatOperation(requestId);
+      _applyChatResponse(
+          Map<String, dynamic>.from(response.data as Map), '', '', false);
+    } on DioException catch (error) {
+      if ({'stale_version', 'assessment_result_invalid'}
+          .contains(ApiErrorMapper.map(error).code)) {
+        await restoreAssessment(force: true);
+      } else if (mounted) {
+        state = state.copyWith(
+            isLoading: false, requestPhase: AiRequestPhase.failed);
+      }
+    } catch (_) {
+      if (mounted)
+        state = state.copyWith(
+            isLoading: false, requestPhase: AiRequestPhase.failed);
+    }
+  }
 
   /// Tier changes update policy for subsequent requests without replacing the
   /// in-memory conversation. Profile restoration is deliberately not a chat
@@ -89,7 +241,7 @@ class AiChatController extends StateNotifier<AiChatState> {
     return response.data['consent_granted'] == true;
   }
 
-  List<Map<String, dynamic>> _recentGeminiHistory(
+  List<Map<String, dynamic>> _recentConversationHistory(
       {String? excludeId, int maxMessages = 10}) {
     final eligible = state.messages.where((message) {
       if (message['role'] == 'system') return false;
@@ -103,7 +255,7 @@ class AiChatController extends StateNotifier<AiChatState> {
 
     return recent
         .map((message) => {
-              'role': message['role'] == 'user' ? 'user' : 'model',
+              'role': message['role'] == 'user' ? 'patient' : 'mdq_plus',
               'parts': [(message['message'] ?? '').toString()],
             })
         .toList();
@@ -128,6 +280,76 @@ class AiChatController extends StateNotifier<AiChatState> {
   String _nextRequestId() {
     _requestSequence += 1;
     return 'ai-${DateTime.now().microsecondsSinceEpoch}-$_requestSequence';
+  }
+
+  Future<Response<dynamic>> _waitForChatOperation(String requestId) async {
+    for (var attempt = 0; attempt < 102; attempt++) {
+      await Future<void>.delayed(operationPollInterval);
+      if (!mounted) throw StateError('Chat screen was closed.');
+      late final Response<Map<String, dynamic>> status;
+      try {
+        status = await _dio.get<Map<String, dynamic>>(
+          '/api/v1/chat/request-status/$requestId',
+        );
+      } on DioException catch (error) {
+        if (error.response?.statusCode == 401 ||
+            error.response?.statusCode == 403) {
+          rethrow;
+        }
+        continue;
+      }
+      final data = status.data ?? const <String, dynamic>{};
+      if (data['status'] == 'succeeded' && data['response'] is Map) {
+        return Response<dynamic>(
+          requestOptions: status.requestOptions,
+          data: data['response'],
+          statusCode: 200,
+        );
+      }
+      if (data['status'] == 'failed' || data['status'] == 'cancelled') {
+        throw StateError('The request could not be completed.');
+      }
+    }
+    throw StateError('The request status could not be confirmed.');
+  }
+
+  void _applyChatResponse(
+    Map<String, dynamic> data,
+    String tempId,
+    String effectiveText,
+    bool hasSessionMemory,
+  ) {
+    if (!mounted) return;
+    final interaction = AiInteractionResponse.fromJson(data);
+    final answer = interaction.result.visibleText;
+    final memoryUpdate = interaction.memorySummary;
+    final usageNotice = interaction.usageNotice;
+    _activeAssessmentId = interaction.result is AiAssessmentQuestionResult
+        ? interaction.assessmentId
+        : null;
+    _assessmentVersion = interaction.stateVersion;
+    _assessmentReady = false;
+    if (memoryUpdate != null && memoryUpdate.trim().isNotEmpty) {
+      _conversationMemory = memoryUpdate.trim();
+      _unsummarizedTurns.clear();
+    } else if (hasSessionMemory) {
+      _unsummarizedTurns.add('User: $effectiveText\nAssistant: $answer');
+    }
+    final messages = state.messages
+        .map((message) => message['id'] == tempId
+            ? (Map<String, dynamic>.from(message)..['isSending'] = false)
+            : message)
+        .toList();
+    state = state.copyWith(
+      messages: [
+        ...messages,
+        {'role': 'ai', 'message': answer, 'interaction': interaction.result},
+        if (usageNotice != null)
+          {'role': 'system', 'type': 'usage_notice', 'message': usageNotice},
+      ],
+      isLoading: false,
+      requestPhase: AiRequestPhase.succeeded,
+    );
   }
 
   Future<void> sendMessage(String text,
@@ -157,13 +379,16 @@ class AiChatController extends StateNotifier<AiChatState> {
       'documentName': document?.name,
       'isSending': true
     };
-    state =
-        state.copyWith(messages: [...state.messages, userMsg], isLoading: true);
+    state = state.copyWith(
+      messages: [...state.messages, userMsg],
+      isLoading: true,
+      requestPhase: AiRequestPhase.sending,
+    );
 
     try {
       // Free keeps shallow session history; paid tiers also receive rolling memory.
       final hasSessionMemory = hasPaidContinuity;
-      final history = _recentGeminiHistory(
+      final history = _recentConversationHistory(
         excludeId: tempId,
         maxMessages: hasSessionMemory ? 10 : 4,
       );
@@ -175,6 +400,9 @@ class AiChatController extends StateNotifier<AiChatState> {
       // Connects to your backend
       final requestData = {
         "message": effectiveText,
+        if (_activeAssessmentId != null) "interaction_id": _activeAssessmentId,
+        if (_activeAssessmentId != null)
+          "expected_state_version": _assessmentVersion,
         "history": history,
         "language": language,
         if (hasSessionMemory) ...{
@@ -184,7 +412,8 @@ class AiChatController extends StateNotifier<AiChatState> {
         },
         ..._continuationRequestFields,
       };
-      late final Response<dynamic> response;
+      late Response<dynamic> response;
+      state = state.copyWith(requestPhase: AiRequestPhase.processing);
       if (document != null) {
         response = await _dio.post(
           '/api/v1/chat/analyze-document',
@@ -212,52 +441,58 @@ class AiChatController extends StateNotifier<AiChatState> {
         );
       }
 
-      final aiMsg = {'role': 'ai', 'message': response.data['response']};
-      final memoryUpdate = response.data['memory_summary'] as String?;
-      final usageNotice = response.data['usage_notice'] as String?;
-      final noticeMsg = usageNotice == null
-          ? null
-          : {
-              'role': 'system',
-              'type': 'usage_notice',
-              'message': usageNotice,
-            };
-      if (!mounted) return;
-      if (memoryUpdate != null && memoryUpdate.trim().isNotEmpty) {
-        _conversationMemory = memoryUpdate.trim();
-        _unsummarizedTurns.clear();
-      } else if (hasSessionMemory) {
-        _unsummarizedTurns.add(
-          'User: $effectiveText\nAssistant: ${response.data['response']}',
-        );
+      if (response.statusCode == 202) {
+        state = state.copyWith(requestPhase: AiRequestPhase.delayed);
+        response = await _waitForChatOperation(requestId);
       }
 
-      final newMessages = state.messages.map((m) {
-        if (m['id'] == tempId) {
-          final newM = Map<String, dynamic>.from(m);
-          newM['isSending'] = false;
-          return newM;
-        }
-        return m;
-      }).toList();
-
-      state = state.copyWith(
-        messages: [
-          ...newMessages,
-          aiMsg,
-          if (noticeMsg != null) noticeMsg,
-        ],
-        isLoading: false,
+      _applyChatResponse(
+        Map<String, dynamic>.from(response.data as Map),
+        tempId,
+        effectiveText,
+        hasSessionMemory,
       );
     } on DioException catch (e) {
       final failure = ApiErrorMapper.map(e);
+      if ({'stale_version', 'assessment_result_invalid'}
+          .contains(failure.code)) {
+        if (mounted) {
+          state = state.copyWith(
+              messages: state.messages
+                  .where((message) => message['id'] != tempId)
+                  .toList(),
+              isLoading: false,
+              requestPhase: AiRequestPhase.failed);
+        }
+        await restoreAssessment(force: true);
+        return;
+      }
+      if (failure.kind == ApiFailureKind.timeout) {
+        try {
+          state = state.copyWith(requestPhase: AiRequestPhase.delayed);
+          final recovered = await _waitForChatOperation(requestId);
+          _applyChatResponse(
+            Map<String, dynamic>.from(recovered.data as Map),
+            tempId,
+            effectiveText,
+            hasPaidContinuity,
+          );
+          return;
+        } catch (_) {
+          // The operation reached a terminal failure or its lease expired.
+        }
+      }
       if (!failure.shouldPresent) {
         if (!mounted) return;
         final newMessages = state.messages.map((message) {
           if (message['id'] != tempId) return message;
           return Map<String, dynamic>.from(message)..['isSending'] = false;
         }).toList();
-        state = state.copyWith(messages: newMessages, isLoading: false);
+        state = state.copyWith(
+          messages: newMessages,
+          isLoading: false,
+          requestPhase: AiRequestPhase.cancelled,
+        );
         return;
       }
       String errorMessage = failure.message;
@@ -291,8 +526,10 @@ class AiChatController extends StateNotifier<AiChatState> {
         return m;
       }).toList();
 
-      state = state
-          .copyWith(messages: [...newMessages, errorMsg], isLoading: false);
+      state = state.copyWith(
+          messages: [...newMessages, errorMsg],
+          isLoading: false,
+          requestPhase: AiRequestPhase.failed);
     } catch (_) {
       debugPrint('[AiChatController] AI request failed.');
       final errorMsg = {
@@ -310,8 +547,10 @@ class AiChatController extends StateNotifier<AiChatState> {
         return m;
       }).toList();
 
-      state = state
-          .copyWith(messages: [...newMessages, errorMsg], isLoading: false);
+      state = state.copyWith(
+          messages: [...newMessages, errorMsg],
+          isLoading: false,
+          requestPhase: AiRequestPhase.failed);
     } finally {
       if (imagePublicId != null) {
         await deleteTemporaryImage(imagePublicId);
@@ -346,7 +585,9 @@ class AiChatController extends StateNotifier<AiChatState> {
 
   Future<void> sendLabResult(LabAnalysisResponse result) async {
     if (state.isLoading) return;
+    if (result.recordId == null) return;
     _pendingSaveRequestId = null;
+    final requestId = _nextRequestId();
 
     // 1. Create a "Medical Card" message for the user's UI
     final userMsg = {
@@ -357,33 +598,46 @@ class AiChatController extends StateNotifier<AiChatState> {
     };
 
     // Add to local state immediately
-    state =
-        state.copyWith(messages: [...state.messages, userMsg], isLoading: true);
-
-    // 2. Construct the Hidden System Prompt for Gemini
-    final hiddenPrompt = _buildSystemPrompt(result);
+    state = state.copyWith(
+      messages: [...state.messages, userMsg],
+      isLoading: true,
+      requestPhase: AiRequestPhase.sending,
+    );
 
     try {
-      // Connects to your backend
-      final response = await _dio.post('/api/v1/chat/analyze',
-          data: {
-            "message": hiddenPrompt,
-            "history": _recentGeminiHistory(
-              maxMessages: hasPaidContinuity ? 10 : 4,
-            ),
-            if (hasPaidContinuity) ...{
-              "conversation_memory": _conversationMemory,
-              "memory_source": _olderUnsummarizedTurns(),
-              "update_memory": false,
+      late Response<dynamic> response;
+      state = state.copyWith(requestPhase: AiRequestPhase.processing);
+      try {
+        response = await _dio.post('/api/v1/chat/analyze',
+            data: {
+              "message": "Explain this urinalysis result.",
+              "lab_result_id": result.recordId,
+              if (_activeAssessmentId != null) ...{
+                "interaction_id": _activeAssessmentId,
+                "expected_state_version": _assessmentVersion,
+              },
+              "history": _recentConversationHistory(
+                maxMessages: hasPaidContinuity ? 10 : 4,
+              ),
+              if (hasPaidContinuity) ...{
+                "conversation_memory": _conversationMemory,
+                "memory_source": _olderUnsummarizedTurns(),
+                "update_memory": false,
+              },
+              ..._continuationRequestFields,
             },
-            ..._continuationRequestFields,
-          },
-          options: Options(headers: {'X-AI-Request-ID': _nextRequestId()}));
-
-      final aiMsg = {'role': 'ai', 'message': response.data['response']};
-      if (!mounted) return;
-      state = state
-          .copyWith(messages: [...state.messages, aiMsg], isLoading: false);
+            options: Options(headers: {'X-AI-Request-ID': requestId}));
+      } on DioException catch (error) {
+        if (ApiErrorMapper.map(error).kind != ApiFailureKind.timeout) rethrow;
+        state = state.copyWith(requestPhase: AiRequestPhase.delayed);
+        response = await _waitForChatOperation(requestId);
+      }
+      if (response.statusCode == 202) {
+        state = state.copyWith(requestPhase: AiRequestPhase.delayed);
+        response = await _waitForChatOperation(requestId);
+      }
+      _applyChatResponse(Map<String, dynamic>.from(response.data as Map),
+          requestId, 'Explain this urinalysis result.', hasPaidContinuity);
     } catch (_) {
       debugPrint('[AiChatController] lab-result analysis failed.');
       final errorMsg = {
@@ -391,32 +645,12 @@ class AiChatController extends StateNotifier<AiChatState> {
         'message': 'AI analysis is temporarily unavailable. Please try again.'
       };
       if (!mounted) return;
-      state = state
-          .copyWith(messages: [...state.messages, errorMsg], isLoading: false);
+      state = state.copyWith(
+        messages: [...state.messages, errorMsg],
+        isLoading: false,
+        requestPhase: AiRequestPhase.failed,
+      );
     }
-  }
-
-  String _buildSystemPrompt(LabAnalysisResponse result) {
-    if (result.readings == null) {
-      return "User scanned a test strip but no readings were found.";
-    }
-
-    final r = result.readings!;
-    // Build a concise summary for the AI
-    return """
-[SYSTEM NOTIFICATION: User performed a urinalysis scan.]
-RESULTS:
-- Leukocytes: ${r.leukocytes?.value}
-- Nitrites: ${r.nitrites?.value}
-- Protein: ${r.protein?.value}
-- pH: ${r.ph?.value}
-- Blood: ${r.blood?.value}
-- Glucose: ${r.glucose?.value}
-- Ketones: ${r.ketones?.value}
-- Billirubin: ${r.bilirubin?.value}
-
-INSTRUCTION: Analyze these results. If any values are abnormal (Positive/High), explain what they might indicate in simple terms. Ask if they have specific symptoms related to these findings.
-""";
   }
 
   /// Sends typed ephemeral turns to the backend-owned Vault summary operation.

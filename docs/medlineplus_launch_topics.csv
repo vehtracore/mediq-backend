@@ -1,0 +1,108 @@
+topic_id,title,coverage_category,selection_reason
+4744,Chest Pain,cardiovascular,Patient symptom and urgent chest-pain context
+5,Heart Attack,cardiovascular,Heart-attack warning and emergency context
+277,Heart Diseases,cardiovascular,General heart-condition education
+199,Heart Failure,cardiovascular,Common breathlessness and swelling context
+34,High Blood Pressure,cardiovascular,Core hypertension patient education
+4939,Blood Pressure Medicines,cardiovascular,Medication education for hypertension
+1598,How to Prevent Heart Disease,cardiovascular,Prevention guidance for common questions
+4212,Heart Disease in Women,cardiovascular,Women-specific cardiovascular context
+1225,Low Blood Pressure,cardiovascular,Dizziness and hypotension context
+6450,How to Prevent High Blood Pressure,cardiovascular,Hypertension prevention context
+6452,Heart Health Tests,cardiovascular,Diagnostic-test literacy
+3077,Breathing Problems,respiratory,Core shortness-of-breath symptom context
+2,Asthma,respiratory,Common chronic breathing condition
+1507,Asthma in Children,respiratory,Pediatric asthma context
+363,Pneumonia,respiratory,Common serious respiratory infection
+1543,Cough,respiratory,Common respiratory symptom
+196,Common Cold,respiratory,Common self-care question
+299,Flu,respiratory,Seasonal respiratory infection education
+3101,Respiratory Syncytial Virus Infections,respiratory,Child and adult respiratory infection context
+511,Fever,infection,Fever symptom and warning context
+158,Bacterial Infections,infection,Bacterial illness education
+454,Viral Infections,infection,Viral illness education
+3040,Infection Control,infection,Prevention and transmission education
+421,Streptococcal Infections,infection,Common throat-infection context
+461,Whooping Cough,infection,Respiratory infection warning context
+400,Sexually Transmitted Infections,infection,Common sexual-health infection questions
+258,Fungal Infections,infection,Common fungal infection education
+3061,Abdominal Pain,gastrointestinal,Core abdominal-pain symptom context
+6051,Dehydration,gastrointestinal,Vomiting and diarrhoea red-flag context
+211,Diarrhea,gastrointestinal,Common diarrhoea guidance
+489,Nausea and Vomiting,gastrointestinal,Common vomiting symptom guidance
+29,Digestive Diseases,gastrointestinal,General digestive-condition context
+4293,Indigestion,gastrointestinal,Common dyspepsia context
+1653,Heartburn,gastrointestinal,Common reflux symptom context
+420,Stomach Disorders,gastrointestinal,General stomach-condition education
+6103,Norovirus Infections,gastrointestinal,Acute gastroenteritis context
+4224,Fluid and Electrolyte Balance,gastrointestinal,Dehydration and fluid-loss context
+91,Kidney Diseases,urinary_kidney,General kidney-disease education
+5987,Chronic Kidney Disease,urinary_kidney,Persistent kidney-symptom context
+302,Kidney Failure,urinary_kidney,Serious kidney-disease warning context
+1224,Kidney Stones,urinary_kidney,Common urinary-pain context
+6382,Kidney Tests,urinary_kidney,Urine and kidney diagnostic literacy
+4889,Urine and Urination,urinary_kidney,Common urine-change questions
+448,Urinary Tract Infections,urinary_kidney,Dysuria and fever context
+1559,Diabetic Kidney Problems,urinary_kidney,Diabetes-related kidney risk
+273,Headache,neurological,Common headache assessment context
+3157,Migraine,neurological,Recurrent headache context
+8,Stroke,neurological,Stroke warning and emergency context
+6248,Ischemic Stroke,neurological,Common stroke subtype education
+6263,Hemorrhagic Stroke,neurological,Serious neurological warning context
+396,Seizures,neurological,Seizure emergency context
+4,Diabetes,diabetes,Core diabetes patient education
+1264,Hypoglycemia,diabetes,Low blood sugar warning symptoms and immediate-care context
+1339,Diabetes Type 1,diabetes,Type 1 diabetes context
+5930,Diabetes Type 2,diabetes,Type 2 diabetes context
+5784,Prediabetes,diabetes,Early blood-sugar risk context
+4567,Diabetes Complications,diabetes,Complication warning context
+4935,Diabetes Medicines,diabetes,Medicine education for diabetes
+6661,How to Prevent Diabetes,diabetes,Prevention questions
+6026,Diabetes in Children and Teens,diabetes,Pediatric diabetes context
+368,Pregnancy,pregnancy_womens_health,General pregnancy patient education
+305,Childbirth,pregnancy_womens_health,Birth-related patient questions
+5893,Childbirth Problems,pregnancy_womens_health,Delivery warning context
+1105,Health Problems in Pregnancy,pregnancy_womens_health,Pregnancy warning-symptom context
+1508,High Blood Pressure in Pregnancy,pregnancy_womens_health,Pre-eclampsia warning context
+1408,Diabetes and Pregnancy,pregnancy_womens_health,Gestational blood-sugar context
+5578,Pregnancy and Medicines,pregnancy_womens_health,Medicine safety during pregnancy
+5984,Pregnancy and Nutrition,pregnancy_womens_health,Common pregnancy nutrition questions
+3154,Infections and Pregnancy,pregnancy_womens_health,Pregnancy infection risk context
+5811,Ectopic Pregnancy,pregnancy_womens_health,Early-pregnancy emergency context
+1238,Postpartum Depression,pregnancy_womens_health,Postpartum mental-health warning context
+462,Women's Health,pregnancy_womens_health,General women's-health orientation
+325,Menstruation,pregnancy_womens_health,Common menstrual questions
+4875,Vaginal Bleeding,pregnancy_womens_health,Bleeding warning context
+501,Children's Health,child_health,General child-health questions
+535,Child Safety,child_health,Child injury prevention context
+5428,Common Infant and Newborn Problems,child_health,Common newborn warning context
+1549,Infant and Newborn Care,child_health,Newborn care education
+1548,Infant and Newborn Development,child_health,Developmental questions
+6005,Medicines and Children,child_health,Pediatric medicine safety
+1342,Childhood Vaccines,child_health,Vaccine education with current policy checked by web
+208,Rashes,skin_allergy,Rash symptom context
+40,Skin Conditions,skin_allergy,General skin-condition education
+5358,Skin Infections,skin_allergy,Infectious skin complaint context
+24,Allergy,skin_allergy,Common allergy questions
+1256,Food Allergy,skin_allergy,Food-reaction warning context
+4746,Hay Fever,skin_allergy,Common seasonal allergy context
+5603,Drug Reactions,skin_allergy,Medicine-related rash and reaction context
+31,Medicines,medication_safety,General safe-medicine education
+1445,Drug Safety,medication_safety,Medication-risk education
+3799,Over-the-Counter Medicines,medication_safety,Nonprescription medicine questions
+4059,Pain Relievers,medication_safety,Common analgesic safety context
+4961,Cold and Cough Medicines,medication_safety,Common OTC cold-medicine context
+222,Antibiotics,medication_safety,Antibiotic use education
+6252,Antibiotic Resistance,medication_safety,Antimicrobial stewardship context
+4146,Antidepressants,medication_safety,Mental-health medication context
+35,Mental Health,mental_health,General mental-health education
+144,Anxiety,mental_health,Common anxiety questions
+113,Depression,mental_health,Depression warning context
+424,Suicide,mental_health,Crisis warning context with local emergency advice required
+6091,Self-Harm,mental_health,Self-injury warning context with local crisis referral required
+7407,How to Improve Mental Health,mental_health,General mental-wellness context
+5676,Mental Disorders,mental_health,General psychiatric-condition literacy
+3162,Child Mental Health,mental_health,Child and family mental-health context
+3873,Emergency Medical Services,emergency,General emergency-service concept not Nigerian contacts
+364,Poisoning,emergency,Poisoning warning and immediate-action context
+6033,Bad Breath,common_symptoms,Common nonurgent oral symptom question

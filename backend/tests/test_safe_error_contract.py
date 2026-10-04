@@ -128,13 +128,15 @@ def test_provider_failure_is_translated_without_provider_text():
 
 
 def test_active_ai_models_are_central_and_do_not_use_retired_scanner_identifier():
-    source_path = Path(__file__).resolve().parents[1] / "app" / "services" / "ai_service.py"
-    source = source_path.read_text(encoding="utf-8")
+    services = Path(__file__).resolve().parents[1] / "app" / "services"
+    source = (services / "gemini_adapter.py").read_text(encoding="utf-8")
+    domain = (services / "ai_service.py").read_text(encoding="utf-8")
 
-    assert "STANDARD_MODEL_NAME = os.getenv" in source
-    assert "HEAVY_MODEL_NAME = os.getenv" in source
+    assert 'os.getenv("GEMINI_STANDARD_MODEL"' in source
+    assert 'os.getenv("GEMINI_HEAVY_MODEL"' in source
     assert "gemini-1.5-flash" not in source
-    assert "vision_model = heavy_model" in source
+    assert "google.generativeai" not in domain
+    assert 'purpose="lab"' in domain
 
 
 def test_payment_provider_message_is_not_promoted_to_api_detail(monkeypatch):

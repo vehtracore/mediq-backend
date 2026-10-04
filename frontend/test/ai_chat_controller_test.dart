@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -9,13 +10,69 @@ import 'package:mediq_app/src/core/api/dio_client.dart';
 import 'package:mediq_app/src/features/auth/data/user_model.dart';
 import 'package:mediq_app/src/features/auth/presentation/user_controller.dart';
 import 'package:mediq_app/src/features/chat/data/ai_pdf_attachment.dart';
+import 'package:mediq_app/src/features/chat/data/ai_interaction.dart';
 import 'package:mediq_app/src/features/chat/presentation/ai_chat_controller.dart';
+import 'package:mediq_app/src/features/lab/data/lab_result_model.dart';
 
 class _SwitchingAdapter implements HttpClientAdapter {
   bool fail = false;
+  bool delayedChat = false;
+  bool chatTimeout = false;
+  Completer<void>? chatGate;
   bool staleSave = false;
+  bool staleAssessment = false;
+  bool invalidAssessmentResult = false;
+  String assessmentStatus = 'ACTIVE';
   int? saveFailureStatus;
   final requests = <RequestOptions>[];
+  String resultKind = 'MESSAGE';
+
+  Map<String, dynamic> typedResponse(String text) => {
+        'request_id': 'request-123',
+        'interaction_id': '0fd4cda4-bf4c-4cd5-8468-8148de5e4f32',
+        if (resultKind.startsWith('ASSESSMENT_')) ...{
+          'assessment_id': '0fd4cda4-bf4c-4cd5-8468-8148de5e4f32',
+          'state_version': 1,
+        },
+        'operation_status': 'SUCCEEDED',
+        'mode': switch (resultKind) {
+          'ASSESSMENT_QUESTION' => 'ASSESSMENT',
+          'ASSESSMENT_RESULT' => 'ASSESSMENT',
+          'URGENT' => 'URGENT',
+          _ => 'CONVERSATION',
+        },
+        'result_kind': resultKind,
+        'result': switch (resultKind) {
+          'ASSESSMENT_QUESTION' => {
+              'kind': resultKind,
+              'question': text,
+              'can_cancel': true,
+            },
+          'URGENT' => {
+              'kind': resultKind,
+              'action': text,
+              'reason': 'These symptoms need urgent care.',
+              'emergency_number': '112',
+            },
+          'ASSESSMENT_RESULT' => {
+              'kind': resultKind,
+              'what_you_told': ['Foamy urine for three months'],
+              'possible_explanations': [
+                {
+                  'text': 'Several possible causes',
+                  'fact_ids': ['fact-1']
+                }
+              ],
+              'why_considered': ['Foamy urine for three months'],
+              'important_negatives': <String>[],
+              'next_steps': ['Arrange a clinical review.'],
+              'urgent_help_if': ['You develop severe symptoms.'],
+              'limitations': 'An examination is needed.',
+              'evidence_ids': <String>[],
+            },
+          _ => {'kind': resultKind, 'text': text},
+        },
+      };
 
   @override
   Future<ResponseBody> fetch(
@@ -24,6 +81,113 @@ class _SwitchingAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     requests.add(options);
+    if (options.path == '/api/v1/chat/assessment/current') {
+      return ResponseBody.fromString(
+          jsonEncode({
+            'assessment': {
+              'assessment_id': '0fd4cda4-bf4c-4cd5-8468-8148de5e4f32',
+              'status': assessmentStatus,
+              'state_version': 1,
+              'presenting_concern': 'Foamy urine for three months',
+              'language': 'English',
+              'questions': assessmentStatus == 'COMPLETED'
+                  ? []
+                  : [
+                      {
+                        'question': 'When did this start?',
+                        'answer': null,
+                        'answer_status': null
+                      }
+                    ],
+              'response': typedResponse(assessmentStatus == 'COMPLETED'
+                  ? 'Ignored result text'
+                  : 'When did this start?'),
+            }
+          }),
+          200,
+          headers: {
+            Headers.contentTypeHeader: ['application/json']
+          });
+    }
+    if (options.path.endsWith('/cancel')) {
+      return ResponseBody.fromString(
+          jsonEncode({
+            'status': 'CANCELLED',
+            'state_version': 2,
+          }),
+          200,
+          headers: {
+            Headers.contentTypeHeader: ['application/json']
+          });
+    }
+    if (staleAssessment &&
+        options.path == '/api/v1/chat/analyze' &&
+        options.data is Map &&
+        (options.data as Map).containsKey('interaction_id')) {
+      return ResponseBody.fromString(
+          jsonEncode({
+            'error': {
+              'code': 'stale_version',
+              'message':
+                  'This assessment changed elsewhere. Refresh to continue.'
+            }
+          }),
+          409,
+          headers: {
+            Headers.contentTypeHeader: ['application/json']
+          });
+    }
+    if (options.method == 'POST' && options.path == '/api/v1/chat/analyze') {
+      await chatGate?.future;
+    }
+    if (options.path.startsWith('/api/v1/chat/request-status/')) {
+      return ResponseBody.fromString(
+        jsonEncode({
+          'status': 'succeeded',
+          'response': {
+            ...typedResponse('Recovered answer'),
+            'memory_summary': 'Useful history',
+            'usage_notice': 'Usage notice',
+          }
+        }),
+        200,
+        headers: {
+          Headers.contentTypeHeader: ['application/json']
+        },
+      );
+    }
+    if (invalidAssessmentResult &&
+        options.path == '/api/v1/chat/analyze') {
+      return ResponseBody.fromString(
+        jsonEncode({
+          'error': {
+            'code': 'assessment_result_invalid',
+            'message': "We couldn't finish this assessment. Please try again."
+          }
+        }),
+        503,
+        headers: {Headers.contentTypeHeader: ['application/json']},
+      );
+    }
+    if (options.method == 'POST' &&
+        options.path == '/api/v1/chat/analyze' &&
+        chatTimeout) {
+      throw DioException(
+        requestOptions: options,
+        type: DioExceptionType.receiveTimeout,
+      );
+    }
+    if (options.method == 'POST' &&
+        options.path == '/api/v1/chat/analyze' &&
+        delayedChat) {
+      return ResponseBody.fromString(
+        jsonEncode({'status': 'processing'}),
+        202,
+        headers: {
+          Headers.contentTypeHeader: ['application/json']
+        },
+      );
+    }
     if (saveFailureStatus != null &&
         options.method == 'POST' &&
         options.path == '/api/v1/vault/ai-summary/save') {
@@ -62,7 +226,7 @@ class _SwitchingAdapter implements HttpClientAdapter {
       );
     }
     return ResponseBody.fromString(
-      jsonEncode({'response': 'Please monitor the symptom.'}),
+      jsonEncode(typedResponse('Please monitor the symptom.')),
       200,
       headers: {
         Headers.contentTypeHeader: ['application/json'],
@@ -75,6 +239,93 @@ class _SwitchingAdapter implements HttpClientAdapter {
 }
 
 void main() {
+  test('ordinary send remains disabled while one operation is active',
+      () async {
+    final adapter = _SwitchingAdapter()..chatGate = Completer<void>();
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))
+      ..httpClientAdapter = adapter;
+    final controller = AiChatController(dio, 'free', null);
+    final first = controller.sendMessage('First question');
+    expect(controller.state.isLoading, isTrue);
+    await controller.sendMessage('Second question');
+    expect(controller.state.messages, hasLength(1));
+    adapter.chatGate!.complete();
+    await first;
+    expect(controller.state.requestPhase, AiRequestPhase.succeeded);
+    expect(
+        adapter.requests.where(
+            (r) => r.method == 'POST' && r.path == '/api/v1/chat/analyze'),
+        hasLength(1));
+  });
+
+  test('lab follow-up uses the same delayed operation recovery', () async {
+    final adapter = _SwitchingAdapter()..delayedChat = true;
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))
+      ..httpClientAdapter = adapter;
+    final controller = AiChatController(
+      dio,
+      'premium',
+      null,
+      operationPollInterval: Duration.zero,
+    );
+    await controller
+        .sendLabResult(LabAnalysisResponse(status: 'SUCCESS', recordId: 42));
+    expect(controller.state.requestPhase, AiRequestPhase.succeeded);
+    expect(controller.state.messages[1]['message'], 'Recovered answer');
+    expect(adapter.requests.first.data['lab_result_id'], 42);
+    expect(adapter.requests.first.data['message'],
+        isNot(contains('SYSTEM NOTIFICATION')));
+    expect(
+        adapter.requests.where(
+            (r) => r.method == 'POST' && r.path == '/api/v1/chat/analyze'),
+        hasLength(1));
+  });
+
+  test('delayed chat result replays without a second send', () async {
+    final adapter = _SwitchingAdapter()..delayedChat = true;
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))
+      ..httpClientAdapter = adapter;
+    final controller = AiChatController(
+      dio,
+      'premium',
+      null,
+      operationPollInterval: Duration.zero,
+    );
+    await controller.sendMessage('A question');
+    expect(controller.state.requestPhase, AiRequestPhase.succeeded);
+    expect(controller.state.isLoading, isFalse);
+    expect(controller.state.messages.last['type'], 'usage_notice');
+    expect(
+        adapter.requests.where(
+            (r) => r.method == 'POST' && r.path == '/api/v1/chat/analyze'),
+        hasLength(1));
+    expect(
+        adapter.requests
+            .where((r) => r.path.startsWith('/api/v1/chat/request-status/')),
+        hasLength(1));
+  });
+
+  test('receive timeout polls the same request before allowing another send',
+      () async {
+    final adapter = _SwitchingAdapter()..chatTimeout = true;
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))
+      ..httpClientAdapter = adapter;
+    final controller = AiChatController(
+      dio,
+      'free',
+      null,
+      operationPollInterval: Duration.zero,
+    );
+    await controller.sendMessage('A question');
+    expect(controller.state.requestPhase, AiRequestPhase.succeeded);
+    expect(controller.state.isLoading, isFalse);
+    expect(controller.state.messages[1]['message'], 'Recovered answer');
+    expect(
+        adapter.requests.where(
+            (r) => r.method == 'POST' && r.path == '/api/v1/chat/analyze'),
+        hasLength(1));
+  });
+
   test('profile restoration does not recreate an active AI session', () async {
     final dio = Dio(BaseOptions(baseUrl: 'https://local.test'));
     final container = ProviderContainer(
@@ -434,5 +685,121 @@ void main() {
         {'Same first prompt'});
     expect(payloads.every((payload) => payload['history'].isEmpty), isTrue);
     expect(payloads.every((payload) => !payload.containsKey('plan')), isTrue);
+  });
+
+  test('assessment question preserves one interaction across the next answer',
+      () async {
+    final adapter = _SwitchingAdapter()..resultKind = 'ASSESSMENT_QUESTION';
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))
+      ..httpClientAdapter = adapter;
+    final controller = AiChatController(dio, 'free', null);
+    await controller.sendMessage('My urine has been foamy for months');
+    expect(controller.state.messages.last['interaction'],
+        isA<AiAssessmentQuestionResult>());
+    expect(controller.hasActiveAssessment, isTrue);
+    await controller.sendMessage('For about three months');
+    final sends = adapter.requests
+        .where((request) => request.path == '/api/v1/chat/analyze')
+        .toList();
+    expect(sends.last.data['interaction_id'],
+        '0fd4cda4-bf4c-4cd5-8468-8148de5e4f32');
+    expect(sends.last.data['expected_state_version'], 1);
+    await controller.cancelAssessment();
+    expect(controller.hasActiveAssessment, isFalse);
+  });
+
+  test('free assessment resumes after controller recreation', () async {
+    final adapter = _SwitchingAdapter()..resultKind = 'ASSESSMENT_QUESTION';
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))
+      ..httpClientAdapter = adapter;
+    final restored = AiChatController(dio, 'free', null);
+    await restored.restoreAssessment();
+    expect(restored.hasActiveAssessment, isTrue);
+    expect(restored.state.messages.last['interaction'],
+        isA<AiAssessmentQuestionResult>());
+    await restored.sendMessage('Three months');
+    expect(adapter.requests.last.data['expected_state_version'], 1);
+  });
+
+  test('stale assessment answer refreshes without conflict dialogue', () async {
+    final adapter = _SwitchingAdapter()..resultKind = 'ASSESSMENT_QUESTION';
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))
+      ..httpClientAdapter = adapter;
+    final controller = AiChatController(dio, 'free', null);
+    await controller.restoreAssessment();
+    adapter.staleAssessment = true;
+    await controller.sendMessage('A stale answer');
+    expect(
+        controller.state.messages
+            .any((m) => (m['message'] as String).contains('stale_version')),
+        isFalse);
+    expect(controller.state.messages.last['interaction'],
+        isA<AiAssessmentQuestionResult>());
+  });
+
+  test('invalid first final result restores READY for retry', () async {
+    final adapter = _SwitchingAdapter()
+      ..resultKind = 'ASSESSMENT_QUESTION'
+      ..assessmentStatus = 'READY'
+      ..invalidAssessmentResult = true;
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))
+      ..httpClientAdapter = adapter;
+    final controller = AiChatController(dio, 'free', null);
+    await controller.sendMessage('Foamy urine for three months');
+    expect(controller.assessmentReady, isTrue);
+    expect(controller.hasActiveAssessment, isTrue);
+    expect(controller.state.messages.any((m) =>
+        (m['message'] as String).contains('temporarily unavailable')), isFalse);
+  });
+
+  test('completed temporary result restores and saves as readable turns',
+      () async {
+    final adapter = _SwitchingAdapter()
+      ..resultKind = 'ASSESSMENT_RESULT'
+      ..assessmentStatus = 'COMPLETED';
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))
+      ..httpClientAdapter = adapter;
+    final controller = AiChatController(dio, 'premium', null);
+    await controller.restoreAssessment();
+    expect(controller.state.messages.last['interaction'],
+        isA<AiAssessmentResult>());
+    expect(controller.hasActiveAssessment, isFalse);
+    expect(await controller.saveSummary(), isTrue);
+    final turns = adapter.requests.last.data['turns'] as List;
+    expect(turns.last['text'], contains('What to do next'));
+    expect(turns.last['text'], isNot(contains('{"kind"')));
+  });
+
+  test('urgent result decodes separately from Markdown message', () async {
+    final adapter = _SwitchingAdapter()..resultKind = 'URGENT';
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))
+      ..httpClientAdapter = adapter;
+    final controller = AiChatController(dio, 'free', null);
+    await controller.sendMessage('Severe chest pain and I cannot breathe');
+    final result = controller.state.messages.last['interaction'];
+    expect(result, isA<AiUrgentResult>());
+    expect((result as AiUrgentResult).emergencyNumber, '112');
+    expect(controller.hasActiveAssessment, isFalse);
+  });
+
+  test('delayed polling preserves an urgent result kind', () async {
+    final adapter = _SwitchingAdapter()
+      ..delayedChat = true
+      ..resultKind = 'URGENT';
+    final dio = Dio(BaseOptions(baseUrl: 'https://local.test'))
+      ..httpClientAdapter = adapter;
+    final controller = AiChatController(
+      dio,
+      'free',
+      null,
+      operationPollInterval: Duration.zero,
+    );
+    await controller.sendMessage('I cannot breathe');
+    expect(controller.state.requestPhase, AiRequestPhase.succeeded);
+    expect(controller.state.messages[1]['interaction'], isA<AiUrgentResult>());
+    expect(
+        adapter.requests.where((request) =>
+            request.method == 'POST' && request.path == '/api/v1/chat/analyze'),
+        hasLength(1));
   });
 }

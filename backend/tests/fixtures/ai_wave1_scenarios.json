@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "scope": "Wave 1 current-behavior baseline; no clinical assessment or provider comparison",
+  "cases": [
+    {
+      "id": "informational_question",
+      "input_kind": "text",
+      "input": "What does HbA1c mean?",
+      "current_observed_behavior": "General health chat uses the standard purpose and returns Markdown text.",
+      "desired_requirement": "One complete, safe, patient-facing MDQ+ response."
+    },
+    {
+      "id": "simple_symptom_report",
+      "input_kind": "text",
+      "input": "I have a mild headache.",
+      "current_observed_behavior": "General health chat responds without structured assessment state.",
+      "desired_requirement": "Preserve current response behavior in Wave 1; future assessment routing is separate."
+    },
+    {
+      "id": "complex_symptom_message",
+      "input_kind": "text",
+      "input": "I have had recurring symptoms for several weeks and want to understand what may matter.",
+      "current_observed_behavior": "One general chat response with bounded recent history.",
+      "desired_requirement": "Complete response or normalized incomplete-generation failure."
+    },
+    {
+      "id": "heavy_routing_symptom",
+      "input_kind": "text",
+      "input": "I have chest pain.",
+      "current_observed_behavior": "Keyword heuristic selects the heavy model; emergency handling remains prompt based.",
+      "desired_requirement": "Preserve current routing in Wave 1; deterministic safety comes later."
+    },
+    {
+      "id": "image_input",
+      "input_kind": "image",
+      "current_observed_behavior": "Temporary authenticated image is fetched for provider analysis.",
+      "desired_requirement": "Failed fetch is explicit and consumes no successful attachment use."
+    },
+    {
+      "id": "pdf_input",
+      "input_kind": "pdf",
+      "current_observed_behavior": "Validated PDF bytes are sent inline and discarded after the request.",
+      "desired_requirement": "No text-only fallback or persistence of PDF bytes."
+    },
+    {
+      "id": "lab_analysis",
+      "input_kind": "lab_image",
+      "current_observed_behavior": "Heavy model returns lab JSON after image quality checks.",
+      "desired_requirement": "Provider execution is adapter-backed; lab response and record behavior stay intact."
+    },
+    {
+      "id": "vault_summary",
+      "input_kind": "conversation_turns",
+      "current_observed_behavior": "Backend generates a bounded summary before Vault persistence.",
+      "desired_requirement": "Configured reasoning provider generates the same summary contract; quota errors remain distinct internally."
+    },
+    {
+      "id": "max_token_repair",
+      "input_kind": "text",
+      "current_observed_behavior": "One replacement generation follows a partial standard response.",
+      "desired_requirement": "A second incomplete result never reaches the patient or consumes a successful use."
+    },
+    {
+      "id": "provider_quota_or_timeout",
+      "input_kind": "provider_failure",
+      "current_observed_behavior": "Provider failure surfaces as a safe service error.",
+      "desired_requirement": "Quota exhaustion and timeout have distinct internal categories; terminal requests release their lease."
+    },
+    {
+      "id": "voice_upload_contract",
+      "input_kind": "audio",
+      "current_observed_behavior": "Android recorder requests AAC-LC in M4A; backend accepts M4A and WAV only.",
+      "desired_requirement": "Finalized actual bytes, extension, MIME, and codec agree before transcription."
+    }
+  ]
+}

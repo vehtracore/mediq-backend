@@ -3,7 +3,9 @@
 from dataclasses import dataclass
 from typing import Sequence
 
-from app.services import ai_service
+from app.services.ai_provider import (
+    AIGenerationRequest, AIErrorCategory, AIProviderError, get_clinical_ai_provider,
+)
 
 
 MAX_TURNS = 80
@@ -11,7 +13,7 @@ MAX_TURN_CHARS = 4_000
 MAX_CONVERSATION_CHARS = 30_000
 MAX_CHUNKS = 4
 MAX_GENERATION_CALLS = 6
-MAX_GEMINI_CALLS = 18
+MAX_PROVIDER_CALLS = 18
 MAX_CHUNK_CHARS = 8_000
 CHUNK_INPUT_TOKEN_LIMIT = 2_400
 FINAL_INPUT_TOKEN_LIMIT = 3_200
@@ -26,7 +28,11 @@ class AISummaryInputError(ValueError):
 
 
 class AISummaryGenerationError(RuntimeError):
-    """Raised when Gemini does not produce a safe, usable summary."""
+    """Raised when the provider does not produce a safe, usable summary."""
+
+    def __init__(self, message: str, category: AIErrorCategory | None = None):
+        super().__init__(message)
+        self.category = category
 
 
 @dataclass(frozen=True)
@@ -165,21 +171,24 @@ concise historical-context summary.
 """.strip()
 
 
-class _GeminiBudget:
+class _SummaryBudget:
     def __init__(self) -> None:
         self.calls = 0
         self.generation_calls = 0
 
     def _claim_call(self) -> None:
-        if self.calls >= MAX_GEMINI_CALLS:
+        if self.calls >= MAX_PROVIDER_CALLS:
             raise AISummaryInputError("Summary provider call limit exceeded")
         self.calls += 1
 
     async def count_tokens(self, prompt: str) -> int:
         self._claim_call()
         try:
-            result = await ai_service.heavy_model.count_tokens_async([prompt])
-            return int(result.total_tokens)
+            return await get_clinical_ai_provider().count_input(
+                AIGenerationRequest("summary", (prompt,), 0)
+            )
+        except AIProviderError as exc:
+            raise AISummaryGenerationError("Token counting failed", exc.category) from exc
         except Exception as exc:
             raise AISummaryGenerationError("Token counting failed") from exc
 
@@ -195,15 +204,16 @@ class _GeminiBudget:
         self._claim_call()
         self.generation_calls += 1
         try:
-            chat = ai_service.heavy_model.start_chat(history=[])
-            response = await chat.send_message_async(
-                [prompt],
-                generation_config={"max_output_tokens": output_tokens},
+            result = await get_clinical_ai_provider().generate(
+                AIGenerationRequest("summary", (prompt,), output_tokens)
             )
-            inspection = ai_service.require_complete_generation(response)
-            text = inspection.text
-        except ai_service.AIResponseCompletionError as exc:
-            raise AISummaryGenerationError("Summary output was unusable") from exc
+            if result.completion != "normal" or not result.text:
+                raise AISummaryGenerationError("Summary output was unusable", AIErrorCategory.INCOMPLETE_GENERATION)
+            text = result.text
+        except AIProviderError as exc:
+            raise AISummaryGenerationError("Summary generation failed", exc.category) from exc
+        except AISummaryGenerationError:
+            raise
         except Exception as exc:
             raise AISummaryGenerationError("Summary generation failed") from exc
 
@@ -237,7 +247,7 @@ def _initial_chunks(turns: Sequence[SummaryTurn]) -> list[list[SummaryTurn]]:
 
 async def _token_fit_chunks(
     turns: Sequence[SummaryTurn],
-    budget: _GeminiBudget,
+    budget: _SummaryBudget,
 ) -> list[list[SummaryTurn]]:
     pending = _initial_chunks(turns)
     fitted: list[list[SummaryTurn]] = []
@@ -265,10 +275,7 @@ async def generate_ai_vault_summary(
     historical_summary: str | None = None,
 ) -> SummaryGenerationResult:
     """Generate one bounded summary without persisting prompts or intermediates."""
-    if not ai_service.GEMINI_API_KEY:
-        raise AISummaryGenerationError("AI summary service is unavailable")
-
-    budget = _GeminiBudget()
+    budget = _SummaryBudget()
     direct_prompt = _direct_prompt(turns, historical_summary)
     if await budget.count_tokens(direct_prompt) <= FINAL_INPUT_TOKEN_LIMIT:
         summary = await budget.generate(

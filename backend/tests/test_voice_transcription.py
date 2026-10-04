@@ -2,6 +2,7 @@ import asyncio
 import io
 import threading
 import wave
+from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -24,7 +25,9 @@ from app.core.database import Base, get_db
 from app.core.limiter import limiter
 from app.models.stt_usage_reservation import STTUsageReservation
 from app.models.user import User
-from app.services import ai_service, stt_request_guard
+from app.services import ai_service, ai_orchestrator, stt_request_guard
+from app.services.ai_interaction import InteractionMode
+from app.services.ai_router import RouterDecision
 from app.services.ai_request_guard import AIRequestLease
 from app.services.stt_request_guard import (
     acquire_stt_request_lease,
@@ -190,6 +193,27 @@ def test_generated_wav_fixture_is_validated_without_persistence() -> None:
     assert validated.filename == "mdq_voice.wav"
     assert validated.content_type == "audio/wav"
     assert validated.duration_seconds == pytest.approx(1.25, abs=0.01)
+
+
+def test_real_aac_m4a_fixture_is_accepted() -> None:
+    data = (Path(__file__).parent / "fixtures" / "voice_aac.m4a").read_bytes()
+    validated = validate_voice_audio_bytes(
+        data, filename="recording.m4a", content_type="audio/mp4",
+    )
+    assert 14 < validated.duration_seconds < 16
+    assert validated.filename == "mdq_voice.m4a"
+    assert validated.content_type == "audio/mp4"
+
+
+@pytest.mark.parametrize(
+    ("filename", "mime"),
+    [("recording.wav", "audio/mp4"), ("recording.m4a", "audio/wav")],
+)
+def test_real_m4a_with_mismatched_metadata_is_rejected(filename, mime) -> None:
+    data = (Path(__file__).parent / "fixtures" / "voice_aac.m4a").read_bytes()
+    with pytest.raises(HTTPException) as error:
+        validate_voice_audio_bytes(data, filename=filename, content_type=mime)
+    assert error.value.status_code == 400
 
 
 @pytest.mark.parametrize(
@@ -798,6 +822,10 @@ def test_transcription_then_normal_send_use_separate_counters(
 
     monkeypatch.setattr(voice, "transcribe_voice_audio", _stt_provider)
     monkeypatch.setattr(ai_service, "get_medical_response", _chat_provider)
+    async def conversation(_value):
+        return RouterDecision(mode=InteractionMode.CONVERSATION, confidence=1,
+                              reason_codes=["test_conversation"])
+    monkeypatch.setattr(ai_orchestrator, "route_interaction", conversation)
     current_user = _user(733)
     with stt_session_factory() as db:
         _add_quota_user(db, user_id=current_user.id)

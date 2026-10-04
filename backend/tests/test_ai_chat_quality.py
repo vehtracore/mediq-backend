@@ -7,13 +7,25 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.v1 import chat
-from app.services import ai_service
+from app.services import ai_service, ai_orchestrator
+from app.services.ai_interaction import InteractionMode
+from app.services.ai_router import RouterDecision
 from app.services.ai_request_guard import AIRequestLease
+from tests.ai_provider_fakes import install_model, scope_json
 
 
-def _provider_response(text: str, finish_reason: str, output_tokens: int = 20):
+@pytest.fixture(autouse=True)
+def legacy_generation_focus(monkeypatch):
+    async def conversation(_value):
+        return RouterDecision(mode=InteractionMode.CONVERSATION, confidence=1,
+                              reason_codes=["test_conversation"])
+
+    monkeypatch.setattr(ai_orchestrator, "route_interaction", conversation)
+
+
+def _provider_response(text: str, finish_reason: str, output_tokens: int = 20, *, scope=True):
     return SimpleNamespace(
-        text=text,
+        text=scope_json(text) if scope and finish_reason == "STOP" else text,
         candidates=[SimpleNamespace(finish_reason=finish_reason)],
         usage_metadata=SimpleNamespace(candidates_token_count=output_tokens),
     )
@@ -46,8 +58,7 @@ class _FakeModel:
 
 def _install_standard_model(monkeypatch, responses):
     model = _FakeModel(responses)
-    monkeypatch.setattr(ai_service, "GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(ai_service, "standard_model", model)
+    install_model(monkeypatch, ai_service, "standard", model)
     return model
 
 
@@ -72,8 +83,8 @@ def test_first_message_quality_prompt_and_output_limit_are_plan_independent(monk
         config["max_output_tokens"] == ai_service.MAX_STANDARD_OUTPUT_TOKENS == 500
         for config in model.configs
     )
-    assert "Be concise, direct, and reassuring where appropriate, but complete" in ai_service.SYSTEM_INSTRUCTION
-    assert "do not omit important next steps merely to remain short" in ai_service.SYSTEM_INSTRUCTION
+    assert "Answer the actual question clearly" in " ".join(ai_service.SYSTEM_INSTRUCTION.split())
+    assert "without forcing a symptom interview" in ai_service.SYSTEM_INSTRUCTION
 
 
 def test_normal_completion_returns_without_repair(monkeypatch):
@@ -88,7 +99,7 @@ def test_normal_completion_returns_without_repair(monkeypatch):
     assert len(model.prompts) == 1
 
 
-def test_max_tokens_runs_one_full_repair_and_never_returns_the_fragment(monkeypatch):
+def test_max_tokens_returns_error_without_regenerating_medical_content(monkeypatch):
     model = _install_standard_model(
         monkeypatch,
         [
@@ -97,17 +108,15 @@ def test_max_tokens_runs_one_full_repair_and_never_returns_the_fragment(monkeypa
         ],
     )
 
-    result = _run_medical_response()
+    with pytest.raises(ai_service.AIResponseCompletionError):
+        _run_medical_response()
 
-    assert result.text == "Complete repaired answer"
-    assert "cut-off fragment" not in result.text
-    assert len(model.prompts) == 2
+    assert len(model.prompts) == 1
     assert all(config["max_output_tokens"] == 500 for config in model.configs)
-    assert "Regenerate the entire answer from the beginning" in model.prompts[1][-1]
 
 
 @pytest.mark.parametrize("second_reason", ["MAX_TOKENS", "SAFETY"])
-def test_failed_max_token_repair_returns_no_fragment(monkeypatch, second_reason):
+def test_incomplete_answer_never_samples_a_second_response(monkeypatch, second_reason):
     model = _install_standard_model(
         monkeypatch,
         [
@@ -119,7 +128,7 @@ def test_failed_max_token_repair_returns_no_fragment(monkeypatch, second_reason)
     with pytest.raises(ai_service.AIResponseCompletionError):
         _run_medical_response()
 
-    assert len(model.prompts) == 2
+    assert len(model.prompts) == 1
 
 
 @pytest.mark.parametrize("reason", ["SAFETY", "RECITATION", "OTHER", "BLOCKLIST"])
@@ -207,7 +216,7 @@ def _user(plan="free"):
 def _history(message_count=12):
     return [
         {
-            "role": "user" if index % 2 == 0 else "model",
+            "role": "patient" if index % 2 == 0 else "mdq_plus",
             "parts": [f"message-{index}"],
         }
         for index in range(message_count)
@@ -334,12 +343,11 @@ def test_paid_direct_continuation_receives_owned_saved_context(monkeypatch, plan
     assert captured[0]["historical_saved_context"] == "Saved historical context"
 
 
-def test_successful_repair_consumes_one_logical_use(monkeypatch):
+def test_single_complete_answer_consumes_one_logical_use(monkeypatch):
     model = _install_standard_model(
         monkeypatch,
         [
-            _provider_response("fragment", "MAX_TOKENS", 500),
-            _provider_response("Complete repair", "STOP", 100),
+            _provider_response("Complete answer", "STOP", 100),
         ],
     )
     user = _user("free")
@@ -356,14 +364,14 @@ def test_successful_repair_consumes_one_logical_use(monkeypatch):
         )
     )
 
-    assert result.response == "Complete repair"
-    assert len(model.prompts) == 2
+    assert result.result.text == "Complete answer"
+    assert len(model.prompts) == 1
     assert user.monthly_chat_count == 1
     assert user.burst_chat_count == 1
     assert db.commits == 1
 
 
-def test_failed_repair_consumes_no_successful_use(monkeypatch):
+def test_incomplete_answer_consumes_no_successful_use(monkeypatch):
     model = _install_standard_model(
         monkeypatch,
         [
@@ -386,7 +394,7 @@ def test_failed_repair_consumes_no_successful_use(monkeypatch):
         )
 
     assert exc.value.status_code == 503
-    assert len(model.prompts) == 2
+    assert len(model.prompts) == 1
     assert user.monthly_chat_count == 0
     assert user.burst_chat_count == 0
     assert db.commits == 0
