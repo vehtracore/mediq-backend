@@ -68,6 +68,7 @@ from app.services.consultation_pricing import naira_to_kobo
 from app.services.consultation_refund_service import REFUND_STATUS_AWAITING_ADMIN
 from app.services.email_service import send_transactional_email
 from app.services.paystack_amounts import paystack_requested_amount_kobo
+from app.services.vehtr_router_bindings import schedule_router_bindings
 from app.services.paystack_service import paystack_service  # noqa: F401 (used in future endpoints)
 from app.services.notification_service import NotificationType, notify_user
 
@@ -2386,6 +2387,13 @@ async def _process_paystack_webhook(
         result=result,
         provider_event_key=provider_event_key,
     )
+    # Opt-in, post-commit registration of local subscription/invoice identity.
+    # No payment entitlement depends on the router or these background tasks.
+    schedule_router_bindings(
+        db=db, background_tasks=background_tasks,
+        user_id=result.get("user_id"),
+        mode=_configured_paystack_environment(),
+    )
 
     logger.info(
         '[WEBHOOK] event=%s reference=%s subscription_code=%s '
@@ -2479,6 +2487,13 @@ def _process_manual_verified_transaction(
         db,
         result=result,
         provider_event_key=provider_event_key,
+    )
+    # Opt-in, post-commit registration of local subscription/invoice identity.
+    # No payment entitlement depends on the router or these background tasks.
+    schedule_router_bindings(
+        db=db, background_tasks=background_tasks,
+        user_id=result.get("user_id"),
+        mode=_configured_paystack_environment(),
     )
     return {
         'verified': True,
