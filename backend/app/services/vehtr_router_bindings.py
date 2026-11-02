@@ -39,11 +39,13 @@ def router_settings(env: dict[str, str] | None = None) -> RouterSettings | None:
     token = values.get("VEHTR_PAYSTACK_ROUTER_PRODUCT_TOKEN", "")
     try:
         url = urlsplit(raw)
+        host = url.hostname
+        port = url.port
     except ValueError:
         return None
     if (
-        url.scheme != "https" or not url.hostname or not url.netloc
-        or url.username or url.password or url.port
+        url.scheme != "https" or not host or not url.netloc
+        or url.username or url.password or port
         or url.path not in ("", "/") or url.query or url.fragment
         or url.hostname.lower() in ("localhost", "127.0.0.1")
         or url.hostname.endswith((".local", ".internal"))
