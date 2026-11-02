@@ -25,7 +25,18 @@ With any setting missing, MDQ+ operates as before.
 
 After MDQ+ processes a signed webhook or user-authorised verification and commits the existing payment-event record, it queues best-effort registration of the user's **stored** subscription and invoice identifiers. Failure to contact the router never changes whether a Paystack payment was valid or whether MDQ+ delivered the purchased service.
 
-For older subscriptions, run the existing local DB-backed backfill script from `backend/`:
+For older subscriptions, the existing MDQ+ API scheduler now supports optional
+**automatic Test-only backfill**, avoiding a shell session on Render.
+Once the MDQ+ product's securely stored router credential has been configured,
+set `VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_TEST=true`. The existing backend
+runs the Test-only backfill once on service startup and every six hours to
+recover transient registration failures. Without that explicit flag **and**
+all three `VEHTR_PAYSTACK_ROUTER_*` identity credentials, no job is scheduled.
+Registrations are idempotent and only use stored, mode-matched `SUB_` and
+`INV_` identifiers; a registration failure does not affect payment acceptance.
+Logs show only aggregate counts and outcome, never external identifiers/tokens.
+
+For a one-time manual alternative, run the existing local DB-backed backfill script from `backend/`:
 
 ```sh
 python scripts/sync_vehtr_router_bindings.py --mode test
