@@ -1,0 +1,51 @@
+name: MDQ+ router payment contracts
+
+on:
+  pull_request:
+    types: [ready_for_review, synchronize]
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/vehtr-router-payment-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mdq-router-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  payment-contracts:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: sqlite:////tmp/mdq-vehtr-router-ci.sqlite3
+      PAYSTACK_ENVIRONMENT: test
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - name: Compile backend
+        run: python -m compileall -q app scripts tests
+      - name: Run router, subscription and payment regressions
+        run: >-
+          python -m pytest -q
+          tests/test_vehtr_router_bindings.py
+          tests/test_paystack_subscription_webhook.py
+          tests/test_payment_verification_regression.py
+          tests/test_payment_amounts.py
+          tests/test_consultation_refund.py
