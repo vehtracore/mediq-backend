@@ -169,3 +169,29 @@ def schedule_router_bindings(
         # Registration is not a payment acceptance gate; the separate backfill
         # command repairs transient router or local query failures.
         logger.warning("vehtr_router.binding_schedule_unavailable mode=%s", mode)
+
+
+async def optional_test_binding_backfill() -> bool | None:
+    """Opt-in, idempotent recovery of existing Test subscriptions on the API host.
+
+    Runs off the HTTP request path via MDQ+'s existing scheduler; never creates,
+    verifies, refunds or fulfils payments. Requires explicit approval through
+    VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_TEST=true and valid router credentials.
+    Return None if disabled, True if complete, False on any partial failure.
+    """
+    if os.getenv("VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_TEST", "").lower() != "true":
+        return None
+    if not router_settings():
+        logger.warning("vehtr_router.test_backfill_disabled reason=missing_credentials")
+        return None
+    try:
+        from scripts.sync_vehtr_router_bindings import run
+        status = await run("test", True)
+    except Exception:
+        logger.warning("vehtr_router.test_backfill_unavailable")
+        return False
+    if status != 0:
+        logger.warning("vehtr_router.test_backfill_incomplete")
+        return False
+    logger.info("vehtr_router.test_backfill_complete")
+    return True

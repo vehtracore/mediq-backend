@@ -2,7 +2,7 @@ name: MDQ+ router payment contracts
 
 on:
   push:
-    branches: [integration/vehtr-universal-paystack-router-20261102]
+    branches: [main, 'integration/vehtr-router-*']
     paths:
       - "backend/**"
       - ".github/workflows/vehtr-router-payment-tests.yml"
