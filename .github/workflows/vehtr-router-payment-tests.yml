@@ -45,3 +45,5 @@ jobs:
           tests/test_payment_verification_regression.py
           tests/test_payment_amounts.py
           tests/test_consultation_refund.py
+      - name: Run complete backend suite (isolated, no production credentials)
+        run: python -m pytest -q tests
