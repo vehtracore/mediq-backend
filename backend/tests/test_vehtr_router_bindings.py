@@ -1,12 +1,14 @@
 """Contract tests: optional Vehtr routing never changes payment acceptance."""
 import unittest
+import os
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
 from app.services.vehtr_router_bindings import (
     RouterSettings, router_settings, stored_payment_bindings, publish_router_bindings,
+    optional_test_binding_backfill,
 )
 
 CONFIG = RouterSettings("https://router.vehtr.example", "mdq-plus", "token-" + "a" * 40)
@@ -91,3 +93,47 @@ class RouterBindingNetworkTests(unittest.IsolatedAsyncioTestCase):
                 "test", [("invoice", "INV_retry")],
                 client=client, settings=CONFIG), (1, 0))
         self.assertEqual(len(seen), 3)
+
+
+class RouterOptionalBackfillTests(unittest.IsolatedAsyncioTestCase):
+    async def test_disabled_by_default_even_with_valid_product_credentials(self):
+        env = {
+            "VEHTR_PAYSTACK_ROUTER_URL": CONFIG.base_url,
+            "VEHTR_PAYSTACK_ROUTER_PRODUCT_ID": CONFIG.product_id,
+            "VEHTR_PAYSTACK_ROUTER_PRODUCT_TOKEN": CONFIG.token,
+        }
+        with patch.dict(os.environ, env, clear=True):
+            self.assertIsNone(await optional_test_binding_backfill())
+
+    async def test_enabled_performs_test_mode_backfill_only(self):
+        env = {
+            "VEHTR_PAYSTACK_ROUTER_URL": CONFIG.base_url,
+            "VEHTR_PAYSTACK_ROUTER_PRODUCT_ID": CONFIG.product_id,
+            "VEHTR_PAYSTACK_ROUTER_PRODUCT_TOKEN": CONFIG.token,
+            "VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_TEST": "true",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with patch("scripts.sync_vehtr_router_bindings.run", new_callable=AsyncMock) as runner:
+                runner.return_value = 0
+                self.assertTrue(await optional_test_binding_backfill())
+                runner.assert_awaited_once_with("test", True)
+
+    async def test_missing_credentials_does_not_register_anything(self):
+        with patch.dict(os.environ, {
+            "VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_TEST": "true",
+        }, clear=True):
+            self.assertIsNone(await optional_test_binding_backfill())
+
+    async def test_transient_failure_is_nonfatal_and_retriable(self):
+        env = {
+            "VEHTR_PAYSTACK_ROUTER_URL": CONFIG.base_url,
+            "VEHTR_PAYSTACK_ROUTER_PRODUCT_ID": CONFIG.product_id,
+            "VEHTR_PAYSTACK_ROUTER_PRODUCT_TOKEN": CONFIG.token,
+            "VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_TEST": "true",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with patch("scripts.sync_vehtr_router_bindings.run", new_callable=AsyncMock) as runner:
+                runner.return_value = 1
+                self.assertFalse(await optional_test_binding_backfill())
+                runner.side_effect = RuntimeError("service unavailable")
+                self.assertFalse(await optional_test_binding_backfill())
