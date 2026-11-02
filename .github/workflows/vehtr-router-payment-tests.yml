@@ -1,24 +1,20 @@
 name: MDQ+ router payment contracts
 
 on:
-  pull_request:
-    types: [ready_for_review, synchronize]
-    branches: [main]
+  push:
+    branches: [integration/vehtr-universal-paystack-router-20261102]
     paths:
       - "backend/**"
       - ".github/workflows/vehtr-router-payment-tests.yml"
-  workflow_dispatch:
-
 permissions:
   contents: read
 
 concurrency:
-  group: mdq-router-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: mdq-router-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   payment-contracts:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 18
     defaults:
