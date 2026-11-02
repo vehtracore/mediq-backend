@@ -155,10 +155,15 @@ def schedule_router_bindings(
     if type(user_id) is not int or user_id <= 0:
         return
     # Import here so isolated adapter tests never connect to MDQ+'s database.
-    from app.models.user import User
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        return
-    bindings = stored_payment_bindings(user, mode)
-    if bindings:
-        background_tasks.add_task(publish_router_bindings, mode, bindings)
+    try:
+        from app.models.user import User
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            return
+        bindings = stored_payment_bindings(user, mode)
+        if bindings:
+            background_tasks.add_task(publish_router_bindings, mode, bindings)
+    except Exception:
+        # Registration is not a payment acceptance gate; the separate backfill
+        # command repairs transient router or local query failures.
+        logger.warning("vehtr_router.binding_schedule_unavailable mode=%s", mode)
