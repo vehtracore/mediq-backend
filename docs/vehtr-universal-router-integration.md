@@ -25,13 +25,16 @@ With any setting missing, MDQ+ operates as before.
 
 After MDQ+ processes a signed webhook or user-authorised verification and commits the existing payment-event record, it queues best-effort registration of the user's **stored** subscription and invoice identifiers. Failure to contact the router never changes whether a Paystack payment was valid or whether MDQ+ delivered the purchased service.
 
-For older subscriptions, the existing MDQ+ API scheduler now supports optional
-**automatic Test-only backfill**, avoiding a shell session on Render.
+For older subscriptions, the existing MDQ+ API scheduler supports optional
+**independent Test/Live identifier backfills**, avoiding a shell session on Render.
 Once the MDQ+ product's securely stored router credential has been configured,
-set `VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_TEST=true`. The existing backend
-runs the Test-only backfill once on service startup and every six hours to
-recover transient registration failures. Without that explicit flag **and**
-all three `VEHTR_PAYSTACK_ROUTER_*` identity credentials, no job is scheduled.
+set `VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_TEST=true` for Test identifiers.
+For independently verified Live identifiers, set
+`VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_LIVE=true` only when authorized.
+Each enabled mode is registered once on service startup and every six hours
+for transient recovery, with separate scheduler jobs. Without that mode's
+explicit flag **and** all three `VEHTR_PAYSTACK_ROUTER_*` identity credentials,
+no job is scheduled. Neither flag turns on payments or the router's global Live ingress.
 Registrations are idempotent and only use stored, mode-matched `SUB_` and
 `INV_` identifiers; a registration failure does not affect payment acceptance.
 Logs show only aggregate counts and outcome, never external identifiers/tokens.
@@ -55,3 +58,9 @@ The first invocation is **dry-run**. Neither invocation creates Paystack payment
 6. Monitor quarantined events and replay safely after registering ownership; no default-to-MDQ fallback is permitted.
 
 **Status:** integration branch, review only. Do not deploy, modify Paystack settings or activate Live as part of this PR.
+
+## Live readiness boundary
+
+The universal router's **Live** webhook remains globally disabled unless its independent `PAYSTACK_LIVE_SECRET_KEY` and `ENABLE_LIVE=true` have been configured and the shared Paystack Live URL is deliberately cut over. This new backfill feature does **not** perform either operation; it registers only pre-existing subscription/invoice codes whose `users.paystack_environment` matches the selected mode.
+
+The MDQ+ webhook receiver currently authenticates against the one `PAYSTACK_SECRET_KEY` chosen by its backend service; it is not verified to accept simultaneous Test and Live HMAC signatures. Do not configure the same MDQ+ receiver URL for both Paystack environments unless independently tested with both secrets or explicitly isolated per environment. A Live payment receiver must be positively verified before switching the account-wide Live webhook URL.
