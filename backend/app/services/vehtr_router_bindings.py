@@ -171,27 +171,39 @@ def schedule_router_bindings(
         logger.warning("vehtr_router.binding_schedule_unavailable mode=%s", mode)
 
 
-async def optional_test_binding_backfill() -> bool | None:
-    """Opt-in, idempotent recovery of existing Test subscriptions on the API host.
+async def _optional_mode_binding_backfill(mode: str) -> bool | None:
+    """Register locally persisted identities for exactly one opt-in mode.
 
-    Runs off the HTTP request path via MDQ+'s existing scheduler; never creates,
-    verifies, refunds or fulfils payments. Requires explicit approval through
-    VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_TEST=true and valid router credentials.
-    Return None if disabled, True if complete, False on any partial failure.
+    Test and Live are separate flags, so enabling one cannot accidentally
+    register another. Router registration never changes Paystack balances,
+    payment acceptance, or user entitlements.
     """
-    if os.getenv("VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_TEST", "").lower() != "true":
+    if mode not in ("test", "live"):
+        return None
+    setting = "VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_" + mode.upper()
+    if os.getenv(setting, "").strip().lower() != "true":
         return None
     if not router_settings():
-        logger.warning("vehtr_router.test_backfill_disabled reason=missing_credentials")
+        logger.warning("vehtr_router.%s_backfill_disabled reason=missing_credentials", mode)
         return None
     try:
         from scripts.sync_vehtr_router_bindings import run
-        status = await run("test", True)
+        status = await run(mode, True)
     except Exception:
-        logger.warning("vehtr_router.test_backfill_unavailable")
+        logger.warning("vehtr_router.%s_backfill_unavailable", mode)
         return False
     if status != 0:
-        logger.warning("vehtr_router.test_backfill_incomplete")
+        logger.warning("vehtr_router.%s_backfill_incomplete", mode)
         return False
-    logger.info("vehtr_router.test_backfill_complete")
+    logger.info("vehtr_router.%s_backfill_complete", mode)
     return True
+
+
+async def optional_test_binding_backfill() -> bool | None:
+    """Existing Test recovery schedule; unchanged and off without Test flag."""
+    return await _optional_mode_binding_backfill("test")
+
+
+async def optional_live_binding_backfill() -> bool | None:
+    """Opt-in Live identifier registration only; never enables Live ingress."""
+    return await _optional_mode_binding_backfill("live")
