@@ -904,27 +904,33 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
-    # Optional Test-only recovery for subscriptions created before the shared
-    # router was installed. Scheduling stays OFF unless explicitly enabled
-    # and all three private router settings are configured. Product-specific
-    # bindings are idempotent; no payment entitlement or Paystack URL changes.
-    if os.getenv("VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_TEST", "").lower() == "true":
-        from app.services.vehtr_router_bindings import (
-            optional_test_binding_backfill,
-            router_settings,
-        )
-        if router_settings():
-            from datetime import datetime, timezone
-            scheduler.add_job(
-                optional_test_binding_backfill,
-                trigger=IntervalTrigger(hours=6),
-                next_run_time=datetime.now(timezone.utc),
-                id="vehtr_router_test_binding_backfill",
-                name="Vehtr Test subscription identity registration recovery",
-                replace_existing=True,
-                max_instances=1,
-                coalesce=True,
-            )
+    # The optional Vehtr router binds persisted subscription/invoice identities
+    # after local payment processing. Test and Live recovery are independent
+    # registrations only: no webhook ingress, charges, or entitlement mutations.
+    # An absent product credential or missing mode flag schedules nothing.
+    from app.services.vehtr_router_bindings import (
+        optional_test_binding_backfill,
+        optional_live_binding_backfill,
+        router_settings as vehtr_router_settings,
+    )
+    if vehtr_router_settings():
+        from datetime import datetime, timezone
+        for mode, job in (
+            ("test", optional_test_binding_backfill),
+            ("live", optional_live_binding_backfill),
+        ):
+            flag = "VEHTR_PAYSTACK_ROUTER_AUTO_BACKFILL_" + mode.upper()
+            if os.getenv(flag, "").strip().lower() == "true":
+                scheduler.add_job(
+                    job,
+                    trigger=IntervalTrigger(hours=6),
+                    next_run_time=datetime.now(timezone.utc),
+                    id=f"vehtr_router_{mode}_binding_backfill",
+                    name=f"Vehtr {mode.capitalize()} subscription identity recovery",
+                    replace_existing=True,
+                    max_instances=1,
+                    coalesce=True,
+                )
 
     scheduler.start()
     _sched_log.info(
