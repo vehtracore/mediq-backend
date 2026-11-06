@@ -33,3 +33,5 @@ The clinical corpus report's final 28 September closure takes precedence over ol
 
 ## Information still needed from preserved context
 An approved product requirements baseline and exclusions; latest owner priorities; an authoritative roadmap and acceptance register; current deployed app/schema/environment mapping; provider and data ownership; secure recovery locations; current design approval and unique asset provenance. Keep secret values and personal clinical data out of these documents.
+
+See [answer-scope verification](ANSWER_SCOPE_VERIFICATION_2026-11-06.md) for the later historical test record. It does not supersede the separate clinical activation gate or establish deployed state.

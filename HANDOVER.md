@@ -25,3 +25,5 @@ For a later expressly requested engineering task, first preserve the real checko
 Task and authorization; branch/full SHA; actual changes; exact checks and pass/fail/skip/not-run; deployed SHA separately; environment/schema delta; unresolved clinical/payment/security gates; cleanup/rollback state; one next action. Never paste secrets or clinical records.
 
 Sources: [router integration](https://github.com/vehtracore/mediq-backend/blob/0ae9536273d05de08eee3a33225198009813992b/docs/vehtr-universal-router-integration.md), [outstanding migrations](https://github.com/vehtracore/mediq-backend/blob/0ae9536273d05de08eee3a33225198009813992b/docs/reports/outstanding_migrations.md), [clinical closure](https://github.com/vehtracore/mediq-backend/blob/0ae9536273d05de08eee3a33225198009813992b/docs/reports/mdq_clinical_corpus_launch_2026-09-27.md).
+
+See [answer-scope verification](ANSWER_SCOPE_VERIFICATION_2026-11-06.md) for the later historical test record. It does not supersede the separate clinical activation gate or establish deployed state.
