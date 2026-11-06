@@ -9,7 +9,7 @@ Documentation draft, 6 November 2026. Only documentation is published. No checko
 - Outstanding-migrations.md explicitly says the repository does not record what each environment has applied. Its support-table migration instruction is dated implementation evidence, not permission to apply it now.
 
 ## Preserve before continuing
-Keep existing source, unmerged/unpushed work, unique UI/media originals, signing material, configuration recovery and relevant chats. Git source does not back up hosted data or private credentials. Do not use the wrong-product project_context.md as MDQ configuration. Do not reopen its January-era profile-upload task without current evidence.
+Keep existing source, unmerged/unpushed work, unique UI/media originals, signing material, configuration recovery and relevant chats. Git source does not back up hosted data or private credentials. At captured main SHA 0ae9536273d05de08eee3a33225198009813992b, project_context.md contained wrong-product configuration. This docs branch replaces it with [MDQ+ context routing](project_context.md), without configuration values. The January-era profile-upload worklist belongs to PROJECT_NEXUS.md; do not reopen it without current evidence.
 
 ## Known documentation conflicts
 The router integration document still labels itself integration-branch/review-only even though it is now present at the inspected main SHA. That label does not prove deployment or permission to deploy. Its prospective cutover checklist also does not prove current infrastructure is absent. Inspect actual approved environment state before any operational plan.
