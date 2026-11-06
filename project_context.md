@@ -1,9 +1,5 @@
-DAYMARK 
+# MDQ+ project context
 
-Supabase: 
+This file corrects the former wrong-product configuration note. No configuration values are retained here.
 
-https://jqyujanfprjavdcnhpmf.supabase.co
-
-sb_publishable_gp39YTdNrShRM_hPzZ6iyA_GHQ1GReK
-
-postgresql://postgres:[YOUR-PASSWORD]@db.jqyujanfprjavdcnhpmf.supabase.co:5432/postgres
+Read [START_HERE](START_HERE.md), [PRODUCT_AND_PROJECT_CONTEXT](PRODUCT_AND_PROJECT_CONTEXT.md) and [HANDOVER](HANDOVER.md) for the evidence-backed MDQ+ baseline and unresolved decisions. The source and deployment evidence are kept separate. This documentation-only correction does not modify application settings or authorize deletion.

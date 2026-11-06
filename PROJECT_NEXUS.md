@@ -1,3 +1,5 @@
+> **Historical context, retained for reference:** The January-era phase and task list below are not a verified current work queue. Start with [START_HERE.md](START_HERE.md), [current product/project context](PRODUCT_AND_PROJECT_CONTEXT.md) and [handover](HANDOVER.md). This documentation correction preserves the original Nexus body and does not authorize implementation, deployment or deletion.
+
 # PROJECT NEXUS: MedIQ (MDQ+)
 
 ## 1. High-Level Context
